@@ -10,4 +10,4 @@ description = "Library for reading/writing Nintendo DS files."
 
 [dependencies]
 bytemuck = { version = "1.16.1", features = ["derive"] }
-thiserror = "1.0.61"
+snafu = { version = "0.8.3", features = ["backtrace"] }

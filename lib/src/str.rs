@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 #[derive(Clone, Copy)]
-pub struct AsciiArray<const N: usize>([u8; N]);
+pub struct AsciiArray<const N: usize>(pub [u8; N]);
 
 impl<const N: usize> Display for AsciiArray<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

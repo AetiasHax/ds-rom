@@ -1,11 +1,12 @@
-use std::{fmt::Display, mem::size_of};
-
-use bytemuck::{Pod, Zeroable};
-
-use crate::{
-    str::{write_blob_size, AsciiArray},
-    ReadError,
+use std::{
+    fmt::Display,
+    mem::{align_of, size_of},
 };
+
+use bytemuck::{Pod, PodCastError, Zeroable};
+use snafu::{Backtrace, Snafu};
+
+use crate::str::{write_blob_size, AsciiArray};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -57,14 +58,48 @@ pub struct Header {
 unsafe impl Zeroable for Header {}
 unsafe impl Pod for Header {}
 
+#[derive(Debug, Snafu)]
+pub enum RawHeaderError {
+    #[snafu(display("expected {expected:#x} bytes for header but had only {actual:#x}:\n{backtrace}"))]
+    DataTooSmall { expected: usize, actual: usize, backtrace: Backtrace },
+    #[snafu(display("expected {expected}-alignment for header but got {actual}-alignment:\n{backtrace}"))]
+    Misaligned { expected: usize, actual: usize, backtrace: Backtrace },
+}
+
 impl Header {
-    pub fn borrow_from_slice<T: AsRef<[u8]>>(data: &'_ T) -> Result<&'_ Self, ReadError> {
+    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ Self, RawHeaderError> {
         let size = size_of::<Self>();
-        let data_slice = data.as_ref();
-        if data_slice.len() < size {
-            Err(ReadError::DataTooSmall { section: "header", expected: size, actual: data_slice.len() })
+        if data.len() < size {
+            DataTooSmallSnafu { expected: size, actual: data.len() }.fail()
         } else {
-            Ok(bytemuck::try_from_bytes(&data_slice[..size]).unwrap())
+            let addr = data as *const [u8] as *const () as usize;
+            match bytemuck::try_from_bytes(&data[..size]) {
+                Ok(header) => Ok(header),
+                Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
+                    MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()
+                }
+                Err(PodCastError::AlignmentMismatch) => panic!(),
+                Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
+                Err(PodCastError::SizeMismatch) => unreachable!(),
+            }
+        }
+    }
+
+    pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut Self, RawHeaderError> {
+        let size = size_of::<Self>();
+        if data.len() < size {
+            DataTooSmallSnafu { expected: size, actual: data.len() }.fail()
+        } else {
+            let addr = data as *const [u8] as *const () as usize;
+            match bytemuck::try_from_bytes_mut(&mut data[..size]) {
+                Ok(header) => Ok(header),
+                Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
+                    MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()
+                }
+                Err(PodCastError::AlignmentMismatch) => panic!(),
+                Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
+                Err(PodCastError::SizeMismatch) => unreachable!(),
+            }
         }
     }
 
@@ -120,7 +155,7 @@ impl<'a> Display for DisplayHeader<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Capacity(u8);
+pub struct Capacity(pub u8);
 
 impl Display for Capacity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -132,7 +167,7 @@ impl Display for Capacity {
 }
 
 #[derive(Clone, Copy)]
-pub struct DsRegion(u8);
+pub struct DsRegion(pub u8);
 
 impl Display for DsRegion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -206,7 +241,7 @@ impl<'a> Display for DisplayTableOffset<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Delay(u16);
+pub struct Delay(pub u16);
 
 impl Display for Delay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
