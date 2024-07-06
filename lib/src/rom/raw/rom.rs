@@ -7,7 +7,9 @@ use std::{
 
 use snafu::{Backtrace, ResultExt, Snafu};
 
-use super::{Arm9, Header, RawHeaderError};
+use crate::rom::Arm9;
+
+use super::{Header, RawHeaderError};
 
 #[derive(Debug, Snafu)]
 pub enum RomReadError {

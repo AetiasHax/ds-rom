@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use nds_io::{crypto::blowfish::Blowfish, rom::raw};
+use nds_io::{
+    crypto::blowfish::Blowfish,
+    rom::{raw, Logo},
+};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -31,6 +34,10 @@ struct Args {
     /// Encrypts the secure area.
     #[arg(short = 'e', long)]
     encrypt: bool,
+
+    /// Changes the header logo to this PNG
+    #[arg(short = 'l', long)]
+    header_logo: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -50,8 +57,10 @@ fn main() -> Result<()> {
         None
     };
 
+    let header_logo = if let Some(header_logo) = args.header_logo { Some(Logo::from_png(header_logo)?) } else { None };
+
     let rom = raw::Rom::from_file(args.rom)?;
-    let header = rom.header()?;
+    let mut header = rom.header()?.clone();
     let arm9 = {
         let mut arm9 = rom.arm9()?;
         if arm9.is_encrypted() && key.is_some() {
@@ -67,6 +76,10 @@ fn main() -> Result<()> {
         arm9
     };
 
+    if let Some(logo) = header_logo {
+        header.logo.copy_from_slice(&logo.compress());
+    }
+
     if args.show_header {
         println!("ROM header:\n{}", header.display(2));
     }
@@ -79,7 +92,7 @@ fn main() -> Result<()> {
 
 fn print_hex(data: &[u8]) {
     for (offset, chunk) in data.chunks(16).enumerate() {
-        print!("{:08x}", offset * 16);
+        print!("{:08x} ", offset * 16);
         for byte in chunk {
             print!(" {byte:02x}");
         }

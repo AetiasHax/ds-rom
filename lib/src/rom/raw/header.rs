@@ -6,7 +6,10 @@ use std::{
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
-use crate::str::{write_blob_size, AsciiArray};
+use crate::{
+    rom::Logo,
+    str::{write_blob_size, AsciiArray},
+};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -144,6 +147,11 @@ impl<'a> Display for DisplayHeader<'a> {
         writeln!(f, "{i}Secure area CRC ......... : {:#x}", header.secure_area_crc)?;
         writeln!(f, "{i}Logo CRC ................ : {:#x}", header.logo_crc)?;
         writeln!(f, "{i}Header CRC .............. : {:#x}", header.header_crc)?;
+        write!(f, "{i}Logo .................... : ")?;
+        match Logo::decompress(&self.header.logo) {
+            Ok(logo) => writeln!(f, "\n{logo}")?,
+            Err(_) => writeln!(f, "Failed to decompress")?,
+        };
         writeln!(f, "{i}ROM end ................. : {:#x}", header.rom_end)?;
         writeln!(f, "{i}RW end .................. : {:#x}", header.rw_end)?;
         writeln!(f, "{i}Debug ROM offset ........ : {:#x}", header.debug_rom_offset)?;

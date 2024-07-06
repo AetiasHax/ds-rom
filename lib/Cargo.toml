@@ -9,5 +9,8 @@ readme = "../README.md"
 description = "Library for reading/writing Nintendo DS files."
 
 [dependencies]
+bitreader = "0.3.8"
 bytemuck = { version = "1.16.1", features = ["derive"] }
+png = "0.17.13"
+rust-bitwriter = "0.0.1"
 snafu = { version = "0.8.3", features = ["backtrace"] }
