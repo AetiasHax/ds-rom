@@ -38,6 +38,10 @@ struct Args {
     /// Changes the header logo to this PNG
     #[arg(short = 'l', long)]
     header_logo: Option<PathBuf>,
+
+    /// Prints the contents of the ARM9 overlay table.
+    #[arg(short = 'N', long)]
+    print_arm9_ovt: bool,
 }
 
 fn main() -> Result<()> {
@@ -76,6 +80,8 @@ fn main() -> Result<()> {
         arm9
     };
 
+    let arm9_ovt = rom.arm9_overlay_table()?;
+
     if let Some(logo) = header_logo {
         header.logo.copy_from_slice(&logo.compress());
     }
@@ -87,6 +93,13 @@ fn main() -> Result<()> {
     if args.print_arm9 {
         print_hex(arm9.as_ref());
     }
+
+    if args.print_arm9_ovt {
+        for overlay in arm9_ovt {
+            println!("ARM9 Overlay:\n{}", overlay.display(2));
+        }
+    }
+
     Ok(())
 }
 

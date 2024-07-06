@@ -75,6 +75,10 @@ impl<'a> Arm9<'a> {
         self.data.to_mut()[0..0x800].copy_from_slice(&secure_area);
         Ok(())
     }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 impl<'a> AsRef<[u8]> for Arm9<'a> {

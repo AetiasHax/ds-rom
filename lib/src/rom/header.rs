@@ -20,3 +20,9 @@ impl TryFrom<raw::Header> for Header {
         Ok(Self { logo })
     }
 }
+
+impl Header {
+    pub fn build(&self) -> raw::Header {
+        todo!()
+    }
+}

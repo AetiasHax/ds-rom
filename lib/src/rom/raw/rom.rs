@@ -9,7 +9,7 @@ use snafu::{Backtrace, ResultExt, Snafu};
 
 use crate::rom::Arm9;
 
-use super::{Header, RawHeaderError};
+use super::{Header, Overlay, RawHeaderError, RawOverlayError};
 
 #[derive(Debug, Snafu)]
 pub enum RomReadError {
@@ -45,6 +45,12 @@ impl<'a> Rom<'a> {
         let end = start + header.arm9.size as usize;
         let data = self.data[start..end].to_owned();
         Ok(Arm9::new(data))
+    }
+
+    pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
+        let header = self.header()?;
+        let data = &self.data[header.arm9_overlays.offset as usize..];
+        Overlay::borrow_from_slice(data)
     }
 }
 
