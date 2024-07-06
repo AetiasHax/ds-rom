@@ -58,6 +58,10 @@ impl<'a> Arm9<'a> {
             DataTooSmallSnafu { expected: 0x800usize, actual: self.data.len() }.fail()?;
         }
 
+        if self.data[0..8] != SECURE_AREA_ID {
+            NotEncryObjSnafu {}.fail()?;
+        }
+
         let mut secure_area = [0u8; 0x800];
         secure_area.clone_from_slice(&self.data[0..0x800]);
         secure_area[0..8].copy_from_slice(SECURE_AREA_ENCRY_OBJ);
