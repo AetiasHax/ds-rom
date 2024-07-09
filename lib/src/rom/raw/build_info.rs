@@ -10,9 +10,9 @@ const NITROCODE: u32 = (0x2106c0de as u32).swap_bytes();
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 pub struct BuildInfo {
-    pub autoload_block_infos_start: u32,
-    pub autoload_block_infos_end: u32,
-    pub autoload_code: u32,
+    pub autoload_infos_start: u32,
+    pub autoload_infos_end: u32,
+    pub autoload_blocks: u32,
     pub bss_start: u32,
     pub bss_end: u32,
     pub compressed_code_end: u32,

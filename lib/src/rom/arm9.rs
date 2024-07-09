@@ -7,7 +7,7 @@ use crate::{
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishLevel},
 };
 
-use super::raw::{BuildInfo, RawBuildInfoError};
+use super::raw::{AutoloadInfo, BuildInfo, RawAutoloadInfoError, RawBuildInfoError};
 
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
@@ -127,6 +127,16 @@ impl<'a> Arm9<'a> {
         };
         build_info.compressed_code_end = base_address + length as u32;
         Ok(())
+    }
+
+    pub fn autoload_infos(&self) -> Result<&[AutoloadInfo], RawAutoloadInfoError> {
+        let build_info = self.build_info()?;
+        if build_info.is_compressed() {
+            panic!("ARM9 program must be decompressed before calling Arm9::autoload_infos()");
+        }
+        let start = (build_info.autoload_infos_start - self.base_address) as usize;
+        let end = (build_info.autoload_infos_end - self.base_address) as usize;
+        AutoloadInfo::borrow_from_slice(&self.data[start..end])
     }
 
     pub fn data(&self) -> &[u8] {

@@ -54,6 +54,10 @@ struct Args {
     /// Prints contents as raw bytes.
     #[arg(short = 'R', long)]
     raw: bool,
+
+    /// Prints information about autoload blocks.
+    #[arg(short = 'a', long)]
+    print_autoloads: bool,
 }
 
 fn main() -> Result<()> {
@@ -98,6 +102,8 @@ fn main() -> Result<()> {
         arm9
     };
 
+    let autoload_infos = arm9.autoload_infos()?;
+
     let arm9_ovt = rom.arm9_overlay_table()?;
 
     if let Some(logo) = header_logo {
@@ -110,6 +116,12 @@ fn main() -> Result<()> {
 
     if args.print_arm9 {
         print_hex(arm9.as_ref(), &args)?;
+    }
+
+    if args.print_autoloads {
+        for autoload_info in autoload_infos {
+            println!("Autoload info:\n{}", autoload_info.display(2));
+        }
     }
 
     if args.print_arm9_ovt {
