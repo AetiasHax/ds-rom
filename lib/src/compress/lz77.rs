@@ -5,13 +5,13 @@ pub struct Lz77 {}
 const LENGTH_BITS: usize = 4;
 const DISTANCE_BITS: usize = 12;
 const MIN_SUBSEQUENCE: usize = 3;
-const MIN_DISTANCE: usize = 3;
 
 const LENGTH_MASK: usize = (1 << LENGTH_BITS) - 1;
 const DISTANCE_MASK: usize = (1 << DISTANCE_BITS) - 1;
 
 const MAX_SUBSEQUENCE: usize = MIN_SUBSEQUENCE + LENGTH_MASK;
 const LOOKAHEAD: usize = 1 << DISTANCE_BITS;
+const MAX_DISTANCE: usize = DISTANCE_MASK + MIN_SUBSEQUENCE;
 
 /// Length-distance pair
 #[derive(Clone, Copy)]
@@ -21,16 +21,16 @@ struct Pair {
 }
 
 impl Pair {
-    pub fn to_le_bytes(&self) -> [u8; 2] {
+    pub fn to_be_bytes(&self) -> [u8; 2] {
         let length = (self.length - MIN_SUBSEQUENCE) & LENGTH_MASK;
-        let distance = (self.distance - MIN_DISTANCE) & DISTANCE_MASK;
+        let distance = (self.distance - MIN_SUBSEQUENCE) & DISTANCE_MASK;
         let value = ((length << DISTANCE_BITS) | distance) as u16;
-        value.to_le_bytes()
+        value.to_be_bytes()
     }
 
     pub fn from_le_bytes(bytes: [u8; 2]) -> Self {
         let value = u16::from_le_bytes(bytes) as usize;
-        let distance = (value & DISTANCE_MASK) + MIN_DISTANCE;
+        let distance = (value & DISTANCE_MASK) + MIN_SUBSEQUENCE;
         let length = ((value >> DISTANCE_BITS) & LENGTH_MASK) + MIN_SUBSEQUENCE;
         Self { length, distance }
     }
@@ -39,14 +39,14 @@ impl Pair {
 #[derive(Clone, Copy)]
 struct BlockInfo {
     pos: usize,
-    total_bytes_saved: usize,
+    total_bytes_saved: isize,
     flags: u8,
 }
 
 impl Lz77 {
     fn find_match(&self, bytes: &[u8], pos: usize) -> Option<Pair> {
-        let max_lookahead = (LOOKAHEAD + MIN_DISTANCE + MAX_SUBSEQUENCE).min(bytes.len() - pos - 1);
-        (0..max_lookahead)
+        let max_lookahead = (LOOKAHEAD + MAX_SUBSEQUENCE).min(bytes.len() - pos - 1);
+        (MIN_SUBSEQUENCE - 1..max_lookahead)
             .fold(None, |best_pair, i| {
                 let needle = pos;
                 let haystack = pos + 1 + i;
@@ -55,14 +55,14 @@ impl Lz77 {
                 }
                 let mut length = 0;
                 while needle >= length
-                    && bytes[pos + needle - length] == bytes[pos + haystack - length]
+                    && bytes[needle - length] == bytes[haystack - length]
                     && haystack > pos + length
                     && length < MAX_SUBSEQUENCE
                 {
                     length += 1;
                 }
-                let distance = haystack - needle - MIN_SUBSEQUENCE;
-                if length > best_pair.map_or(0, |p: Pair| p.length) && distance <= DISTANCE_MASK {
+                let distance = haystack - needle;
+                if length > best_pair.map_or(0, |p: Pair| p.length) && distance <= MAX_DISTANCE {
                     Some(Pair { length, distance })
                 } else {
                     best_pair
@@ -78,16 +78,17 @@ impl Lz77 {
         let mut flags = 0;
         let mut flag_count = 0;
         let mut flag_pos = compressed.len();
+        compressed.push(0); // placeholder for flag byte
         let mut bytes_saved = 0;
         while read > 0 {
             flags <<= 1;
             if let Some(pair) = self.find_match(bytes, read - 1) {
                 // write length-distance pair
                 read -= pair.length;
-                let encoded = pair.to_le_bytes();
+                let encoded = pair.to_be_bytes();
                 compressed.write(&encoded)?;
                 flags |= 1;
-                bytes_saved += pair.length - encoded.len();
+                bytes_saved += (pair.length - encoded.len()) as isize;
             } else {
                 // write literal
                 read -= 1;
@@ -102,6 +103,7 @@ impl Lz77 {
                 bytes_saved -= 1;
                 flag_pos = compressed.len();
                 block_infos.push(BlockInfo { pos: compressed.len(), total_bytes_saved: bytes_saved, flags });
+                compressed.push(0); // placeholder for flag byte
                 flags = 0;
             }
         }
@@ -163,14 +165,14 @@ impl Lz77 {
         start: usize,
         num_identical: usize,
     ) -> Result<(), io::Error> {
-        let padding = (3 ^ (compressed.len() & 3)) as u8;
+        let padding = ((!compressed.len() + 1) & 3) as u8;
         for _ in 0..padding {
             compressed.push(0xff);
         }
         let total_size = compressed.len() + 8;
         let read_offset = padding + 8;
-        let write_offset = bytes.len() - total_size - start;
-        let total_size = total_size - num_identical;
+        let write_offset: u32 = (bytes.len() - total_size) as u32;
+        let total_size = total_size - num_identical - start;
         let total_size_bytes = total_size.to_le_bytes();
         compressed.write(&[total_size_bytes[0], total_size_bytes[1], total_size_bytes[2]])?;
         compressed.push(read_offset);
