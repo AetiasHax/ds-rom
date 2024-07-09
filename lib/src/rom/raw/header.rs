@@ -40,7 +40,7 @@ pub struct Header {
     pub secure_area_disable: u64,
     pub rom_size: u32,
     pub header_size: u32,
-    pub autoload_block_infos_offset: u32,
+    pub build_info_offset: u32,
     pub reserved1: [u8; 8],
     pub rom_end: u16,
     pub rw_end: u16,
@@ -139,7 +139,7 @@ impl<'a> Display for DisplayHeader<'a> {
         writeln!(f, "{i}Banner\n{i}  Offset: {:#x}", header.banner_offset)?;
         writeln!(f, "{i}Normal cmd setting ...... : {:#x}", header.normal_cmd_setting)?;
         writeln!(f, "{i}KEY1 cmd setting ........ : {:#x}", header.key1_cmd_setting)?;
-        writeln!(f, "{i}Autoload info offset .... : {:#x}", header.autoload_block_infos_offset)?;
+        writeln!(f, "{i}Build info offset .... : {:#x}", header.build_info_offset)?;
         writeln!(f, "{i}Seed select ............. : {:#x}", header.seed_select)?;
         writeln!(f, "{i}Autostart ............... : {:#x}", header.autostart)?;
         writeln!(f, "{i}Secure area disable ..... : {:#x}", header.secure_area_disable)?;

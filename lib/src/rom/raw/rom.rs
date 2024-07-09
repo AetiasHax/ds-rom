@@ -44,7 +44,10 @@ impl<'a> Rom<'a> {
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
         let data = self.data[start..end].to_owned();
-        Ok(Arm9::new(data))
+
+        let build_info_offset = (header.build_info_offset - header.arm9.offset) as usize;
+
+        Ok(Arm9::new(data, header.arm9.base_addr, build_info_offset))
     }
 
     pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {

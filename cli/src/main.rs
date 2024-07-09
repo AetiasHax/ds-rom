@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     mem::size_of,
     path::PathBuf,
 };
@@ -42,12 +42,24 @@ struct Args {
     /// Prints the contents of the ARM9 overlay table.
     #[arg(short = 'N', long)]
     print_arm9_ovt: bool,
+
+    /// Compresses code modules.
+    #[arg(short = 'c', long)]
+    compress: bool,
+
+    /// Decompresses code modules.
+    #[arg(short = 'd', long)]
+    decompress: bool,
+
+    /// Prints contents as raw bytes.
+    #[arg(short = 'R', long)]
+    raw: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let key = if let Some(arm7_bios) = args.arm7_bios {
+    let key = if let Some(ref arm7_bios) = args.arm7_bios {
         let mut file = File::open(arm7_bios)?;
         let size = file.metadata()?.len() as usize;
         if size < 0x30 + size_of::<Blowfish>() {
@@ -61,9 +73,9 @@ fn main() -> Result<()> {
         None
     };
 
-    let header_logo = if let Some(header_logo) = args.header_logo { Some(Logo::from_png(header_logo)?) } else { None };
+    let header_logo = if let Some(ref header_logo) = args.header_logo { Some(Logo::from_png(header_logo)?) } else { None };
 
-    let rom = raw::Rom::from_file(args.rom)?;
+    let rom = raw::Rom::from_file(args.rom.clone())?;
     let mut header = rom.header()?.clone();
     let arm9 = {
         let mut arm9 = rom.arm9()?;
@@ -76,6 +88,12 @@ fn main() -> Result<()> {
             let Some(key) = key else { unreachable!() };
             let gamecode = u32::from_le_bytes(header.gamecode.0);
             arm9.encrypt(&key, gamecode)?;
+        }
+        if args.decompress && arm9.build_info()?.is_compressed() {
+            arm9.decompress()?;
+        }
+        if args.compress && !arm9.build_info()?.is_compressed() {
+            arm9.compress()?;
         }
         arm9
     };
@@ -91,7 +109,7 @@ fn main() -> Result<()> {
     }
 
     if args.print_arm9 {
-        print_hex(arm9.as_ref());
+        print_hex(arm9.as_ref(), &args)?;
     }
 
     if args.print_arm9_ovt {
@@ -103,12 +121,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_hex(data: &[u8]) {
-    for (offset, chunk) in data.chunks(16).enumerate() {
-        print!("{:08x} ", offset * 16);
-        for byte in chunk {
-            print!(" {byte:02x}");
+fn print_hex(data: &[u8], args: &Args) -> Result<()> {
+    if args.raw {
+        std::io::stdout().write(data)?;
+    } else {
+        for (offset, chunk) in data.chunks(16).enumerate() {
+            print!("{:08x} ", offset * 16);
+            for byte in chunk {
+                print!(" {byte:02x}");
+            }
+            println!();
         }
-        println!();
     }
+    Ok(())
 }
