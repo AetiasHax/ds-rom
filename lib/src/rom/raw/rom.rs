@@ -9,7 +9,7 @@ use snafu::{Backtrace, ResultExt, Snafu};
 
 use crate::rom::{Arm7, Arm9};
 
-use super::{Header, Overlay, RawHeaderError, RawOverlayError};
+use super::{Fnt, Header, Overlay, RawFntError, RawHeaderError, RawOverlayError};
 
 #[derive(Debug, Snafu)]
 pub enum RomReadError {
@@ -77,6 +77,14 @@ impl<'a> Rom<'a> {
             let data = &self.data[header.arm7_overlays.offset as usize..];
             Overlay::borrow_from_slice(data)
         }
+    }
+
+    pub fn fnt(&self) -> Result<Fnt, RawFntError> {
+        let header = self.header()?;
+        let start = header.file_names.offset as usize;
+        let end = start + header.file_names.size as usize;
+        let data = &self.data[start..end];
+        Fnt::borrow_from_slice(data)
     }
 }
 

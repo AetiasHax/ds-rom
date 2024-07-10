@@ -9,7 +9,7 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use nds_io::{
     crypto::blowfish::Blowfish,
-    rom::{raw, Logo},
+    rom::{self, raw, Logo},
 };
 
 #[derive(Parser, Debug)]
@@ -70,6 +70,10 @@ struct Args {
     /// Prints the contents of an autoload block.
     #[arg(short = 'a', long, value_name = "INDEX")]
     print_autoload: Option<usize>,
+
+    /// Shows the contents of the file name table.
+    #[arg(short = 'f', long)]
+    show_fnt: bool,
 }
 
 fn main() -> Result<()> {
@@ -165,6 +169,12 @@ fn main() -> Result<()> {
         for overlay in arm7_ovt {
             println!("ARM7 Overlay:\n{}", overlay.display(2));
         }
+    }
+
+    if args.show_fnt {
+        let fnt = rom.fnt()?;
+        let root = rom::File::parse(&fnt);
+        println!("Files:\n{}", root.display(2));
     }
 
     Ok(())
