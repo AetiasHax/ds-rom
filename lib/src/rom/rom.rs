@@ -25,7 +25,7 @@ impl<'a> Rom<'a> {
         Self::align(&mut cursor)?;
 
         // --------------------- Write ARM9 program ---------------------
-        cursor.write(self.arm9.data())?;
+        cursor.write(self.arm9.full_data())?;
         Self::align(&mut cursor)?;
 
         todo!()

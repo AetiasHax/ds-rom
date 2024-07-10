@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io, mem::replace};
+use std::{borrow::Cow, io, mem::replace, ops::Range};
 
 use snafu::{Backtrace, Snafu};
 
@@ -7,7 +7,10 @@ use crate::{
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishLevel},
 };
 
-use super::raw::{AutoloadInfo, BuildInfo, RawAutoloadInfoError, RawBuildInfoError};
+use super::{
+    raw::{AutoloadInfo, AutoloadKind, BuildInfo, RawAutoloadInfoError, RawBuildInfoError},
+    Autoload,
+};
 
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
@@ -34,6 +37,18 @@ pub enum RawArm9Error {
     RawBuildInfo { source: RawBuildInfoError },
     #[snafu(transparent)]
     Io { source: io::Error },
+}
+
+#[derive(Debug, Snafu)]
+pub enum Arm9AutoloadError {
+    #[snafu(transparent)]
+    RawBuildInfo { source: RawBuildInfoError },
+    #[snafu(transparent)]
+    RawAutoloadInfo { source: RawAutoloadInfoError },
+    #[snafu(display("ARM9 program must be decompressed before accessing autoload blocks:\n{backtrace}"))]
+    Compressed { backtrace: Backtrace },
+    #[snafu(display("autoload block {kind} could not be found:\n{backtrace}"))]
+    NotFound { kind: AutoloadKind, backtrace: Backtrace },
 }
 
 impl<'a> Arm9<'a> {
@@ -129,18 +144,57 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    pub fn autoload_infos(&self) -> Result<&[AutoloadInfo], RawAutoloadInfoError> {
-        let build_info = self.build_info()?;
-        if build_info.is_compressed() {
-            panic!("ARM9 program must be decompressed before calling Arm9::autoload_infos()");
-        }
+    fn get_autoload_infos(&self, build_info: &BuildInfo) -> Result<&[AutoloadInfo], Arm9AutoloadError> {
         let start = (build_info.autoload_infos_start - self.base_address) as usize;
         let end = (build_info.autoload_infos_end - self.base_address) as usize;
-        AutoloadInfo::borrow_from_slice(&self.data[start..end])
+        let autoload_info = AutoloadInfo::borrow_from_slice(&self.data[start..end])?;
+        Ok(autoload_info)
     }
 
-    pub fn data(&self) -> &[u8] {
+    pub fn autoload_infos(&self) -> Result<&[AutoloadInfo], Arm9AutoloadError> {
+        let build_info: &BuildInfo = self.build_info()?;
+        if build_info.is_compressed() {
+            CompressedSnafu {}.fail()?;
+        }
+        self.get_autoload_infos(build_info)
+    }
+
+    pub fn autoloads(&self) -> Result<Box<[Autoload]>, Arm9AutoloadError> {
+        let build_info = self.build_info()?;
+        if build_info.is_compressed() {
+            CompressedSnafu {}.fail()?;
+        }
+        let autoload_infos = self.get_autoload_infos(build_info)?;
+
+        let mut autoloads = vec![];
+        let mut load_offset = build_info.autoload_blocks - self.base_address;
+        for autoload_info in autoload_infos {
+            let start = load_offset as usize;
+            let end = start + autoload_info.code_size as usize;
+            let data = &self.data[start..end];
+            autoloads.push(Autoload::new(data, *autoload_info));
+            load_offset += autoload_info.code_size;
+        }
+
+        Ok(autoloads.into_boxed_slice())
+    }
+
+    pub fn code(&self) -> Result<&[u8], RawBuildInfoError> {
+        let build_info = self.build_info()?;
+        Ok(&self.data[..build_info.bss_start as usize])
+    }
+
+    pub fn full_data(&self) -> &[u8] {
         &self.data
+    }
+
+    pub fn base_address(&self) -> u32 {
+        self.base_address
+    }
+
+    pub fn bss(&self) -> Result<Range<u32>, RawBuildInfoError> {
+        let build_info = self.build_info()?;
+        Ok(build_info.bss_start..build_info.bss_end)
     }
 }
 

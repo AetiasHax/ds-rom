@@ -56,8 +56,12 @@ struct Args {
     raw: bool,
 
     /// Prints information about autoload blocks.
+    #[arg(short = 'A', long)]
+    print_autoload_info: bool,
+
+    /// Prints the contents of an autoload block.
     #[arg(short = 'a', long)]
-    print_autoloads: bool,
+    print_autoload: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -102,8 +106,6 @@ fn main() -> Result<()> {
         arm9
     };
 
-    let autoload_infos = arm9.autoload_infos()?;
-
     let arm9_ovt = rom.arm9_overlay_table()?;
 
     if let Some(logo) = header_logo {
@@ -118,10 +120,19 @@ fn main() -> Result<()> {
         print_hex(arm9.as_ref(), &args)?;
     }
 
-    if args.print_autoloads {
+    if args.print_autoload_info {
+        let autoload_infos = arm9.autoload_infos()?;
         for autoload_info in autoload_infos {
             println!("Autoload info:\n{}", autoload_info.display(2));
         }
+    }
+
+    if let Some(index) = args.print_autoload {
+        let autoloads = arm9.autoloads()?;
+        if index >= autoloads.len() {
+            bail!("Cannot print autoload at index {index}, max index is {}", autoloads.len() - 1);
+        }
+        print_hex(autoloads[index].full_data(), &args)?;
     }
 
     if args.print_arm9_ovt {

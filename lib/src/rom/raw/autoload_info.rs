@@ -16,7 +16,8 @@ pub struct AutoloadInfo {
     pub bss_size: u32,
 }
 
-pub enum AutoloadType {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AutoloadKind {
     Itcm,
     Dtcm,
     Unknown,
@@ -60,11 +61,11 @@ impl AutoloadInfo {
         Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
     }
 
-    pub fn get_type(&self) -> AutoloadType {
+    pub fn kind(&self) -> AutoloadKind {
         match self.base_address {
-            0x1ff8000 => AutoloadType::Itcm,
-            0x27e0000 => AutoloadType::Dtcm,
-            _ => AutoloadType::Unknown,
+            0x1ff8000 => AutoloadKind::Itcm,
+            0x27e0000 => AutoloadKind::Dtcm,
+            _ => AutoloadKind::Unknown,
         }
     }
 
@@ -82,7 +83,7 @@ impl<'a> Display for DisplayAutoloadInfo<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let info = &self.info;
-        writeln!(f, "{i}Type .......... : {}", info.get_type())?;
+        writeln!(f, "{i}Type .......... : {}", info.kind())?;
         writeln!(f, "{i}Base address .. : {:#x}", info.base_address)?;
         writeln!(f, "{i}Code size ..... : {:#x}", info.code_size)?;
         writeln!(f, "{i}.bss size ..... : {:#x}", info.bss_size)?;
@@ -90,12 +91,12 @@ impl<'a> Display for DisplayAutoloadInfo<'a> {
     }
 }
 
-impl Display for AutoloadType {
+impl Display for AutoloadKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AutoloadType::Itcm => write!(f, "ITCM"),
-            AutoloadType::Dtcm => write!(f, "DTCM"),
-            AutoloadType::Unknown => write!(f, "Unknown"),
+            AutoloadKind::Itcm => write!(f, "ITCM"),
+            AutoloadKind::Dtcm => write!(f, "DTCM"),
+            AutoloadKind::Unknown => write!(f, "Unknown"),
         }
     }
 }
