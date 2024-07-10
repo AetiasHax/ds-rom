@@ -19,7 +19,7 @@ struct Args {
     #[arg(short = 'r', long)]
     rom: PathBuf,
 
-    /// Shows the contents of the ROM header
+    /// Shows the contents of the ROM header.
     #[arg(short = 'H', long)]
     show_header: bool,
 
@@ -31,17 +31,25 @@ struct Args {
     #[arg(short = 'n', long)]
     print_arm9: bool,
 
+    /// Prints the contents of the ARM7 program.
+    #[arg(short = 's', long)]
+    print_arm7: bool,
+
     /// Encrypts the secure area.
     #[arg(short = 'e', long)]
     encrypt: bool,
 
-    /// Changes the header logo to this PNG
+    /// Changes the header logo to this PNG.
     #[arg(short = 'l', long)]
     header_logo: Option<PathBuf>,
 
     /// Prints the contents of the ARM9 overlay table.
     #[arg(short = 'N', long)]
     print_arm9_ovt: bool,
+
+    /// Prints the contents of the ARM7 overlay table.
+    #[arg(short = 'S', long)]
+    print_arm7_ovt: bool,
 
     /// Compresses code modules.
     #[arg(short = 'c', long)]
@@ -60,7 +68,7 @@ struct Args {
     print_autoload_info: bool,
 
     /// Prints the contents of an autoload block.
-    #[arg(short = 'a', long)]
+    #[arg(short = 'a', long, value_name = "INDEX")]
     print_autoload: Option<usize>,
 }
 
@@ -106,8 +114,6 @@ fn main() -> Result<()> {
         arm9
     };
 
-    let arm9_ovt = rom.arm9_overlay_table()?;
-
     if let Some(logo) = header_logo {
         header.logo.copy_from_slice(&logo.compress());
     }
@@ -117,7 +123,7 @@ fn main() -> Result<()> {
     }
 
     if args.print_arm9 {
-        print_hex(arm9.as_ref(), &args)?;
+        print_hex(arm9.as_ref(), &args, arm9.base_address())?;
     }
 
     if args.print_autoload_info {
@@ -132,24 +138,44 @@ fn main() -> Result<()> {
         if index >= autoloads.len() {
             bail!("Cannot print autoload at index {index}, max index is {}", autoloads.len() - 1);
         }
-        print_hex(autoloads[index].full_data(), &args)?;
+        let autoload = &autoloads[index];
+        print_hex(autoload.full_data(), &args, autoload.base_address())?;
     }
 
     if args.print_arm9_ovt {
+        let arm9_ovt = rom.arm9_overlay_table()?;
+        if arm9_ovt.is_empty() {
+            println!("The ROM has no ARM9 overlays");
+        }
         for overlay in arm9_ovt {
             println!("ARM9 Overlay:\n{}", overlay.display(2));
+        }
+    }
+
+    if args.print_arm7 {
+        let arm7 = rom.arm7()?;
+        print_hex(arm7.full_data(), &args, arm7.base_address())?;
+    }
+
+    if args.print_arm7_ovt {
+        let arm7_ovt = rom.arm7_overlay_table()?;
+        if arm7_ovt.is_empty() {
+            println!("The ROM has no ARM7 overlays");
+        }
+        for overlay in arm7_ovt {
+            println!("ARM7 Overlay:\n{}", overlay.display(2));
         }
     }
 
     Ok(())
 }
 
-fn print_hex(data: &[u8], args: &Args) -> Result<()> {
+fn print_hex(data: &[u8], args: &Args, base: u32) -> Result<()> {
     if args.raw {
         std::io::stdout().write(data)?;
     } else {
         for (offset, chunk) in data.chunks(16).enumerate() {
-            print!("{:08x} ", offset * 16);
+            print!("{:08x} ", base as usize + offset * 16);
             for byte in chunk {
                 print!(" {byte:02x}");
             }

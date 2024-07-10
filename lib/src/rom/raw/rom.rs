@@ -7,7 +7,7 @@ use std::{
 
 use snafu::{Backtrace, ResultExt, Snafu};
 
-use crate::rom::Arm9;
+use crate::rom::{Arm7, Arm9};
 
 use super::{Header, Overlay, RawHeaderError, RawOverlayError};
 
@@ -43,17 +43,40 @@ impl<'a> Rom<'a> {
         let header = self.header()?;
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
-        let data = self.data[start..end].to_owned();
+        let data = &self.data[start..end];
 
         let build_info_offset = (header.build_info_offset - header.arm9.offset) as usize;
 
-        Ok(Arm9::new(data, header.arm9.base_addr, build_info_offset))
+        Ok(Arm9::new(Cow::Borrowed(data), header.arm9.base_addr, header.arm9.entry, build_info_offset))
     }
 
     pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
-        let data = &self.data[header.arm9_overlays.offset as usize..];
-        Overlay::borrow_from_slice(data)
+        if header.arm9_overlays.offset == 0 {
+            Ok(&[])
+        } else {
+            let data = &self.data[header.arm9_overlays.offset as usize..];
+            Overlay::borrow_from_slice(data)
+        }
+    }
+
+    pub fn arm7(&self) -> Result<Arm7, RawHeaderError> {
+        let header = self.header()?;
+        let start = header.arm7.offset as usize;
+        let end = start + header.arm7.size as usize;
+        let data = &self.data[start..end];
+
+        Ok(Arm7::new(Cow::Borrowed(data), header.arm7.base_addr, header.arm7.entry))
+    }
+
+    pub fn arm7_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
+        let header = self.header()?;
+        if header.arm7_overlays.offset == 0 {
+            Ok(&[])
+        } else {
+            let data = &self.data[header.arm7_overlays.offset as usize..];
+            Overlay::borrow_from_slice(data)
+        }
     }
 }
 

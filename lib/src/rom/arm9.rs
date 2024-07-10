@@ -15,6 +15,7 @@ use super::{
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
     base_address: u32,
+    entry_function: u32,
     build_info_offset: usize,
 }
 
@@ -52,8 +53,8 @@ pub enum Arm9AutoloadError {
 }
 
 impl<'a> Arm9<'a> {
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, base_address: u32, build_info_offset: usize) -> Self {
-        Arm9 { data: data.into(), base_address, build_info_offset }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, base_address: u32, entry_function: u32, build_info_offset: usize) -> Self {
+        Arm9 { data: data.into(), base_address, entry_function, build_info_offset }
     }
 
     pub fn is_encrypted(&self) -> bool {
@@ -190,6 +191,10 @@ impl<'a> Arm9<'a> {
 
     pub fn base_address(&self) -> u32 {
         self.base_address
+    }
+
+    pub fn entry_function(&self) -> u32 {
+        self.entry_function
     }
 
     pub fn bss(&self) -> Result<Range<u32>, RawBuildInfoError> {
