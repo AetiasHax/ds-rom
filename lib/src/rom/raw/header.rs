@@ -8,7 +8,7 @@ use snafu::{Backtrace, Snafu};
 
 use crate::{
     rom::Logo,
-    str::{write_blob_size, AsciiArray},
+    str::{AsciiArray, BlobSize},
 };
 
 #[repr(C)]
@@ -126,9 +126,7 @@ impl<'a> Display for DisplayHeader<'a> {
         writeln!(f, "{i}Unitcode ................ : {}", header.unitcode)?;
         writeln!(f, "{i}DS region ............... : {}", header.ds_region)?;
         writeln!(f, "{i}Capacity ................ : {}", header.capacity)?;
-        write!(f, "{i}ROM size ................ : ")?;
-        write_blob_size(f, header.rom_size)?;
-        writeln!(f, " ({:#x})", header.rom_size)?;
+        writeln!(f, "{i}ROM size ................ : {} ({:#x})", BlobSize(header.rom_size as usize), header.rom_size)?;
         writeln!(f, "{i}ROM version ............. : {}", header.rom_version)?;
         write!(f, "{i}ARM9 program\n{}", header.arm9.display(self.indent + 2))?;
         writeln!(f, "{i}ARM9 autoload callback .. : {:#x}", header.arm9_autoload_callback)?;

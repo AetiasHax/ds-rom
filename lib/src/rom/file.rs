@@ -1,31 +1,36 @@
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display};
+
+use crate::str::BlobSize;
 
 use super::raw::{Fnt, FntFile};
 
-pub struct File {
+pub struct File<'a> {
     pub id: u16,
     pub name: String,
-    pub children: Vec<File>,
+    pub children: Vec<File<'a>>,
+    pub contents: Option<Cow<'a, [u8]>>,
 }
 
 const ROOT_DIR_ID: u16 = 0xf000;
 
-impl File {
-    fn parse_subtable(&mut self, fnt: &Fnt, index: u16) {
-        let subtable = &fnt.subtables[index as usize];
+impl<'a> File<'a> {
+    fn parse_subtable(&mut self, fnt: &Fnt, fat: &'a [&[u8]], subtable: u16) {
+        let subtable = &fnt.subtables[subtable as usize];
         for FntFile { id, name } in subtable.iter() {
             let name = name.to_string();
-            let mut file = File { id, name, children: vec![] };
+            let mut file = File { id, name, children: vec![], contents: None };
             if file.is_dir() {
-                file.parse_subtable(fnt, file.id - ROOT_DIR_ID);
+                file.parse_subtable(fnt, fat, file.id - ROOT_DIR_ID);
+            } else {
+                file.contents = Some(Cow::Borrowed(fat[id as usize]));
             }
             self.children.push(file);
         }
     }
 
-    pub fn parse(fnt: &Fnt) -> Self {
-        let mut root = Self { id: ROOT_DIR_ID, name: "/".to_string(), children: vec![] };
-        root.parse_subtable(fnt, 0);
+    pub fn parse(fnt: &Fnt, fat: &'a [&[u8]]) -> Self {
+        let mut root = Self { id: ROOT_DIR_ID, name: "/".to_string(), children: vec![], contents: None };
+        root.parse_subtable(fnt, fat, 0);
         root
     }
 
@@ -39,7 +44,7 @@ impl File {
 }
 
 pub struct DisplayFile<'a> {
-    file: &'a File,
+    file: &'a File<'a>,
     indent: usize,
 }
 
@@ -47,7 +52,9 @@ impl<'a> Display for DisplayFile<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let file = &self.file;
-        writeln!(f, "{i}0x{:04x}: {}", file.id, file.name)?;
+        let size = if let Some(contents) = &file.contents { BlobSize(contents.len()).to_string() } else { "".to_string() };
+        write!(f, "{i}0x{:04x}: {: <32}{size: >7}", file.id, file.name)?;
+        writeln!(f)?;
         for child in &file.children {
             write!(f, "{}", child.display(self.indent + 2))?;
         }

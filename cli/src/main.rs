@@ -173,7 +173,8 @@ fn main() -> Result<()> {
 
     if args.show_fnt {
         let fnt = rom.fnt()?;
-        let root = rom::File::parse(&fnt);
+        let fat = rom.fat()?;
+        let root = rom::File::parse(&fnt, &fat);
         println!("Files:\n{}", root.display(2));
     }
 

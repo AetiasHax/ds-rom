@@ -9,7 +9,7 @@ use snafu::{Backtrace, ResultExt, Snafu};
 
 use crate::rom::{Arm7, Arm9};
 
-use super::{Fnt, Header, Overlay, RawFntError, RawHeaderError, RawOverlayError};
+use super::{FileAlloc, Fnt, Header, Overlay, RawFatError, RawFntError, RawHeaderError, RawOverlayError};
 
 #[derive(Debug, Snafu)]
 pub enum RomReadError {
@@ -85,6 +85,20 @@ impl<'a> Rom<'a> {
         let end = start + header.file_names.size as usize;
         let data = &self.data[start..end];
         Fnt::borrow_from_slice(data)
+    }
+
+    pub fn fat(&self) -> Result<Box<[&[u8]]>, RawFatError> {
+        let header = self.header()?;
+        let start = header.file_allocs.offset as usize;
+        let end = start + header.file_allocs.size as usize;
+        let data = &self.data[start..end];
+        let allocs = FileAlloc::borrow_from_slice(data)?;
+        let files = allocs.iter().map(|a| a.into_file(&self.data)).collect::<Vec<_>>().into_boxed_slice();
+        Ok(files)
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
     }
 }
 
