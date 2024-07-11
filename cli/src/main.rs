@@ -9,7 +9,7 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use nds_io::{
     crypto::blowfish::Blowfish,
-    rom::{self, raw, Logo},
+    rom::{self, raw, Logo, Overlay},
 };
 
 #[derive(Parser, Debug)]
@@ -78,6 +78,14 @@ struct Args {
     /// Shows the contents of the banner.
     #[arg(short = 'b', long)]
     show_banner: bool,
+
+    /// Prints the contents of an ARM9 overlay.
+    #[arg(short = 'y', long, value_name = "INDEX")]
+    print_arm9_overlay: Option<usize>,
+
+    /// Prints the contents of an ARM7 overlay.
+    #[arg(short = 'Y', long, value_name = "INDEX")]
+    print_arm7_overlay: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -165,6 +173,21 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(index) = args.print_arm9_overlay {
+        let fat = rom.fat()?;
+        let arm9_ovt = rom.arm9_overlay_table()?;
+        let mut overlay = Overlay::parse(&arm9_ovt[index], &fat);
+
+        if args.decompress && overlay.is_compressed() {
+            overlay.decompress();
+        }
+        if args.compress && !overlay.is_compressed() {
+            overlay.compress()?;
+        }
+
+        print_hex(overlay.full_data(), &args, overlay.base_address())?;
+    }
+
     if args.print_arm7 {
         let arm7 = rom.arm7()?;
         print_hex(arm7.full_data(), &args, arm7.base_address())?;
@@ -178,6 +201,13 @@ fn main() -> Result<()> {
         for overlay in arm7_ovt {
             println!("ARM7 Overlay:\n{}", overlay.display(2));
         }
+    }
+
+    if let Some(index) = args.print_arm7_overlay {
+        let fat = rom.fat()?;
+        let arm7_ovt = rom.arm7_overlay_table()?;
+        let overlay = Overlay::parse(&arm7_ovt[index], &fat);
+        print_hex(overlay.full_data(), &args, overlay.base_address())?;
     }
 
     if args.show_fnt {
