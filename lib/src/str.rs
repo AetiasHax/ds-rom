@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use bytemuck::{Pod, Zeroable};
+
 #[derive(Clone, Copy)]
 pub struct AsciiArray<const N: usize>(pub [u8; N]);
 
@@ -7,6 +9,27 @@ impl<const N: usize> Display for AsciiArray<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for ch in self.0 {
             write!(f, "{}", ch as char)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Unicode16Array<const N: usize>(pub [u16; N]);
+
+unsafe impl<const N: usize> Zeroable for Unicode16Array<N> {}
+unsafe impl<const N: usize> Pod for Unicode16Array<N> {}
+
+impl<const N: usize> Display for Unicode16Array<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for ch in self.0 {
+            if ch == 0 {
+                break;
+            }
+            let Some(ch) = char::from_u32(ch as u32) else {
+                break;
+            };
+            write!(f, "{ch}")?;
         }
         Ok(())
     }

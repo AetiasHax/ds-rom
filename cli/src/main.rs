@@ -74,6 +74,10 @@ struct Args {
     /// Shows the contents of the file name table.
     #[arg(short = 'f', long)]
     show_fnt: bool,
+
+    /// Shows the contents of the banner.
+    #[arg(short = 'b', long)]
+    show_banner: bool,
 }
 
 fn main() -> Result<()> {
@@ -124,6 +128,11 @@ fn main() -> Result<()> {
 
     if args.show_header {
         println!("ROM header:\n{}", header.display(2));
+    }
+
+    if args.show_banner {
+        let banner = rom.banner()?;
+        println!("ROM banner:\n{}", banner.display(2));
     }
 
     if args.print_arm9 {

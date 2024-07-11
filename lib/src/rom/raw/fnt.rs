@@ -6,8 +6,6 @@ use std::{
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
-use crate::str::print_hex;
-
 use super::RawHeaderError;
 
 pub struct Fnt<'a> {
