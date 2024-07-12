@@ -5,6 +5,7 @@ use snafu::{Backtrace, Snafu};
 use crate::{
     compress::lz77::Lz77,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishLevel},
+    CRC_16_MODBUS,
 };
 
 use super::{
@@ -62,6 +63,10 @@ impl<'a> Arm9<'a> {
     }
 
     pub fn decrypt(&mut self, key: &[u8], gamecode: u32) -> Result<(), RawArm9Error> {
+        if !self.is_encrypted() {
+            return Ok(());
+        }
+
         if self.data.len() < 0x800 {
             DataTooSmallSnafu { expected: 0x800usize, actual: self.data.len(), section: "secure area" }.fail()?;
         }
@@ -85,6 +90,10 @@ impl<'a> Arm9<'a> {
     }
 
     pub fn encrypt(&mut self, key: &[u8], gamecode: u32) -> Result<(), RawArm9Error> {
+        if self.is_encrypted() {
+            return Ok(());
+        }
+
         if self.data.len() < 0x800 {
             DataTooSmallSnafu { expected: 0x800usize, actual: self.data.len(), section: "secure area" }.fail()?;
         }
@@ -93,8 +102,18 @@ impl<'a> Arm9<'a> {
             NotEncryObjSnafu {}.fail()?;
         }
 
+        let secure_area = self.encrypted_secure_area(key, gamecode)?;
+        self.data.to_mut()[0..0x800].copy_from_slice(&secure_area);
+        Ok(())
+    }
+
+    pub fn encrypted_secure_area(&self, key: &[u8], gamecode: u32) -> Result<[u8; 0x800], RawArm9Error> {
         let mut secure_area = [0u8; 0x800];
         secure_area.clone_from_slice(&self.data[0..0x800]);
+        if self.is_encrypted() {
+            return Ok(secure_area);
+        }
+
         secure_area[0..8].copy_from_slice(SECURE_AREA_ENCRY_OBJ);
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3)?;
@@ -103,8 +122,13 @@ impl<'a> Arm9<'a> {
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2)?;
         blowfish.encrypt(&mut secure_area[0..8])?;
 
-        self.data.to_mut()[0..0x800].copy_from_slice(&secure_area);
-        Ok(())
+        Ok(secure_area)
+    }
+
+    pub fn secure_area_crc(&self, key: &[u8], gamecode: u32) -> Result<u16, RawArm9Error> {
+        let secure_area = self.encrypted_secure_area(key, gamecode)?;
+        let checksum = CRC_16_MODBUS.checksum(&secure_area);
+        Ok(checksum)
     }
 
     pub fn build_info(&self) -> Result<&BuildInfo, RawBuildInfoError> {

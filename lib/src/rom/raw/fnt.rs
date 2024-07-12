@@ -9,6 +9,7 @@ use snafu::{Backtrace, Snafu};
 use super::RawHeaderError;
 
 pub struct Fnt<'a> {
+    /// Every directory has one subtable, indexed by `dir_id & 0xfff`
     pub subtables: Box<[FntSubtable<'a>]>,
 }
 
@@ -20,6 +21,7 @@ pub struct FntDirectory {
     pub parent_id: u16,
 }
 
+/// Contains a directory's immediate children (files and folders).
 pub struct FntSubtable<'a> {
     pub directory: &'a FntDirectory,
     pub data: &'a [u8],

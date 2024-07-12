@@ -152,7 +152,7 @@ impl Logo {
         Ok(logo)
     }
 
-    pub fn compress(&self) -> Box<[u8]> {
+    pub fn compress(&self) -> [u8; 0x9c] {
         let mut diff = [0u8; SIZE + 8];
         self.store_tiles(&mut diff[4..SIZE + 4]);
         HUFFMAN.data_to_diff16(&mut diff[4..SIZE + 4]);
@@ -160,10 +160,10 @@ impl Logo {
         diff[0..4].copy_from_slice(&LOGO_HEADER.to_le_bytes());
         diff[SIZE + 4..SIZE + 8].copy_from_slice(&LOGO_FOOTER.to_le_bytes());
 
-        let mut bytes = vec![0u8; 0x9c];
+        let mut bytes = [0u8; 0x9c];
         HUFFMAN.compress(&diff, &mut bytes);
         reverse32(&mut bytes);
-        bytes.into_boxed_slice()
+        bytes
     }
 
     fn load_tiles(&mut self, data: &[u8]) {

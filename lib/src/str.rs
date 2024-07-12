@@ -1,9 +1,29 @@
 use std::fmt::Display;
 
 use bytemuck::{Pod, Zeroable};
+use snafu::{Backtrace, Snafu};
 
 #[derive(Clone, Copy)]
 pub struct AsciiArray<const N: usize>(pub [u8; N]);
+
+#[derive(Debug, Snafu)]
+pub enum AsciiArrayError {
+    #[snafu(display("the provided string '{string}' contains one or more non-ASCII characters:\n{backtrace}"))]
+    NotAscii { string: String, backtrace: Backtrace },
+}
+
+impl<const N: usize> AsciiArray<N> {
+    pub fn from_str(string: &str) -> Result<Self, AsciiArrayError> {
+        let mut chars = [0u8; N];
+        for (i, ch) in string.chars().take(N).enumerate() {
+            if !ch.is_ascii() {
+                return NotAsciiSnafu { string: string.to_string() }.fail();
+            }
+            chars[i] = ch as u8;
+        }
+        Ok(Self(chars))
+    }
+}
 
 impl<const N: usize> Display for AsciiArray<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
