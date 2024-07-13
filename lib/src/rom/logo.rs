@@ -1,5 +1,6 @@
-use std::{fmt::Display, fs::File, io, path::Path};
+use std::{fmt::Display, io, path::Path};
 
+use image::{io::Reader, GenericImageView, ImageError};
 use snafu::{Backtrace, Snafu};
 
 use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode};
@@ -58,19 +59,17 @@ pub enum LogoLoadError {
     #[snafu(transparent)]
     Io { source: io::Error },
     #[snafu(transparent)]
-    Decoding { source: png::DecodingError },
-    #[snafu(display("logo image must have {expected}-bit color depth but got {actual}-bit:\n{backtrace}"))]
-    ColorDepth { expected: u8, actual: u8, backtrace: Backtrace },
+    Image { source: ImageError },
+    #[snafu(display("logo image contains a pixel at {x},{y} which isn't white or black:\n{backtrace}"))]
+    InvalidColor { x: u32, y: u32, backtrace: Backtrace },
     #[snafu(display("logo image must be {expected} pixels but got {actual} pixels:\n{backtrace}"))]
     ImageSize { expected: ImageSize, actual: ImageSize, backtrace: Backtrace },
-    #[snafu(display("logo buffer must be {expected} bytes but got {actual} bytes:\n{backtrace}"))]
-    BufferSize { expected: usize, actual: usize, backtrace: Backtrace },
 }
 
 #[derive(Debug)]
 pub struct ImageSize {
-    pub width: usize,
-    pub height: usize,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Display for ImageSize {
@@ -89,30 +88,24 @@ fn reverse32(data: &mut [u8]) {
 
 impl Logo {
     pub fn from_png<P: AsRef<Path>>(path: P) -> Result<Self, LogoLoadError> {
-        let decoder = png::Decoder::new(File::open(path)?);
-        let mut reader = decoder.read_info()?;
-        let bit_depth = reader.output_color_type().1;
-        match bit_depth {
-            png::BitDepth::One => {}
-            _ => {
-                ColorDepthSnafu { expected: 1, actual: bit_depth as u8 }.fail()?;
-            }
-        };
-
-        let mut buf = vec![0; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut buf)?;
-        if info.width != WIDTH as u32 || info.height != HEIGHT as u32 {
+        let image = Reader::open(path)?.decode()?;
+        if image.width() != WIDTH as u32 || image.height() != HEIGHT as u32 {
             ImageSizeSnafu {
-                expected: ImageSize { width: WIDTH, height: HEIGHT },
-                actual: ImageSize { width: info.width as usize, height: info.height as usize },
+                expected: ImageSize { width: WIDTH as u32, height: HEIGHT as u32 },
+                actual: ImageSize { width: image.width(), height: image.height() },
             }
             .fail()?;
         }
 
-        let bytes = buf.into_boxed_slice();
-        let mut pixels = [0u8; SIZE];
-        pixels.copy_from_slice(&bytes);
-        Ok(Logo { pixels })
+        let mut logo = Logo { pixels: [0; SIZE] };
+        for (x, y, color) in image.pixels() {
+            let [r, g, b, _] = color.0;
+            if (r != 0xff && r != 0x00) || g != r || b != r {
+                return InvalidColorSnafu { x, y }.fail();
+            }
+            logo.set_pixel(x as usize, y as usize, r == 0x00);
+        }
+        Ok(logo)
     }
 
     pub fn decompress(data: &[u8]) -> Result<Self, LogoError> {
@@ -222,14 +215,15 @@ impl Logo {
     }
 
     fn get_braille_index(&self, x: usize, y: usize) -> u8 {
-        self.get_pixel_value(x, y, 0x80)
+        let value = self.get_pixel_value(x, y, 0x80)
             | self.get_pixel_value(x + 1, y, 0x40)
             | self.get_pixel_value(x, y + 1, 0x20)
             | self.get_pixel_value(x + 1, y + 1, 0x10)
             | self.get_pixel_value(x, y + 2, 0x8)
             | self.get_pixel_value(x + 1, y + 2, 0x4)
             | self.get_pixel_value(x, y + 3, 0x2)
-            | self.get_pixel_value(x + 1, y + 3, 0x1)
+            | self.get_pixel_value(x + 1, y + 3, 0x1);
+        !value
     }
 }
 

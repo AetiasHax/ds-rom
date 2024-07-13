@@ -4,6 +4,7 @@ use std::{
     usize,
 };
 
+use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
@@ -19,7 +20,7 @@ pub struct Overlay {
     pub ctor_start: u32,
     pub ctor_end: u32,
     pub file_id: u32,
-    compressed_size: u32,
+    pub compressed: OverlayCompressedSize,
 }
 
 #[derive(Snafu, Debug)]
@@ -50,25 +51,6 @@ impl Overlay {
         }
     }
 
-    pub fn compressed_size(&self) -> u32 {
-        self.compressed_size & 0xffffff
-    }
-
-    pub fn set_compressed_size(&mut self, value: u32) {
-        self.compressed_size = (self.compressed_size & !0xffffff) | (value & 0xffffff);
-    }
-
-    pub fn is_compressed(&self) -> bool {
-        (self.compressed_size >> 24) != 0
-    }
-
-    pub fn set_is_compressed(&mut self, value: bool) {
-        self.compressed_size &= 0xffffff;
-        if value {
-            self.compressed_size |= 0x01000000;
-        }
-    }
-
     pub fn display(&self, indent: usize) -> DisplayOverlay {
         DisplayOverlay { overlay: self, indent }
     }
@@ -90,8 +72,18 @@ impl<'a> Display for DisplayOverlay<'a> {
         writeln!(f, "{i}.bss size ........ : {:#x}", overlay.bss_size)?;
         writeln!(f, "{i}.ctor start ...... : {:#x}", overlay.ctor_start)?;
         writeln!(f, "{i}.ctor end ........ : {:#x}", overlay.ctor_end)?;
-        writeln!(f, "{i}Compressed size .. : {:#x}", overlay.compressed_size())?;
-        writeln!(f, "{i}Is compressed .... : {}", overlay.is_compressed())?;
+        writeln!(f, "{i}Compressed size .. : {:#x}", overlay.compressed.size())?;
+        writeln!(f, "{i}Is compressed .... : {}", overlay.compressed.is_compressed() != 0)?;
         Ok(())
     }
 }
+
+#[bitfield(u32)]
+pub struct OverlayCompressedSize {
+    #[bits(24)]
+    pub size: usize,
+    pub is_compressed: u8,
+}
+
+unsafe impl Zeroable for OverlayCompressedSize {}
+unsafe impl Pod for OverlayCompressedSize {}

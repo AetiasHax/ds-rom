@@ -1,5 +1,6 @@
-use std::{borrow::Cow, fmt::Display, mem::align_of};
+use std::{borrow::Cow, fmt::Display, mem::align_of, ops::Range};
 
+use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
@@ -218,7 +219,7 @@ impl<'a> Display for DisplayBanner<'a> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum BannerVersion {
     Original = 1,
     China = 2,
@@ -271,6 +272,15 @@ impl BannerVersion {
         }
     }
 
+    pub fn crc_range(self) -> Range<usize> {
+        match self {
+            BannerVersion::Original => 0x20..0x840,
+            BannerVersion::China => 0x20..0x940,
+            BannerVersion::Korea => 0x20..0xa40,
+            BannerVersion::Animated => 0x1240..0x23c0,
+        }
+    }
+
     pub fn banner_size(self) -> usize {
         match self {
             BannerVersion::Original => 0x840,
@@ -306,7 +316,7 @@ pub enum Language {
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
-pub struct BannerPalette([u16; 16]);
+pub struct BannerPalette(pub [u16; 16]);
 
 impl BannerPalette {
     pub fn get_color(&self, index: usize) -> (u8, u8, u8) {
@@ -319,6 +329,14 @@ impl BannerPalette {
         } else {
             (0, 0, 0)
         }
+    }
+
+    pub fn set_color(&mut self, index: usize, r: u8, g: u8, b: u8) {
+        let r = r as u16 * 31 / 255;
+        let g = g as u16 * 31 / 255;
+        let b = b as u16 * 31 / 255;
+        let color = r | (g << 5) | (b << 10);
+        self.0[index] = color;
     }
 }
 
@@ -334,22 +352,34 @@ impl Display for BannerPalette {
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
-pub struct BannerBitmap([u8; 0x200]);
+pub struct BannerBitmap(pub [u8; 0x200]);
 
 impl BannerBitmap {
     pub fn display<'a>(&'a self, palette: &'a BannerPalette) -> DisplayBannerBitmap<'a> {
         DisplayBannerBitmap { bitmap: self, palette }
     }
 
-    pub fn get_pixel(&self, x: usize, y: usize) -> usize {
+    fn get_index(x: usize, y: usize) -> (usize, usize) {
         // 8x8 pixel tiles in a 4x4 grid
         let index = (y / 8 * 0x80) + (x / 8 * 0x20) + (y % 8 * 4) + (x / 2 % 4);
         // 4 bits per pixel
         let offset = (x % 2) * 4;
+        (index, offset)
+    }
+
+    pub fn get_pixel(&self, x: usize, y: usize) -> usize {
+        let (index, offset) = Self::get_index(x, y);
         if index < self.0.len() {
             (self.0[index] as usize >> offset) & 0xf
         } else {
             0
+        }
+    }
+
+    pub fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
+        let (index, offset) = Self::get_index(x, y);
+        if index < self.0.len() {
+            self.0[index] = (self.0[index] & !(0xf << offset)) | (value << offset);
         }
     }
 }
@@ -382,28 +412,16 @@ pub struct BannerAnimation {
     pub keyframes: [BannerKeyframe; 64],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod)]
-pub struct BannerKeyframe(u16);
-
-impl BannerKeyframe {
-    pub fn flip_vertically(self) -> bool {
-        self.0 & 0x8000 != 0
-    }
-
-    pub fn flip_horizontally(self) -> bool {
-        self.0 & 0x4000 != 0
-    }
-
-    pub fn palette_index(self) -> usize {
-        (self.0 as usize >> 11) & 7
-    }
-
-    pub fn bitmap_index(self) -> usize {
-        (self.0 as usize >> 8) & 7
-    }
-
-    pub fn frame_duration(self) -> usize {
-        self.0 as usize & 0xff
-    }
+#[bitfield(u16)]
+pub struct BannerKeyframe {
+    pub frame_duration: u8,
+    #[bits(3)]
+    pub bitmap_index: u8,
+    #[bits(3)]
+    pub palette_index: u8,
+    pub flip_horizontally: bool,
+    pub flip_vertically: bool,
 }
+
+unsafe impl Zeroable for BannerKeyframe {}
+unsafe impl Pod for BannerKeyframe {}

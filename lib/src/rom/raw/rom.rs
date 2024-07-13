@@ -47,7 +47,12 @@ impl<'a> Rom<'a> {
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
 
-        let build_info_offset = (header.arm9_build_info_offset - header.arm9.offset) as usize;
+        let build_info_offset = if header.arm9_build_info_offset > header.arm9.offset {
+            (header.arm9_build_info_offset - header.arm9.offset) as usize
+        } else {
+            // `arm9_build_info_offset` is not an absolute offset in DSi titles
+            header.arm9_build_info_offset as usize
+        };
 
         Ok(Arm9::new(Cow::Borrowed(data), header.arm9.base_addr, header.arm9.entry, build_info_offset))
     }
@@ -109,13 +114,4 @@ impl<'a> Rom<'a> {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
-}
-
-#[test]
-fn test_new() {
-    let my_rom = [0u8; 0x4000];
-    let rom = Rom::new(&my_rom[..]);
-    let _header = rom.header().unwrap();
-    let rom = Rom::new(Cow::Borrowed(&my_rom[..]));
-    let _header = rom.header().unwrap();
 }

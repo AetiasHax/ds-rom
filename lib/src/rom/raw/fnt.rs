@@ -1,4 +1,6 @@
 use std::{
+    borrow::Cow,
+    io::{self, Write},
     mem::{align_of, size_of},
     str::from_utf8,
 };
@@ -23,8 +25,8 @@ pub struct FntDirectory {
 
 /// Contains a directory's immediate children (files and folders).
 pub struct FntSubtable<'a> {
-    pub directory: &'a FntDirectory,
-    pub data: &'a [u8],
+    pub directory: Cow<'a, FntDirectory>,
+    pub data: Cow<'a, [u8]>,
 }
 
 #[derive(Debug, Snafu)]
@@ -78,10 +80,36 @@ impl<'a> Fnt<'a> {
             let Some(length) = data[start..].iter().position(|b| *b == 0) else {
                 return UnterminatedSubtableSnafu {}.fail();
             };
-            subtables.push(FntSubtable { directory, data: &data[start..start + length] });
+            subtables
+                .push(FntSubtable { directory: Cow::Borrowed(directory), data: Cow::Borrowed(&data[start..start + length]) });
         }
 
         Ok(Self { subtables: subtables.into_boxed_slice() })
+    }
+
+    pub fn build(mut self) -> Result<Box<[u8]>, io::Error> {
+        let mut bytes = vec![];
+        let mut subtable_offset = 0;
+
+        let num_directories = self.subtables.len() as u16;
+
+        if let Some(root) = self.subtables.first_mut() {
+            // the root entry has no parent, so `parent_id` is instead the number of directories
+            root.directory.to_mut().parent_id = num_directories;
+        }
+
+        for subtable in self.subtables.iter_mut() {
+            subtable.directory.to_mut().subtable_offset = subtable_offset;
+            bytes.write(bytemuck::bytes_of(subtable.directory.as_ref()))?;
+            subtable_offset += subtable.data.len() as u32 + 1; // +1 for 0-byte terminator, see loop below
+        }
+
+        for subtable in self.subtables.iter() {
+            bytes.write(&subtable.data)?;
+            bytes.push(0);
+        }
+
+        Ok(bytes.into_boxed_slice())
     }
 }
 

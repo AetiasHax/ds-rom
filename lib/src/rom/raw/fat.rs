@@ -6,7 +6,7 @@ use snafu::{Backtrace, Snafu};
 use super::RawHeaderError;
 
 #[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Clone, Copy, Zeroable, Pod, Default)]
 pub struct FileAlloc {
     pub start: u32,
     pub end: u32,

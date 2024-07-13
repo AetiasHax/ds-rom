@@ -40,6 +40,28 @@ pub struct Unicode16Array<const N: usize>(pub [u16; N]);
 unsafe impl<const N: usize> Zeroable for Unicode16Array<N> {}
 unsafe impl<const N: usize> Pod for Unicode16Array<N> {}
 
+impl<const N: usize> Unicode16Array<N> {
+    pub fn from_str(string: &str) -> Self {
+        let mut chars = [0u16; N];
+        let mut i = 0;
+        for ch in string.chars() {
+            let mut codepoints = [0u16; 2];
+            ch.encode_utf16(&mut codepoints);
+
+            let len = if codepoints[1] != 0 { 2 } else { 1 };
+            if i + len >= N {
+                break;
+            }
+
+            for j in 0..len {
+                chars[i] = codepoints[j];
+                i += 1;
+            }
+        }
+        Self(chars)
+    }
+}
+
 impl<const N: usize> Display for Unicode16Array<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for ch in self.0 {

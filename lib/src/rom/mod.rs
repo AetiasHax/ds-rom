@@ -1,6 +1,7 @@
 mod arm7;
 mod arm9;
 mod autoload;
+mod banner;
 mod file;
 mod header;
 mod logo;
@@ -11,6 +12,7 @@ mod rom;
 pub use arm7::*;
 pub use arm9::*;
 pub use autoload::*;
+pub use banner::*;
 pub use file::*;
 pub use header::*;
 pub use logo::*;
