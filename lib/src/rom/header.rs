@@ -39,10 +39,8 @@ pub enum HeaderBuildError {
     AsciiArray { source: AsciiArrayError },
 }
 
-impl TryFrom<raw::Header> for Header {
-    type Error = HeaderLoadError;
-
-    fn try_from(header: raw::Header) -> Result<Self, Self::Error> {
+impl Header {
+    pub fn load_raw(header: &raw::Header) -> Result<Self, HeaderLoadError> {
         Ok(Self {
             title: header.title.to_string(),
             gamecode: header.gamecode,
@@ -58,9 +56,7 @@ impl TryFrom<raw::Header> for Header {
             rw_nand_end: header.rw_nand_end,
         })
     }
-}
 
-impl Header {
     pub fn build(&self, context: &BuildContext, rom: &Rom) -> Result<raw::Header, HeaderBuildError> {
         let logo = rom.header_logo().compress();
         let arm9 = rom.arm9();

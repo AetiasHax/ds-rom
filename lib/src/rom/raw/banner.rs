@@ -302,7 +302,7 @@ impl Display for BannerVersion {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Language {
     Japanese = 0,
     English = 1,
@@ -312,6 +312,21 @@ pub enum Language {
     Spanish = 5,
     Chinese = 6,
     Korean = 7,
+}
+
+impl Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Language::Japanese => write!(f, "Japanese"),
+            Language::English => write!(f, "English"),
+            Language::French => write!(f, "French"),
+            Language::German => write!(f, "German"),
+            Language::Italian => write!(f, "Italian"),
+            Language::Spanish => write!(f, "Spanish"),
+            Language::Chinese => write!(f, "Chinese"),
+            Language::Korean => write!(f, "Korean"),
+        }
+    }
 }
 
 #[repr(C)]

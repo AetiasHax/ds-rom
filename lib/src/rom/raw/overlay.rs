@@ -27,20 +27,26 @@ pub struct Overlay {
 pub enum RawOverlayError {
     #[snafu(transparent)]
     RawHeader { source: RawHeaderError },
-    #[snafu(display("the overlay table does not end with 0xFF values:\n{backtrace}"))]
-    NoEnd { backtrace: Backtrace },
+    #[snafu(display("the overlay table must be a multiple of {} bytes:\n{backtrace}", size_of::<Overlay>()))]
+    InvalidSize { backtrace: Backtrace },
     #[snafu(display("expected {expected}-alignment for overlay table but got {actual}-alignment:\n{backtrace}"))]
     Misaligned { expected: usize, actual: usize, backtrace: Backtrace },
 }
 
 impl Overlay {
-    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawOverlayError> {
+    fn check_size(data: &[u8]) -> Result<(), RawOverlayError> {
         let size = size_of::<Self>();
-        let Some(num_overlays) = data.chunks_exact(size).position(|xs| xs.iter().all(|x| *x == 0xff)) else {
-            return Err(NoEndSnafu {}.build());
-        };
+        if data.len() % size != 0 {
+            InvalidSizeSnafu {}.fail()
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawOverlayError> {
+        Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        match bytemuck::try_cast_slice(&data[..num_overlays * size]) {
+        match bytemuck::try_cast_slice(&data) {
             Ok(table) => Ok(table),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
                 MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()

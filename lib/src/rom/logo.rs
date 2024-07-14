@@ -5,6 +5,8 @@ use snafu::{Backtrace, Snafu};
 
 use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode};
 
+use super::raw;
+
 /// Huffman codes for every combination of 4 pixels
 const HUFFMAN: NibbleHuffman = NibbleHuffman {
     codes: [

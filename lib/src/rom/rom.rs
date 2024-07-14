@@ -8,8 +8,9 @@ use snafu::Snafu;
 use crate::rom::raw::FileAlloc;
 
 use super::{
-    raw::{self, TableOffset},
-    Arm7, Arm9, Banner, BannerError, File, FileBuildError, Header, HeaderBuildError, Logo, Overlay,
+    raw::{self, RawBannerError, RawFatError, RawFntError, RawHeaderError, RawOverlayError, TableOffset},
+    Arm7, Arm9, Banner, BannerError, BannerLoadError, FileBuildError, FileParseError, Files, Header, HeaderBuildError,
+    HeaderLoadError, Logo, LogoError, Overlay,
 };
 
 pub struct Rom<'a> {
@@ -20,8 +21,30 @@ pub struct Rom<'a> {
     arm7: Arm7<'a>,
     arm7_overlays: Vec<Overlay<'a>>,
     banner: Banner,
-    file_root: File<'a>,
+    files: Files<'a>,
     path_order: Vec<String>,
+}
+
+#[derive(Debug, Snafu)]
+pub enum RomExtractError {
+    #[snafu(transparent)]
+    RawHeader { source: RawHeaderError },
+    #[snafu(transparent)]
+    HeaderLoad { source: HeaderLoadError },
+    #[snafu(transparent)]
+    Logo { source: LogoError },
+    #[snafu(transparent)]
+    RawOverlay { source: RawOverlayError },
+    #[snafu(transparent)]
+    RawFnt { source: RawFntError },
+    #[snafu(transparent)]
+    RawFat { source: RawFatError },
+    #[snafu(transparent)]
+    RawBanner { source: RawBannerError },
+    #[snafu(transparent)]
+    BannerLoad { source: BannerLoadError },
+    #[snafu(transparent)]
+    FileParse { source: FileParseError },
 }
 
 #[derive(Snafu, Debug)]
@@ -37,6 +60,26 @@ pub enum RomBuildError {
 }
 
 impl<'a> Rom<'a> {
+    pub fn extract(rom: &'a raw::Rom) -> Result<Self, RomExtractError> {
+        let header = rom.header()?;
+        let fnt = rom.fnt()?;
+        let fat = rom.fat()?;
+        let banner = rom.banner()?;
+        let file_root = Files::parse(&fnt, fat, rom)?;
+        let path_order = file_root.compute_path_order();
+        Ok(Self {
+            header: Header::load_raw(&header)?,
+            header_logo: Logo::decompress(&header.logo)?,
+            arm9: rom.arm9()?,
+            arm9_overlays: rom.arm9_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Vec<_>>(),
+            arm7: rom.arm7()?,
+            arm7_overlays: rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Vec<_>>(),
+            banner: Banner::load_raw(&banner)?,
+            files: file_root,
+            path_order,
+        })
+    }
+
     pub fn build(mut self) -> Result<raw::Rom<'a>, RomBuildError> {
         let mut context = BuildContext::default();
 
@@ -52,7 +95,7 @@ impl<'a> Rom<'a> {
         cursor.write(self.arm9.full_data())?;
         Self::align(&mut cursor)?;
 
-        let max_file_id = self.file_root.max_file_id();
+        let max_file_id = self.files.max_file_id();
         let mut file_allocs = vec![FileAlloc::default(); max_file_id as usize + 1];
 
         if !self.arm9_overlays.is_empty() {
@@ -107,8 +150,8 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Write file name table (FNT) ---------------------
-        self.file_root.sort_for_fnt();
-        let fnt = self.file_root.build_fnt()?.build()?;
+        self.files.sort_for_fnt();
+        let fnt = self.files.build_fnt()?.build()?;
         cursor.write(&fnt)?;
         Self::align(&mut cursor)?;
 
@@ -124,10 +167,10 @@ impl<'a> Rom<'a> {
         Self::align(&mut cursor)?;
 
         // --------------------- Write files ---------------------
-        self.file_root.sort_for_rom();
-        self.file_root.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file| {
+        self.files.sort_for_rom();
+        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file| {
             // TODO: Rewrite traverse_files as an iterator so these errors can be returned
-            let contents = file.contents().expect("file contents missing");
+            let contents = file.contents();
 
             let start = cursor.position() as u32;
             let end = start + contents.len() as u32;

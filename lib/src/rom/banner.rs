@@ -18,6 +18,12 @@ pub struct Banner {
 }
 
 #[derive(Debug, Snafu)]
+pub enum BannerLoadError {
+    #[snafu(transparent)]
+    RawBanner { source: RawBannerError },
+}
+
+#[derive(Debug, Snafu)]
 pub enum BannerError {
     #[snafu(transparent)]
     RawBanner { source: RawBannerError },
@@ -30,6 +36,46 @@ pub enum BannerError {
 }
 
 impl Banner {
+    fn load_title(
+        banner: &raw::Banner,
+        version: BannerVersion,
+        language: Language,
+    ) -> Result<Option<String>, BannerLoadError> {
+        if version.supports_language(language) {
+            if let Some(title) = banner.title(language) {
+                Ok(Some(title?.to_string()))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn load_raw(banner: &raw::Banner) -> Result<Self, BannerLoadError> {
+        let version = banner.version();
+        Ok(Self {
+            version,
+            title: BannerTitle {
+                japanese: Self::load_title(banner, version, Language::Japanese)?.unwrap(),
+                english: Self::load_title(banner, version, Language::English)?.unwrap(),
+                french: Self::load_title(banner, version, Language::French)?.unwrap(),
+                german: Self::load_title(banner, version, Language::German)?.unwrap(),
+                italian: Self::load_title(banner, version, Language::Italian)?.unwrap(),
+                spanish: Self::load_title(banner, version, Language::Spanish)?.unwrap(),
+                chinese: Self::load_title(banner, version, Language::Chinese)?,
+                korean: Self::load_title(banner, version, Language::Korean)?,
+            },
+            files: BannerFiles {
+                bitmap_path: PathBuf::from("banner/bitmap.png"),
+                palette_path: PathBuf::from("banner/palette.png"),
+                animation_bitmap_paths: None,
+                animation_palette_paths: None,
+            },
+            keyframes: None,
+        })
+    }
+
     fn crc(&self, banner: &mut raw::Banner, version: BannerVersion) -> Result<(), BannerError> {
         if self.version < version {
             return Ok(());

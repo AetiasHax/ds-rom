@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     fs::File,
     io::{self, Read},
+    mem::size_of,
     path::Path,
 };
 
@@ -59,12 +60,21 @@ impl<'a> Rom<'a> {
 
     pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
-        if header.arm9_overlays.offset == 0 {
+        let start = header.arm9_overlays.offset as usize;
+        let end = start + header.arm9_overlays.size as usize;
+        if start == 0 && end == 0 {
             Ok(&[])
         } else {
-            let data = &self.data[header.arm9_overlays.offset as usize..];
+            let data = &self.data[start..end];
             Overlay::borrow_from_slice(data)
         }
+    }
+
+    pub fn num_arm9_overlays(&self) -> Result<usize, RawHeaderError> {
+        let header = self.header()?;
+        let start = header.arm9_overlays.offset as usize;
+        let end = start + header.arm9_overlays.size as usize;
+        Ok((end - start) / size_of::<Overlay>())
     }
 
     pub fn arm7(&self) -> Result<Arm7, RawHeaderError> {
@@ -78,12 +88,21 @@ impl<'a> Rom<'a> {
 
     pub fn arm7_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
-        if header.arm7_overlays.offset == 0 {
+        let start = header.arm7_overlays.offset as usize;
+        let end = start + header.arm7_overlays.size as usize;
+        if start == 0 && end == 0 {
             Ok(&[])
         } else {
-            let data = &self.data[header.arm7_overlays.offset as usize..];
+            let data = &self.data[start..end];
             Overlay::borrow_from_slice(data)
         }
+    }
+
+    pub fn num_arm7_overlays(&self) -> Result<usize, RawHeaderError> {
+        let header = self.header()?;
+        let start = header.arm7_overlays.offset as usize;
+        let end = start + header.arm7_overlays.size as usize;
+        Ok((end - start) / size_of::<Overlay>())
     }
 
     pub fn fnt(&self) -> Result<Fnt, RawFntError> {
@@ -94,14 +113,14 @@ impl<'a> Rom<'a> {
         Fnt::borrow_from_slice(data)
     }
 
-    pub fn fat(&self) -> Result<Box<[&[u8]]>, RawFatError> {
+    pub fn fat(&self) -> Result<&[FileAlloc], RawFatError> {
         let header = self.header()?;
         let start = header.file_allocs.offset as usize;
         let end = start + header.file_allocs.size as usize;
         let data = &self.data[start..end];
         let allocs = FileAlloc::borrow_from_slice(data)?;
-        let files = allocs.iter().map(|a| a.into_file(&self.data)).collect::<Vec<_>>().into_boxed_slice();
-        Ok(files)
+        // let files = allocs.iter().map(|a| a.into_file(&self.data)).collect::<Vec<_>>().into_boxed_slice();
+        Ok(allocs)
     }
 
     pub fn banner(&self) -> Result<Banner, RawBannerError> {

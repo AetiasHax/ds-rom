@@ -1,10 +1,12 @@
 mod dump;
+mod extract;
 
 use std::io::Write;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use dump::Dump;
+use extract::Extract;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -16,12 +18,14 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     Dump(Dump),
+    Extract(Extract),
 }
 
 impl Command {
     fn run(&self) -> Result<()> {
         match self {
             Command::Dump(dump) => dump.run(),
+            Command::Extract(extract) => extract.run(),
         }
     }
 }

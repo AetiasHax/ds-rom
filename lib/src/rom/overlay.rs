@@ -2,7 +2,7 @@ use std::{borrow::Cow, io};
 
 use crate::compress::lz77::Lz77;
 
-use super::raw::{self, OverlayCompressedSize};
+use super::raw::{self, FileAlloc, OverlayCompressedSize};
 
 pub struct Overlay<'a> {
     id: u32,
@@ -19,7 +19,9 @@ pub struct Overlay<'a> {
 const LZ77: Lz77 = Lz77 {};
 
 impl<'a> Overlay<'a> {
-    pub fn parse(overlay: &raw::Overlay, fat: &'a [&[u8]]) -> Self {
+    pub fn parse(overlay: &raw::Overlay, fat: &[FileAlloc], rom: &'a raw::Rom) -> Self {
+        let alloc = fat[overlay.file_id as usize];
+        let data = &rom.data()[alloc.range()];
         Self {
             id: overlay.id,
             base_address: overlay.base_addr,
@@ -29,7 +31,7 @@ impl<'a> Overlay<'a> {
             ctor_end: overlay.ctor_end,
             file_id: overlay.file_id,
             compressed: overlay.compressed.is_compressed() != 0,
-            data: Cow::Borrowed(fat[overlay.file_id as usize]),
+            data: Cow::Borrowed(data),
         }
     }
 
