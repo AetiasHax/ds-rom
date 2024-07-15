@@ -1,10 +1,11 @@
 use std::{borrow::Cow, io, mem::replace, ops::Range};
 
+use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use crate::{
     compress::lz77::Lz77,
-    crypto::blowfish::{Blowfish, BlowfishError, BlowfishLevel},
+    crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
     CRC_16_MODBUS,
 };
 
@@ -13,11 +14,17 @@ use super::{
     Autoload,
 };
 
+#[derive(Clone)]
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
-    base_address: u32,
-    entry_function: u32,
-    build_info_offset: usize,
+    offsets: Arm9Offsets,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct Arm9Offsets {
+    pub base_address: u32,
+    pub entry_function: u32,
+    pub build_info_offset: usize,
 }
 
 const SECURE_AREA_ID: [u8; 8] = [0xff, 0xde, 0xff, 0xe7, 0xff, 0xde, 0xff, 0xe7];
@@ -54,15 +61,15 @@ pub enum Arm9AutoloadError {
 }
 
 impl<'a> Arm9<'a> {
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, base_address: u32, entry_function: u32, build_info_offset: usize) -> Self {
-        Arm9 { data: data.into(), base_address, entry_function, build_info_offset }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, config: Arm9Offsets) -> Self {
+        Arm9 { data: data.into(), offsets: config }
     }
 
     pub fn is_encrypted(&self) -> bool {
         self.data.len() < 8 || self.data[0..8] != SECURE_AREA_ID
     }
 
-    pub fn decrypt(&mut self, key: &[u8], gamecode: u32) -> Result<(), RawArm9Error> {
+    pub fn decrypt(&mut self, key: &BlowfishKey, gamecode: u32) -> Result<(), RawArm9Error> {
         if !self.is_encrypted() {
             return Ok(());
         }
@@ -89,7 +96,7 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    pub fn encrypt(&mut self, key: &[u8], gamecode: u32) -> Result<(), RawArm9Error> {
+    pub fn encrypt(&mut self, key: &BlowfishKey, gamecode: u32) -> Result<(), RawArm9Error> {
         if self.is_encrypted() {
             return Ok(());
         }
@@ -107,7 +114,7 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    pub fn encrypted_secure_area(&self, key: &[u8], gamecode: u32) -> Result<[u8; 0x800], RawArm9Error> {
+    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> Result<[u8; 0x800], RawArm9Error> {
         let mut secure_area = [0u8; 0x800];
         secure_area.clone_from_slice(&self.data[0..0x800]);
         if self.is_encrypted() {
@@ -125,21 +132,29 @@ impl<'a> Arm9<'a> {
         Ok(secure_area)
     }
 
-    pub fn secure_area_crc(&self, key: &[u8], gamecode: u32) -> Result<u16, RawArm9Error> {
+    pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> Result<u16, RawArm9Error> {
         let secure_area = self.encrypted_secure_area(key, gamecode)?;
         let checksum = CRC_16_MODBUS.checksum(&secure_area);
         Ok(checksum)
     }
 
     pub fn build_info(&self) -> Result<&BuildInfo, RawBuildInfoError> {
-        BuildInfo::borrow_from_slice(&self.data[self.build_info_offset as usize..])
+        BuildInfo::borrow_from_slice(&self.data[self.offsets.build_info_offset as usize..])
     }
 
     fn build_info_mut(&mut self) -> Result<&mut BuildInfo, RawBuildInfoError> {
-        BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.build_info_offset as usize..])
+        BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info_offset as usize..])
+    }
+
+    pub fn is_compressed(&self) -> Result<bool, RawBuildInfoError> {
+        Ok(self.build_info()?.is_compressed())
     }
 
     pub fn decompress(&mut self) -> Result<(), RawArm9Error> {
+        if !self.is_compressed()? {
+            return Ok(());
+        }
+
         let data: Cow<[u8]> = LZ77.decompress(&self.data).into_vec().into();
         let old_data = replace(&mut self.data, data);
         let build_info = match self.build_info_mut() {
@@ -154,10 +169,14 @@ impl<'a> Arm9<'a> {
     }
 
     pub fn compress(&mut self) -> Result<(), RawArm9Error> {
+        if self.is_compressed()? {
+            return Ok(());
+        }
+
         let data: Cow<[u8]> = LZ77.compress(&self.data, COMPRESSION_START)?.into_vec().into();
         let length = data.len();
         let old_data = replace(&mut self.data, data);
-        let base_address = self.base_address;
+        let base_address = self.base_address();
         let build_info = match self.build_info_mut() {
             Ok(build_info) => build_info,
             Err(e) => {
@@ -170,8 +189,8 @@ impl<'a> Arm9<'a> {
     }
 
     fn get_autoload_infos(&self, build_info: &BuildInfo) -> Result<&[AutoloadInfo], Arm9AutoloadError> {
-        let start = (build_info.autoload_infos_start - self.base_address) as usize;
-        let end = (build_info.autoload_infos_end - self.base_address) as usize;
+        let start = (build_info.autoload_infos_start - self.base_address()) as usize;
+        let end = (build_info.autoload_infos_end - self.base_address()) as usize;
         let autoload_info = AutoloadInfo::borrow_from_slice(&self.data[start..end])?;
         Ok(autoload_info)
     }
@@ -192,7 +211,7 @@ impl<'a> Arm9<'a> {
         let autoload_infos = self.get_autoload_infos(build_info)?;
 
         let mut autoloads = vec![];
-        let mut load_offset = build_info.autoload_blocks - self.base_address;
+        let mut load_offset = build_info.autoload_blocks - self.base_address();
         for autoload_info in autoload_infos {
             let start = load_offset as usize;
             let end = start + autoload_info.code_size as usize;
@@ -206,7 +225,7 @@ impl<'a> Arm9<'a> {
 
     pub fn code(&self) -> Result<&[u8], RawBuildInfoError> {
         let build_info = self.build_info()?;
-        Ok(&self.data[..build_info.bss_start as usize])
+        Ok(&self.data[..(build_info.bss_start - self.base_address()) as usize])
     }
 
     pub fn full_data(&self) -> &[u8] {
@@ -214,16 +233,20 @@ impl<'a> Arm9<'a> {
     }
 
     pub fn base_address(&self) -> u32 {
-        self.base_address
+        self.offsets.base_address
     }
 
     pub fn entry_function(&self) -> u32 {
-        self.entry_function
+        self.offsets.entry_function
     }
 
     pub fn bss(&self) -> Result<Range<u32>, RawBuildInfoError> {
         let build_info = self.build_info()?;
         Ok(build_info.bss_start..build_info.bss_end)
+    }
+
+    pub fn offsets(&self) -> &Arm9Offsets {
+        &self.offsets
     }
 }
 

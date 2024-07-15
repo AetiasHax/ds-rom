@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use bytemuck::{Pod, Zeroable};
+use serde::{de, Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 #[derive(Clone, Copy)]
@@ -28,9 +29,31 @@ impl<const N: usize> AsciiArray<N> {
 impl<const N: usize> Display for AsciiArray<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for ch in self.0 {
+            if ch == 0 {
+                break;
+            }
             write!(f, "{}", ch as char)?;
         }
         Ok(())
+    }
+}
+
+impl<const N: usize> Serialize for AsciiArray<N> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de, const N: usize> Deserialize<'de> for AsciiArray<N> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string: String = Deserialize::deserialize(deserializer)?;
+        Ok(Self::from_str(&string).map_err(de::Error::custom)?)
     }
 }
 

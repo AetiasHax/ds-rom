@@ -5,6 +5,7 @@ use std::{
 
 use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
+use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use crate::{
@@ -278,6 +279,7 @@ impl Display for DsiFlags {
 }
 
 #[bitfield(u8)]
+#[derive(Serialize, Deserialize)]
 pub struct DsFlags {
     permit_jump: bool,
     permit_tmpjump: bool,
@@ -362,7 +364,7 @@ impl<'a> Display for DisplayTableOffset<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Delay(pub u16);
 
 impl Display for Delay {

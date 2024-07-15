@@ -31,4 +31,8 @@ impl<'a> Autoload<'a> {
     pub fn bss_size(&self) -> u32 {
         self.info.bss_size
     }
+
+    pub fn info(&self) -> &AutoloadInfo {
+        &self.info
+    }
 }

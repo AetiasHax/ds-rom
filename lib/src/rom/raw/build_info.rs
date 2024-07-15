@@ -1,4 +1,7 @@
-use std::mem::{align_of, size_of};
+use std::{
+    fmt::Display,
+    mem::{align_of, size_of},
+};
 
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
@@ -82,5 +85,29 @@ impl BuildInfo {
 
     pub fn is_compressed(&self) -> bool {
         self.compressed_code_end != 0
+    }
+
+    pub fn display(&self, indent: usize) -> DisplayBuildInfo {
+        DisplayBuildInfo { build_info: self, indent }
+    }
+}
+
+pub struct DisplayBuildInfo<'a> {
+    build_info: &'a BuildInfo,
+    indent: usize,
+}
+
+impl<'a> Display for DisplayBuildInfo<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let i = format!("{:indent$}", "", indent = self.indent);
+        let build_info = &self.build_info;
+        writeln!(f, "{i}Autoload infos start .. : {:#x}", build_info.autoload_infos_start)?;
+        writeln!(f, "{i}Autoload infos end .... : {:#x}", build_info.autoload_infos_end)?;
+        writeln!(f, "{i}Autoload blocks ....... : {:#x}", build_info.autoload_blocks)?;
+        writeln!(f, "{i}.bss start ............ : {:#x}", build_info.bss_start)?;
+        writeln!(f, "{i}.bss end .............. : {:#x}", build_info.bss_end)?;
+        writeln!(f, "{i}Compressed code end ... : {:#x}", build_info.compressed_code_end)?;
+        writeln!(f, "{i}SDK version ........... : {:#x}", build_info.sdk_version)?;
+        Ok(())
     }
 }

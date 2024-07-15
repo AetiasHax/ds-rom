@@ -37,8 +37,6 @@ pub enum RawFntError {
     InvalidSize { backtrace: Backtrace },
     #[snafu(display("expected {expected}-alignment for {section} but got {actual}-alignment:\n{backtrace}"))]
     Misaligned { expected: usize, actual: usize, section: &'static str, backtrace: Backtrace },
-    #[snafu(display("encountered an unterminated subtable in the file name table:\n{backtrace}"))]
-    UnterminatedSubtable { backtrace: Backtrace },
 }
 
 impl<'a> Fnt<'a> {
@@ -77,11 +75,7 @@ impl<'a> Fnt<'a> {
         let mut subtables = Vec::with_capacity(directories.len());
         for directory in directories {
             let start = directory.subtable_offset as usize;
-            let Some(length) = data[start..].iter().position(|b| *b == 0) else {
-                return UnterminatedSubtableSnafu {}.fail();
-            };
-            subtables
-                .push(FntSubtable { directory: Cow::Borrowed(directory), data: Cow::Borrowed(&data[start..start + length]) });
+            subtables.push(FntSubtable { directory: Cow::Borrowed(directory), data: Cow::Borrowed(&data[start..]) });
         }
 
         Ok(Self { subtables: subtables.into_boxed_slice() })
@@ -128,7 +122,7 @@ impl<'a> Iterator for IterFntSubtable<'a> {
     type Item = FntFile<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.data.is_empty() {
+        if self.data.is_empty() || self.data[0] == 0 {
             return None;
         }
 

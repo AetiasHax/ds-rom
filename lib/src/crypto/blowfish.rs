@@ -1,4 +1,9 @@
-use std::mem::{align_of, size_of};
+use std::{
+    fs::File,
+    io::{self, Read, Seek, SeekFrom},
+    mem::{align_of, size_of},
+    path::Path,
+};
 
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
@@ -107,16 +112,14 @@ impl Blowfish {
         }
     }
 
-    pub fn new(key: &[u8], seed: u32, level: BlowfishLevel) -> Result<Self, BlowfishError> {
-        let mut blowfish = match bytemuck::try_from_bytes::<Blowfish>(key) {
+    pub fn new(key: &BlowfishKey, seed: u32, level: BlowfishLevel) -> Result<Self, BlowfishError> {
+        let mut blowfish = match bytemuck::try_from_bytes::<Blowfish>(&key.0) {
             Ok(blowfish) => *blowfish,
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                let addr = key as *const [u8] as *const () as usize;
+                let addr = &key.0 as *const [u8] as *const () as usize;
                 return Err(MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.build());
             }
-            Err(PodCastError::SizeMismatch) => {
-                return Err(KeySizeSnafu { expected: size_of::<Self>(), actual: key.len() }.build())
-            }
+            Err(PodCastError::SizeMismatch) => unreachable!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
             Err(PodCastError::AlignmentMismatch) => panic!(),
         };
@@ -145,4 +148,30 @@ pub enum BlowfishLevel {
     Level1,
     Level2,
     Level3,
+}
+
+pub struct BlowfishKey([u8; 0x1048]);
+
+#[derive(Snafu, Debug)]
+pub enum BlowfishKeyError {
+    #[snafu(transparent)]
+    Io { source: io::Error },
+    #[snafu(display("expected ARM7 BIOS to be at least {expected} bytes long but got {actual} bytes:\n{backtrace}"))]
+    TooSmall { expected: usize, actual: usize, backtrace: Backtrace },
+}
+
+impl BlowfishKey {
+    pub fn from_arm7_bios<P: AsRef<Path>>(path: P) -> Result<Self, BlowfishKeyError> {
+        let mut file = File::open(path)?;
+        let size = file.metadata()?.len() as usize;
+        if size < 0x30 + size_of::<Self>() {
+            return TooSmallSnafu { expected: 0x30 + size_of::<Self>(), actual: size }.fail();
+        }
+
+        let mut key = [0; size_of::<Self>()];
+        file.seek(SeekFrom::Start(0x30))?;
+        file.read_exact(&mut key)?;
+
+        Ok(Self(key))
+    }
 }

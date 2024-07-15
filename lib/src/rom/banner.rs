@@ -1,6 +1,10 @@
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
-use image::{io::Reader, GenericImageView, ImageError};
+use image::{io::Reader, GenericImageView, ImageError, Rgb, RgbImage};
+use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use crate::{str::Unicode16Array, CRC_16_MODBUS};
@@ -10,11 +14,14 @@ use super::{
     ImageSize,
 };
 
+#[derive(Serialize, Deserialize)]
 pub struct Banner {
     version: BannerVersion,
-    title: BannerTitle,
-    files: BannerFiles,
-    keyframes: Option<Box<[BannerKeyframe]>>,
+    pub title: BannerTitle,
+    #[serde(skip)]
+    pub images: BannerImages,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframes: Option<Vec<BannerKeyframe>>,
 }
 
 #[derive(Debug, Snafu)]
@@ -28,7 +35,7 @@ pub enum BannerError {
     #[snafu(transparent)]
     RawBanner { source: RawBannerError },
     #[snafu(transparent)]
-    BannerFile { source: BannerFileError },
+    BannerFile { source: BannerImageError },
     #[snafu(display("maximum keyframe count is {max} but got {actual}:\n{backtrace}"))]
     TooManyKeyframes { max: usize, actual: usize, backtrace: Backtrace },
     #[snafu(display("maximum supported banner version is currently {max} but got {actual}:\n{backtrace}"))]
@@ -66,12 +73,7 @@ impl Banner {
                 chinese: Self::load_title(banner, version, Language::Chinese)?,
                 korean: Self::load_title(banner, version, Language::Korean)?,
             },
-            files: BannerFiles {
-                bitmap_path: PathBuf::from("banner/bitmap.png"),
-                palette_path: PathBuf::from("banner/palette.png"),
-                animation_bitmap_paths: None,
-                animation_palette_paths: None,
-            },
+            images: BannerImages::from_bitmap(*banner.bitmap()?, *banner.palette()?),
             keyframes: None,
         })
     }
@@ -97,9 +99,8 @@ impl Banner {
         let mut banner = raw::Banner::new(self.version);
         self.title.copy_to_banner(&mut banner)?;
 
-        let (bitmap, palette) = self.files.build_icon()?;
-        *banner.bitmap_mut()? = bitmap;
-        *banner.palette_mut()? = palette;
+        *banner.bitmap_mut()? = self.images.bitmap;
+        *banner.palette_mut()? = self.images.palette;
 
         if let Some(keyframes) = &self.keyframes {
             if keyframes.len() > 64 {
@@ -122,17 +123,20 @@ impl Banner {
 
         Ok(banner)
     }
+
+    pub fn save_images(&self) {}
 }
 
-pub struct BannerFiles {
-    bitmap_path: PathBuf,
-    palette_path: PathBuf,
-    animation_bitmap_paths: Option<Box<[PathBuf]>>,
-    animation_palette_paths: Option<Box<[PathBuf]>>,
+#[derive(Default)]
+pub struct BannerImages {
+    pub bitmap: BannerBitmap,
+    pub palette: BannerPalette,
+    pub animation_bitmap_paths: Option<Box<[BannerBitmap]>>,
+    pub animation_palette_paths: Option<Box<[BannerPalette]>>,
 }
 
 #[derive(Debug, Snafu)]
-pub enum BannerFileError {
+pub enum BannerImageError {
     #[snafu(transparent)]
     Io { source: io::Error },
     #[snafu(transparent)]
@@ -143,55 +147,85 @@ pub enum BannerFileError {
     InvalidPixel { bitmap: PathBuf, x: u32, y: u32, backtrace: Backtrace },
 }
 
-impl BannerFiles {
-    pub fn build_icon(&self) -> Result<(BannerBitmap, BannerPalette), BannerFileError> {
-        let bitmap = Reader::open(self.bitmap_path.clone())?.decode()?;
-        if bitmap.width() != 32 || bitmap.height() != 32 {
+impl BannerImages {
+    pub fn from_bitmap(bitmap: BannerBitmap, palette: BannerPalette) -> Self {
+        Self { bitmap, palette, animation_bitmap_paths: None, animation_palette_paths: None }
+    }
+
+    pub fn from_bitmap_file<P: AsRef<Path> + Into<PathBuf>>(
+        bitmap_path: P,
+        palette_path: P,
+    ) -> Result<Self, BannerImageError> {
+        let bitmap_image = Reader::open(&bitmap_path)?.decode()?;
+        if bitmap_image.width() != 32 || bitmap_image.height() != 32 {
             return WrongSizeSnafu {
                 expected: ImageSize { width: 32, height: 32 },
-                actual: ImageSize { width: bitmap.width(), height: bitmap.height() },
+                actual: ImageSize { width: bitmap_image.width(), height: bitmap_image.height() },
             }
             .fail();
         }
 
-        let palette = Reader::open(self.palette_path.clone())?.decode()?;
-        if palette.width() != 16 || palette.height() != 1 {
+        let palette_image = Reader::open(palette_path)?.decode()?;
+        if palette_image.width() != 16 || palette_image.height() != 1 {
             return WrongSizeSnafu {
                 expected: ImageSize { width: 16, height: 1 },
-                actual: ImageSize { width: bitmap.width(), height: bitmap.height() },
+                actual: ImageSize { width: palette_image.width(), height: palette_image.height() },
             }
             .fail();
         }
 
-        let mut banner_bitmap = BannerBitmap([0u8; 0x200]);
-
-        for (x, y, color) in bitmap.pixels() {
-            let index = palette.pixels().find_map(|(i, _, c)| (color == c).then_some(i));
+        let mut bitmap = BannerBitmap([0u8; 0x200]);
+        for (x, y, color) in bitmap_image.pixels() {
+            let index = palette_image.pixels().find_map(|(i, _, c)| (color == c).then_some(i));
             let Some(index) = index else {
-                return InvalidPixelSnafu { bitmap: self.bitmap_path.clone(), x, y }.fail();
+                return InvalidPixelSnafu { bitmap: bitmap_path, x, y }.fail();
             };
-            banner_bitmap.set_pixel(x as usize, y as usize, index as u8);
+            bitmap.set_pixel(x as usize, y as usize, index as u8);
         }
 
-        let mut banner_palette = BannerPalette([0u16; 16]);
-        for (i, _, color) in palette.pixels() {
+        let mut palette = BannerPalette([0u16; 16]);
+        for (i, _, color) in palette_image.pixels() {
             let [r, g, b, _] = color.0;
-            banner_palette.set_color(i as usize, r, g, b);
+            palette.set_color(i as usize, r, g, b);
         }
 
-        Ok((banner_bitmap, banner_palette))
+        Ok(Self { bitmap, palette, animation_bitmap_paths: None, animation_palette_paths: None })
+    }
+
+    pub fn save_bitmap_file(&self, path: &Path) -> Result<(), BannerImageError> {
+        let mut bitmap_image = RgbImage::new(32, 32);
+        for y in 0..32 {
+            for x in 0..32 {
+                let index = self.bitmap.get_pixel(x, y);
+                let (r, g, b) = self.palette.get_color(index);
+                bitmap_image.put_pixel(x as u32, y as u32, Rgb([r, g, b]));
+            }
+        }
+
+        let mut palette_image = RgbImage::new(16, 1);
+        for index in 0..16 {
+            let (r, g, b) = self.palette.get_color(index);
+            palette_image.put_pixel(index as u32, 0, Rgb([r, g, b]));
+        }
+
+        bitmap_image.save(path.join("bitmap.png"))?;
+        palette_image.save(path.join("palette.png"))?;
+        Ok(())
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct BannerTitle {
-    japanese: String,
-    english: String,
-    french: String,
-    german: String,
-    italian: String,
-    spanish: String,
-    chinese: Option<String>,
-    korean: Option<String>,
+    pub japanese: String,
+    pub english: String,
+    pub french: String,
+    pub german: String,
+    pub italian: String,
+    pub spanish: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chinese: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub korean: Option<String>,
 }
 
 macro_rules! copy_title {
@@ -221,12 +255,13 @@ impl BannerTitle {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct BannerKeyframe {
-    flip_vertically: bool,
-    flip_horizontally: bool,
-    palette: usize,
-    bitmap: usize,
-    frame_duration: usize,
+    pub flip_vertically: bool,
+    pub flip_horizontally: bool,
+    pub palette: usize,
+    pub bitmap: usize,
+    pub frame_duration: usize,
 }
 
 impl BannerKeyframe {

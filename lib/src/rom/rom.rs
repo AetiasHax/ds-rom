@@ -1,16 +1,20 @@
 use std::{
+    fs::{self, create_dir, create_dir_all, File},
     io::{self, Cursor, Write},
     mem::size_of,
+    path::Path,
 };
 
-use snafu::Snafu;
+use serde::{Deserialize, Serialize};
+use snafu::{Backtrace, Snafu};
 
-use crate::rom::raw::FileAlloc;
+use crate::{crypto::blowfish::BlowfishKey, rom::raw::FileAlloc};
 
 use super::{
-    raw::{self, RawBannerError, RawFatError, RawFntError, RawHeaderError, RawOverlayError, TableOffset},
-    Arm7, Arm9, Banner, BannerError, BannerLoadError, FileBuildError, FileParseError, Files, Header, HeaderBuildError,
-    HeaderLoadError, Logo, LogoError, Overlay,
+    raw::{self, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError, TableOffset},
+    Arm7, Arm9, Arm9AutoloadError, Arm9Offsets, Banner, BannerError, BannerImageError, BannerLoadError, BuildInfo,
+    FileBuildError, FileParseError, Files, Header, HeaderBuildError, HeaderLoadError, Logo, LogoError, LogoSaveError, Overlay,
+    OverlayInfo, RawArm9Error,
 };
 
 pub struct Rom<'a> {
@@ -59,7 +63,140 @@ pub enum RomBuildError {
     HeaderBuild { source: HeaderBuildError },
 }
 
+#[derive(Snafu, Debug)]
+pub enum RomSaveError {
+    #[snafu(display("blowfish key is required because ARM9 program is encrypted"))]
+    BlowfishKeyNeeded,
+    #[snafu(transparent)]
+    Io { source: io::Error },
+    #[snafu(transparent)]
+    SerdeJson { source: serde_yml::Error },
+    #[snafu(transparent)]
+    LogoSave { source: LogoSaveError },
+    #[snafu(transparent)]
+    RawBuildInfo { source: RawBuildInfoError },
+    #[snafu(transparent)]
+    RawArm9 { source: RawArm9Error },
+    #[snafu(transparent)]
+    Arm9Autoload { source: Arm9AutoloadError },
+    #[snafu(transparent)]
+    BannerImage { source: BannerImageError },
+}
+
+#[derive(Serialize, Deserialize)]
+struct Arm9BuildConfig {
+    #[serde(flatten)]
+    offsets: Arm9Offsets,
+    encrypted: bool,
+    compressed: bool,
+    #[serde(flatten)]
+    build_info: BuildInfo,
+}
+
 impl<'a> Rom<'a> {
+    pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<(), RomSaveError> {
+        let path = path.as_ref();
+        create_dir_all(path)?;
+
+        // --------------------- Save header ---------------------
+        serde_yml::to_writer(File::create(path.join("header.yaml"))?, &self.header)?;
+        self.header_logo.save_png(path.join("header_logo.png"))?;
+
+        // --------------------- Save ARM9 program ---------------------
+        let arm9_build_config = Arm9BuildConfig {
+            offsets: *self.arm9.offsets(),
+            encrypted: self.arm9.is_encrypted(),
+            compressed: self.arm9.is_compressed()?,
+            build_info: self.arm9.build_info()?.clone().into(),
+        };
+        serde_yml::to_writer(File::create(path.join("arm9.yaml"))?, &arm9_build_config)?;
+        let mut plain_arm9 = self.arm9.clone();
+        if plain_arm9.is_encrypted() {
+            let Some(key) = key else {
+                return BlowfishKeyNeededSnafu {}.fail();
+            };
+            plain_arm9.decrypt(key, u32::from_le_bytes(self.header.gamecode.0))?;
+        }
+        plain_arm9.decompress()?;
+        File::create(path.join("arm9.bin"))?.write(plain_arm9.code()?)?;
+
+        // --------------------- Save ITCM, DTCM ---------------------
+        for autoload in plain_arm9.autoloads()?.iter() {
+            let name = match autoload.kind() {
+                raw::AutoloadKind::Itcm => "itcm",
+                raw::AutoloadKind::Dtcm => "dtcm",
+                raw::AutoloadKind::Unknown => panic!("unknown autoload block"),
+            };
+            File::create(path.join(format!("{name}.bin")))?.write(autoload.code())?;
+            serde_yml::to_writer(File::create(path.join(format!("{name}.yaml")))?, autoload.info())?;
+        }
+
+        // --------------------- Save ARM9 overlays ---------------------
+        if !self.arm9_overlays.is_empty() {
+            let path = &path.join("arm9_overlays");
+            create_dir_all(path)?;
+
+            for overlay in &self.arm9_overlays {
+                let name = format!("ov{:02}", overlay.id());
+
+                let mut plain_overlay = overlay.clone();
+                plain_overlay.decompress();
+
+                File::create(path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
+                serde_yml::to_writer(File::create(path.join(format!("{name}.yaml")))?, plain_overlay.info())?;
+            }
+        }
+
+        // --------------------- Save ARM7 program ---------------------
+        File::create(path.join("arm7.bin"))?.write(self.arm7.full_data())?;
+
+        // --------------------- Save ARM7 overlays ---------------------
+        if !self.arm7_overlays.is_empty() {
+            let path = &path.join("arm7_overlays");
+            create_dir_all(path)?;
+
+            for overlay in &self.arm7_overlays {
+                let name = format!("ov{:02}", overlay.id());
+
+                let mut plain_overlay = overlay.clone();
+                plain_overlay.decompress();
+
+                File::create(path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
+                serde_yml::to_writer(File::create(path.join(format!("{name}.yaml")))?, overlay.info())?;
+            }
+        }
+
+        // --------------------- Save banner ---------------------
+        {
+            let path = &path.join("banner");
+            create_dir_all(path)?;
+
+            serde_yml::to_writer(File::create(path.join("banner.yaml"))?, &self.banner)?;
+            self.banner.images.save_bitmap_file(path)?;
+        }
+
+        // --------------------- Save files ---------------------
+        {
+            let files_path = path.join("files");
+            self.files.traverse_files(["/"], |file, path| {
+                // TODO: Rewrite traverse_files as an iterator so these errors can be returned
+                let path = files_path.join(path);
+                create_dir_all(&path).expect("failed to create file directory");
+                File::create(&path.join(file.name()))
+                    .expect("failed to create file")
+                    .write(file.contents())
+                    .expect("failed to write file");
+            });
+        }
+        let mut path_order_file = File::create(path.join("path_order.txt"))?;
+        for path in &self.path_order {
+            path_order_file.write(path.as_bytes())?;
+            path_order_file.write("\n".as_bytes())?;
+        }
+
+        Ok(())
+    }
+
     pub fn extract(rom: &'a raw::Rom) -> Result<Self, RomExtractError> {
         let header = rom.header()?;
         let fnt = rom.fnt()?;
@@ -168,7 +305,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Write files ---------------------
         self.files.sort_for_rom();
-        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file| {
+        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| {
             // TODO: Rewrite traverse_files as an iterator so these errors can be returned
             let contents = file.contents();
 
@@ -236,7 +373,7 @@ pub struct BuildContext<'a> {
     pub arm9_ovt_offset: Option<TableOffset>,
     pub arm7_ovt_offset: Option<TableOffset>,
     pub banner_offset: Option<TableOffset>,
-    pub blowfish_key: Option<&'a [u8]>,
+    pub blowfish_key: Option<&'a BlowfishKey>,
     pub arm9_autoload_callback: Option<u32>,
     pub arm7_autoload_callback: Option<u32>,
     pub arm9_build_info_offset: Option<u32>,

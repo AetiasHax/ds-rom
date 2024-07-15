@@ -1,5 +1,6 @@
 use std::mem::{offset_of, size_of};
 
+use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
@@ -12,19 +13,20 @@ use super::{
     BuildContext, LogoError, Rom,
 };
 
+#[derive(Serialize, Deserialize)]
 pub struct Header {
-    title: String,
-    gamecode: AsciiArray<4>,
-    makercode: AsciiArray<2>,
-    unitcode: u8,
-    seed_select: u8,
-    ds_flags: DsFlags,
-    autostart: u8,
-    normal_cmd_setting: u32,
-    key1_cmd_setting: u32,
-    secure_area_delay: Delay,
-    rom_nand_end: u16,
-    rw_nand_end: u16,
+    pub title: String,
+    pub gamecode: AsciiArray<4>,
+    pub makercode: AsciiArray<2>,
+    pub unitcode: u8,
+    pub seed_select: u8,
+    pub ds_flags: DsFlags,
+    pub autostart: u8,
+    pub normal_cmd_setting: u32,
+    pub key1_cmd_setting: u32,
+    pub secure_area_delay: Delay,
+    pub rom_nand_end: u16,
+    pub rw_nand_end: u16,
 }
 
 #[derive(Snafu, Debug)]

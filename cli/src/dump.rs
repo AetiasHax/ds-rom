@@ -1,14 +1,9 @@
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    mem::size_of,
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use clap::Args;
 use nds_io::{
-    crypto::blowfish::Blowfish,
+    crypto::blowfish::BlowfishKey,
     rom::{self, raw, Logo, Overlay},
 };
 
@@ -31,6 +26,10 @@ pub struct Dump {
     /// Prints the contents of the ARM9 program. If an ARM7 BIOS is provided, the contents will be decrypted.
     #[arg(short = 'n', long)]
     print_arm9: bool,
+
+    /// Shows the contents of the ARM9 build info.
+    #[arg(short = 'i', long)]
+    show_build_info: bool,
 
     /// Prints the contents of the ARM7 program.
     #[arg(short = 's', long)]
@@ -91,33 +90,21 @@ pub struct Dump {
 
 impl Dump {
     pub fn run(&self) -> Result<()> {
-        let key = if let Some(ref arm7_bios) = self.arm7_bios {
-            let mut file = File::open(arm7_bios)?;
-            let size = file.metadata()?.len() as usize;
-            if size < 0x30 + size_of::<Blowfish>() {
-                bail!("No key found in ARM7 BIOS, file should be at least {} bytes long", size_of::<Blowfish>());
-            }
-            let mut key = [0u8; size_of::<Blowfish>()];
-            file.seek(SeekFrom::Start(0x30))?;
-            file.read_exact(&mut key)?;
-            Some(key)
-        } else {
-            None
-        };
+        let key = if let Some(arm7_bios) = &self.arm7_bios { Some(BlowfishKey::from_arm7_bios(arm7_bios)?) } else { None };
 
-        let header_logo = if let Some(ref header_logo) = self.header_logo { Some(Logo::from_png(header_logo)?) } else { None };
+        let header_logo = if let Some(header_logo) = &self.header_logo { Some(Logo::from_png(header_logo)?) } else { None };
 
         let rom = raw::Rom::from_file(self.rom.clone())?;
         let mut header = rom.header()?.clone();
         let arm9 = {
             let mut arm9 = rom.arm9()?;
             if arm9.is_encrypted() && key.is_some() {
-                let Some(key) = key else { unreachable!() };
+                let Some(key) = &key else { unreachable!() };
                 let gamecode = u32::from_le_bytes(header.gamecode.0);
                 arm9.decrypt(&key, gamecode)?;
             }
             if self.encrypt && !arm9.is_encrypted() && key.is_some() {
-                let Some(key) = key else { unreachable!() };
+                let Some(key) = &key else { unreachable!() };
                 let gamecode = u32::from_le_bytes(header.gamecode.0);
                 arm9.encrypt(&key, gamecode)?;
             }
@@ -145,6 +132,11 @@ impl Dump {
 
         if self.print_arm9 {
             print_hex(arm9.as_ref(), self.raw, arm9.base_address())?;
+        }
+
+        if self.show_build_info {
+            let build_info = arm9.build_info()?;
+            println!("ARM9 build info:\n{}", build_info.display(2));
         }
 
         if self.print_autoload_info {

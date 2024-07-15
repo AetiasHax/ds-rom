@@ -4,12 +4,13 @@ use std::{
 };
 
 use bytemuck::{Pod, PodCastError, Zeroable};
+use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::RawBuildInfoError;
 
 #[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Clone, Copy, Zeroable, Pod, Deserialize, Serialize)]
 pub struct AutoloadInfo {
     pub base_address: u32,
     pub code_size: u32,
@@ -27,7 +28,7 @@ pub enum AutoloadKind {
 pub enum RawAutoloadInfoError {
     #[snafu(transparent)]
     RawBuildInfo { source: RawBuildInfoError },
-    #[snafu(display("autoload infos must be a multiple of {} bytes", size_of::<AutoloadInfo>()))]
+    #[snafu(display("autoload infos must be a multiple of {} bytes:\n{backtrace}", size_of::<AutoloadInfo>()))]
     InvalidSize { backtrace: Backtrace },
     #[snafu(display("expected {expected}-alignment for autoload infos but got {actual}-alignment:\n{backtrace}"))]
     Misaligned { expected: usize, actual: usize, backtrace: Backtrace },

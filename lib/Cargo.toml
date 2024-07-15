@@ -15,4 +15,6 @@ bytemuck = { version = "1.16.1", features = ["derive"] }
 crc = "3.2.1"
 image = { version = "0.25.1", default-features = false, features = ["png"] }
 rust-bitwriter = "0.0.1"
+serde = { version = "1.0.204", features = ["derive"] }
+serde_yml = "0.0.10"
 snafu = { version = "0.8.3", features = ["backtrace"] }

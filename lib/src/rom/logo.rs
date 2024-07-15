@@ -1,11 +1,9 @@
 use std::{fmt::Display, io, path::Path};
 
-use image::{io::Reader, GenericImageView, ImageError};
+use image::{io::Reader, GenericImageView, GrayImage, ImageError, Luma};
 use snafu::{Backtrace, Snafu};
 
 use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode};
-
-use super::raw;
 
 /// Huffman codes for every combination of 4 pixels
 const HUFFMAN: NibbleHuffman = NibbleHuffman {
@@ -68,6 +66,12 @@ pub enum LogoLoadError {
     ImageSize { expected: ImageSize, actual: ImageSize, backtrace: Backtrace },
 }
 
+#[derive(Snafu, Debug)]
+pub enum LogoSaveError {
+    #[snafu(transparent)]
+    Image { source: ImageError },
+}
+
 #[derive(Debug)]
 pub struct ImageSize {
     pub width: u32,
@@ -89,6 +93,18 @@ fn reverse32(data: &mut [u8]) {
 }
 
 impl Logo {
+    pub fn save_png<P: AsRef<Path>>(&self, path: P) -> Result<(), LogoSaveError> {
+        let mut image = GrayImage::new(WIDTH as u32, HEIGHT as u32);
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let luma = if self.get_pixel(x, y) { 0x00 } else { 0xff };
+                image.put_pixel(x as u32, y as u32, Luma([luma]));
+            }
+        }
+        image.save(path)?;
+        Ok(())
+    }
+
     pub fn from_png<P: AsRef<Path>>(path: P) -> Result<Self, LogoLoadError> {
         let image = Reader::open(path)?.decode()?;
         if image.width() != WIDTH as u32 || image.height() != HEIGHT as u32 {

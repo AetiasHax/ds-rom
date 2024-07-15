@@ -2,6 +2,7 @@ use std::{borrow::Cow, fmt::Display, mem::align_of, ops::Range};
 
 use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
+use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use crate::str::Unicode16Array;
@@ -219,7 +220,7 @@ impl<'a> Display for DisplayBanner<'a> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub enum BannerVersion {
     Original = 1,
     China = 2,
@@ -330,7 +331,7 @@ impl Display for Language {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Clone, Copy, Zeroable, Pod, Default)]
 pub struct BannerPalette(pub [u16; 16]);
 
 impl BannerPalette {
@@ -396,6 +397,12 @@ impl BannerBitmap {
         if index < self.0.len() {
             self.0[index] = (self.0[index] & !(0xf << offset)) | (value << offset);
         }
+    }
+}
+
+impl Default for BannerBitmap {
+    fn default() -> Self {
+        Self([0; 0x200])
     }
 }
 

@@ -8,7 +8,7 @@ use std::{
 
 use snafu::{Backtrace, ResultExt, Snafu};
 
-use crate::rom::{Arm7, Arm9};
+use crate::rom::{Arm7, Arm9, Arm9Offsets};
 
 use super::{
     Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
@@ -55,7 +55,10 @@ impl<'a> Rom<'a> {
             header.arm9_build_info_offset as usize
         };
 
-        Ok(Arm9::new(Cow::Borrowed(data), header.arm9.base_addr, header.arm9.entry, build_info_offset))
+        Ok(Arm9::new(
+            Cow::Borrowed(data),
+            Arm9Offsets { base_address: header.arm9.base_addr, entry_function: header.arm9.entry, build_info_offset },
+        ))
     }
 
     pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {

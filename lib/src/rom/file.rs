@@ -4,6 +4,7 @@ use std::{
     collections::{BinaryHeap, HashSet},
     fmt::Display,
     io::Write,
+    path::{Path, PathBuf},
 };
 
 use snafu::{Backtrace, Snafu};
@@ -263,18 +264,19 @@ impl<'a> Files<'a> {
         }
     }
 
-    fn traverse_nonvisited_files<Cb>(&self, visited: &mut HashSet<u16>, callback: &mut Cb, subdir: &Dir)
+    fn traverse_nonvisited_files<Cb>(&self, visited: &mut HashSet<u16>, callback: &mut Cb, subdir: &Dir, path: &Path)
     where
-        Cb: FnMut(&File) -> (),
+        Cb: FnMut(&File, &Path) -> (),
     {
         if visited.contains(&subdir.id) {
             return;
         }
         for child in &subdir.children {
             if Self::is_dir(*child) {
-                self.traverse_nonvisited_files(visited, callback, self.dir(*child));
+                let path = path.join(self.name(*child));
+                self.traverse_nonvisited_files(visited, callback, self.dir(*child), &path);
             } else {
-                callback(self.file(*child));
+                callback(self.file(*child), path);
             }
         }
         visited.insert(subdir.id);
@@ -283,14 +285,18 @@ impl<'a> Files<'a> {
     pub fn traverse_files<I, Cb>(&self, path_order: I, mut callback: Cb)
     where
         I: IntoIterator<Item = &'a str>,
-        Cb: FnMut(&File) -> (),
+        Cb: FnMut(&File, &Path) -> (),
     {
         let mut visited = HashSet::<u16>::new();
 
         for path in path_order {
-            let Some(subdir) = self.find_subdirectory(path, ROOT_DIR_ID) else { continue };
-            visited.insert(subdir.id);
-            self.traverse_nonvisited_files(&mut visited, &mut callback, subdir);
+            let subdir = if path.trim() == "/" {
+                self.dir(ROOT_DIR_ID)
+            } else {
+                let Some(subdir) = self.find_subdirectory(path, ROOT_DIR_ID) else { continue };
+                subdir
+            };
+            self.traverse_nonvisited_files(&mut visited, &mut callback, subdir, &PathBuf::new());
         }
     }
 
@@ -389,6 +395,10 @@ impl<'a> Files<'a> {
 }
 
 impl<'a> File<'a> {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn id(&self) -> u16 {
         self.id
     }
