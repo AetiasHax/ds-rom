@@ -316,19 +316,23 @@ impl<'a> Files<'a> {
         self.sort_for_rom_in(ROOT_DIR_ID);
     }
 
-    fn find_subdirectory_in(&self, path: &str, parent_id: u16) -> Option<&Dir> {
+    fn find_path_in(&self, path: &str, parent_id: u16) -> Option<u16> {
         let parent = &self.dir(parent_id);
         let (child_name, next) = path.split_once('/').map(|(c, n)| (c, Some(n))).unwrap_or((path, None));
         let child = parent.children.iter().find(|id| self.name(**id) == child_name)?;
         if let Some(next) = next {
-            self.find_subdirectory_in(next, *child)
+            if Self::is_dir(*child) {
+                self.find_path_in(next, *child)
+            } else {
+                None
+            }
         } else {
-            Some(self.dir(*child))
+            Some(*child)
         }
     }
 
-    pub fn find_subdirectory(&self, path: &str) -> Option<&Dir> {
-        self.find_subdirectory_in(path, ROOT_DIR_ID)
+    pub fn find_path(&self, path: &str) -> Option<u16> {
+        self.find_path_in(path, ROOT_DIR_ID)
     }
 
     fn make_child_dir(&mut self, name: String, parent_id: u16) -> &Dir {
@@ -376,13 +380,20 @@ impl<'a> Files<'a> {
 
         for path in path_order {
             let path = path.strip_prefix("/").unwrap_or(path);
+            let path_buf = &PathBuf::from_str(path).unwrap();
             let subdir = if path.trim() == "" {
                 self.dir(ROOT_DIR_ID)
             } else {
-                let Some(subdir) = self.find_subdirectory(path) else { continue };
-                subdir
+                let Some(child) = self.find_path(path) else { continue };
+                if Self::is_dir(child) {
+                    self.dir(child)
+                } else {
+                    let file = self.file(child);
+                    callback(file, path_buf);
+                    continue;
+                }
             };
-            self.traverse_nonvisited_files(&mut visited, &mut callback, subdir, &PathBuf::from_str(path).unwrap());
+            self.traverse_nonvisited_files(&mut visited, &mut callback, subdir, path_buf);
         }
     }
 
