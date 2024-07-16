@@ -138,7 +138,7 @@ impl<'a> Rom<'a> {
             let Some(key) = key else {
                 return BlowfishKeyNeededSnafu {}.fail();
             };
-            arm9.encrypt(key, header.gamecode.to_le_u32())?;
+            arm9.encrypt(key, header.original.gamecode.to_le_u32())?;
         }
 
         // --------------------- Load ARM9 overlays ---------------------
@@ -209,7 +209,7 @@ impl<'a> Rom<'a> {
             let Some(key) = key else {
                 return BlowfishKeyNeededSnafu {}.fail();
             };
-            plain_arm9.decrypt(key, self.header.gamecode.to_le_u32())?;
+            plain_arm9.decrypt(key, self.header.original.gamecode.to_le_u32())?;
         }
         plain_arm9.decompress()?;
         File::create(path.join("arm9.bin"))?.write(plain_arm9.code()?)?;
@@ -232,7 +232,7 @@ impl<'a> Rom<'a> {
 
             let mut configs = vec![];
             for overlay in &self.arm9_overlays {
-                let name = format!("ov{:02}", overlay.id());
+                let name = format!("ov{:03}", overlay.id());
 
                 let mut plain_overlay = overlay.clone();
                 configs.push(OverlayConfig { info: plain_overlay.info().clone(), file_name: format!("{name}.bin") });
@@ -253,7 +253,7 @@ impl<'a> Rom<'a> {
             create_dir_all(path)?;
 
             for overlay in &self.arm7_overlays {
-                let name = format!("ov{:02}", overlay.id());
+                let name = format!("ov{:03}", overlay.id());
 
                 let mut plain_overlay = overlay.clone();
                 plain_overlay.decompress();

@@ -59,7 +59,7 @@ pub struct Header {
     pub debug_ram_addr: u32,
     pub reserved3: [u8; 4],
     pub reserved4: [u8; 0x10],
-    // The below fields are only used on DSi titles
+    // The below fields only exists on games released after the DSi
     /// MBK1 to MBK5
     pub memory_banks_wram: [u32; 5],
     /// MBK6 to MBK8
@@ -106,8 +106,8 @@ pub struct Header {
     pub sha1_hmac_banner: [u8; 0x14],
     pub sha1_hmac_arm9i: [u8; 0x14],
     pub sha1_hmac_arm7i: [u8; 0x14],
-    pub sha1_hmac_reserved1: [u8; 0x14],
-    pub sha1_hmac_reserved2: [u8; 0x14],
+    pub sha1_hmac_unk1: [u8; 0x14],
+    pub sha1_hmac_unk2: [u8; 0x14],
     pub sha1_hmac_arm9: [u8; 0x14],
     pub reserved6: [u8; 0xa4c],
     pub debug_args: [u8; 0x180],
@@ -127,6 +127,14 @@ pub enum RawHeaderError {
 }
 
 impl Header {
+    pub fn version(&self) -> HeaderVersion {
+        if self.dsi_flags_2.0 != 0 {
+            HeaderVersion::DsPostDsi
+        } else {
+            HeaderVersion::Original
+        }
+    }
+
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ Self, RawHeaderError> {
         let size = size_of::<Self>();
         if data.len() < size {
@@ -177,6 +185,7 @@ impl<'a> Display for DisplayHeader<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let header = &self.header;
+        writeln!(f, "{i}Header version .......... : {}", header.version())?;
         writeln!(f, "{i}Title ................... : {}", header.title)?;
         writeln!(f, "{i}Gamecode ................ : {}", header.gamecode)?;
         writeln!(f, "{i}Makercode ............... : {}", header.makercode)?;
@@ -218,6 +227,21 @@ impl<'a> Display for DisplayHeader<'a> {
         writeln!(f, "{i}Debug RAM address ....... : {:#x}", header.debug_ram_addr)?;
         writeln!(f, "{i}Header size ............. : {:#x}", header.header_size)?;
         Ok(())
+    }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Clone, Copy)]
+pub enum HeaderVersion {
+    Original,
+    DsPostDsi,
+}
+
+impl Display for HeaderVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HeaderVersion::Original => write!(f, "Original"),
+            HeaderVersion::DsPostDsi => write!(f, "DS after DSi release"),
+        }
     }
 }
 
@@ -429,6 +453,7 @@ pub struct AccessControl {
 }
 
 #[bitfield(u32)]
+#[derive(Serialize, Deserialize)]
 pub struct DsiFlags2 {
     /// Touchscreen/Sound Controller (TSC) in DSi (true) or DS (false) mode
     tsc_dsi_mode: bool,
