@@ -101,25 +101,25 @@ impl<'a> Arm9<'a> {
             return Ok(());
         }
 
-        if self.data.len() < 0x800 {
-            DataTooSmallSnafu { expected: 0x800usize, actual: self.data.len(), section: "secure area" }.fail()?;
+        if self.data.len() < 0x4000 {
+            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len(), section: "secure area" }.fail()?;
         }
 
-        let mut secure_area = [0u8; 0x800];
-        secure_area.clone_from_slice(&self.data[0..0x800]);
+        let mut secure_area = [0u8; 0x4000];
+        secure_area.clone_from_slice(&self.data[0..0x4000]);
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2)?;
         blowfish.decrypt(&mut secure_area[0..8])?;
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3)?;
-        blowfish.decrypt(&mut secure_area)?;
+        blowfish.decrypt(&mut secure_area[0..0x800])?;
 
         if &secure_area[0..8] != SECURE_AREA_ENCRY_OBJ {
             NotEncryObjSnafu {}.fail()?;
         }
 
         secure_area[0..8].copy_from_slice(&SECURE_AREA_ID);
-        self.data.to_mut()[0..0x800].copy_from_slice(&secure_area);
+        self.data.to_mut()[0..0x4000].copy_from_slice(&secure_area);
         Ok(())
     }
 
@@ -128,8 +128,8 @@ impl<'a> Arm9<'a> {
             return Ok(());
         }
 
-        if self.data.len() < 0x800 {
-            DataTooSmallSnafu { expected: 0x800usize, actual: self.data.len(), section: "secure area" }.fail()?;
+        if self.data.len() < 0x4000 {
+            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len(), section: "secure area" }.fail()?;
         }
 
         if self.data[0..8] != SECURE_AREA_ID {
@@ -137,13 +137,13 @@ impl<'a> Arm9<'a> {
         }
 
         let secure_area = self.encrypted_secure_area(key, gamecode)?;
-        self.data.to_mut()[0..0x800].copy_from_slice(&secure_area);
+        self.data.to_mut()[0..0x4000].copy_from_slice(&secure_area);
         Ok(())
     }
 
-    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> Result<[u8; 0x800], RawArm9Error> {
-        let mut secure_area = [0u8; 0x800];
-        secure_area.copy_from_slice(&self.data[0..0x800]);
+    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> Result<[u8; 0x4000], RawArm9Error> {
+        let mut secure_area = [0u8; 0x4000];
+        secure_area.copy_from_slice(&self.data[0..0x4000]);
         if self.is_encrypted() {
             return Ok(secure_area);
         }
@@ -151,7 +151,7 @@ impl<'a> Arm9<'a> {
         secure_area[0..8].copy_from_slice(SECURE_AREA_ENCRY_OBJ);
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3)?;
-        blowfish.encrypt(&mut secure_area)?;
+        blowfish.encrypt(&mut secure_area[0..0x800])?;
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2)?;
         blowfish.encrypt(&mut secure_area[0..8])?;
@@ -161,7 +161,6 @@ impl<'a> Arm9<'a> {
 
     pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> Result<u16, RawArm9Error> {
         let secure_area = self.encrypted_secure_area(key, gamecode)?;
-        print_hex(&secure_area);
         let checksum = CRC_16_MODBUS.checksum(&secure_area);
         Ok(checksum)
     }
