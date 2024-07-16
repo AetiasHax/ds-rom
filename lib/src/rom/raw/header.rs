@@ -136,7 +136,7 @@ impl Header {
             match bytemuck::try_from_bytes(&data[..size]) {
                 Ok(header) => Ok(header),
                 Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                    MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()
+                    MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
                 }
                 Err(PodCastError::AlignmentMismatch) => panic!(),
                 Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
@@ -154,7 +154,7 @@ impl Header {
             match bytemuck::try_from_bytes_mut(&mut data[..size]) {
                 Ok(header) => Ok(header),
                 Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                    MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()
+                    MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
                 }
                 Err(PodCastError::AlignmentMismatch) => panic!(),
                 Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),

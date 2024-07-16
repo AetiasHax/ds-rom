@@ -118,18 +118,28 @@ impl Lz77 {
         }
 
         let mut num_identical = 0;
-        for i in 0..block_infos.len() - 1 {
-            let block = block_infos[i];
-            if block.total_bytes_saved != bytes_saved {
+        let mut i = 0;
+        while i < block_infos.len() - 1 {
+            if block_infos[i].total_bytes_saved != bytes_saved {
+                i += 1;
                 continue;
             }
+
             // Save more bytes by ignoring blocks that have no length-distance pairs in them
-            let mut flag_bytes_saved = block_infos[..=i].iter().rev().take_while(|b| b.flags != 0).count();
-            num_identical = block.pos - compressed.len();
+            let mut flag_bytes_saved = 0;
+            loop {
+                if block_infos[i].flags != 0 {
+                    break;
+                }
+                i -= 1;
+                flag_bytes_saved += 1;
+            }
+
+            num_identical = (compressed.len() - 1) - block_infos[i].pos;
             compressed.pop();
 
             // See if it's possible to remove some tokens based on the number of flag bytes saved
-            flags = block.flags;
+            flags = block_infos[i].flags;
             for _ in 0..8 {
                 if flag_bytes_saved <= 0 {
                     break;
@@ -147,9 +157,11 @@ impl Lz77 {
                 flags >>= 1;
             }
 
-            compressed.write(&bytes[..num_identical])?;
-            let write = compressed.len();
-            while compressed[write + num_identical] == bytes[read + num_identical] {
+            let write = compressed.len() - 1;
+            for i in 0..num_identical {
+                compressed[write - i] = bytes[i];
+            }
+            while compressed[write - num_identical] == bytes[read + num_identical] {
                 num_identical += 1;
             }
             break;

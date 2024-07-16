@@ -1,9 +1,11 @@
+mod build;
 mod dump;
 mod extract;
 
 use std::io::Write;
 
 use anyhow::Result;
+use build::Build;
 use clap::{Parser, Subcommand};
 use dump::Dump;
 use extract::Extract;
@@ -19,6 +21,7 @@ struct Args {
 enum Command {
     Dump(Dump),
     Extract(Extract),
+    Build(Build),
 }
 
 impl Command {
@@ -26,6 +29,7 @@ impl Command {
         match self {
             Command::Dump(dump) => dump.run(),
             Command::Extract(extract) => extract.run(),
+            Command::Build(build) => build.run(),
         }
     }
 }

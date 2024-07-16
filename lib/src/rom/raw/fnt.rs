@@ -53,7 +53,7 @@ impl<'a> Fnt<'a> {
         match result {
             Ok(x) => Ok(x),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<T>(), actual: 1usize << addr.leading_zeros(), section }.fail()
+                MisalignedSnafu { expected: align_of::<T>(), actual: 1usize << addr.trailing_zeros(), section }.fail()
             }
             Err(PodCastError::AlignmentMismatch) => panic!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
@@ -83,7 +83,7 @@ impl<'a> Fnt<'a> {
 
     pub fn build(mut self) -> Result<Box<[u8]>, io::Error> {
         let mut bytes = vec![];
-        let mut subtable_offset = 0;
+        let mut subtable_offset = (self.subtables.len() * size_of::<FntDirectory>()) as u32;
 
         let num_directories = self.subtables.len() as u16;
 

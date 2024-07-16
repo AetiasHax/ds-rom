@@ -152,10 +152,11 @@ impl BannerImages {
         Self { bitmap, palette, animation_bitmap_paths: None, animation_palette_paths: None }
     }
 
-    pub fn from_bitmap_file<P: AsRef<Path> + Into<PathBuf>>(
+    pub fn load_bitmap_file<P: AsRef<Path> + Into<PathBuf>>(
+        &mut self,
         bitmap_path: P,
         palette_path: P,
-    ) -> Result<Self, BannerImageError> {
+    ) -> Result<(), BannerImageError> {
         let bitmap_image = Reader::open(&bitmap_path)?.decode()?;
         if bitmap_image.width() != 32 || bitmap_image.height() != 32 {
             return WrongSizeSnafu {
@@ -189,7 +190,9 @@ impl BannerImages {
             palette.set_color(i as usize, r, g, b);
         }
 
-        Ok(Self { bitmap, palette, animation_bitmap_paths: None, animation_palette_paths: None })
+        self.bitmap = bitmap;
+        self.palette = palette;
+        Ok(())
     }
 
     pub fn save_bitmap_file(&self, path: &Path) -> Result<(), BannerImageError> {
@@ -229,8 +232,8 @@ pub struct BannerTitle {
 }
 
 macro_rules! copy_title {
-    ($banner:ident, $title:expr) => {
-        if let Some(title) = $banner.title_mut(Language::Japanese) {
+    ($banner:ident, $language:expr, $title:expr) => {
+        if let Some(title) = $banner.title_mut($language) {
             let title = title?;
             *title = Unicode16Array::from_str($title);
         }
@@ -239,17 +242,17 @@ macro_rules! copy_title {
 
 impl BannerTitle {
     fn copy_to_banner(&self, banner: &mut raw::Banner) -> Result<(), BannerError> {
-        copy_title!(banner, &self.japanese);
-        copy_title!(banner, &self.english);
-        copy_title!(banner, &self.french);
-        copy_title!(banner, &self.german);
-        copy_title!(banner, &self.italian);
-        copy_title!(banner, &self.spanish);
+        copy_title!(banner, Language::Japanese, &self.japanese);
+        copy_title!(banner, Language::English, &self.english);
+        copy_title!(banner, Language::French, &self.french);
+        copy_title!(banner, Language::German, &self.german);
+        copy_title!(banner, Language::Italian, &self.italian);
+        copy_title!(banner, Language::Spanish, &self.spanish);
         if let Some(chinese) = &self.chinese {
-            copy_title!(banner, chinese);
+            copy_title!(banner, Language::Chinese, chinese);
         }
         if let Some(korean) = &self.korean {
-            copy_title!(banner, korean);
+            copy_title!(banner, Language::Korean, korean);
         }
         Ok(())
     }

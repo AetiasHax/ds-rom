@@ -6,6 +6,7 @@ use snafu::{Backtrace, Snafu};
 use crate::{
     compress::lz77::Lz77,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
+    str::print_hex,
     CRC_16_MODBUS,
 };
 
@@ -24,7 +25,8 @@ pub struct Arm9<'a> {
 pub struct Arm9Offsets {
     pub base_address: u32,
     pub entry_function: u32,
-    pub build_info_offset: usize,
+    pub build_info: u32,
+    pub autoload_callback: u32,
 }
 
 const SECURE_AREA_ID: [u8; 8] = [0xff, 0xde, 0xff, 0xe7, 0xff, 0xde, 0xff, 0xe7];
@@ -61,8 +63,33 @@ pub enum Arm9AutoloadError {
 }
 
 impl<'a> Arm9<'a> {
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, config: Arm9Offsets) -> Self {
-        Arm9 { data: data.into(), offsets: config }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, offsets: Arm9Offsets) -> Self {
+        Arm9 { data: data.into(), offsets }
+    }
+
+    pub fn with_two_tcms(
+        mut data: Vec<u8>,
+        itcm: Autoload,
+        dtcm: Autoload,
+        offsets: Arm9Offsets,
+    ) -> Result<Self, RawBuildInfoError> {
+        let autoload_infos = [itcm.info().clone(), dtcm.info().clone()];
+
+        let autoload_blocks = data.len() as u32 + offsets.base_address;
+        data.extend(itcm.into_data().into_iter());
+        data.extend(dtcm.into_data().into_iter());
+        let autoload_infos_start = data.len() as u32 + offsets.base_address;
+        data.extend(bytemuck::bytes_of(&autoload_infos));
+        let autoload_infos_end = data.len() as u32 + offsets.base_address;
+
+        let mut arm9 = Self { data: data.into(), offsets };
+
+        let build_info = arm9.build_info_mut()?;
+        build_info.autoload_blocks = autoload_blocks;
+        build_info.autoload_infos_start = autoload_infos_start;
+        build_info.autoload_infos_end = autoload_infos_end;
+
+        Ok(arm9)
     }
 
     pub fn is_encrypted(&self) -> bool {
@@ -116,7 +143,7 @@ impl<'a> Arm9<'a> {
 
     pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> Result<[u8; 0x800], RawArm9Error> {
         let mut secure_area = [0u8; 0x800];
-        secure_area.clone_from_slice(&self.data[0..0x800]);
+        secure_area.copy_from_slice(&self.data[0..0x800]);
         if self.is_encrypted() {
             return Ok(secure_area);
         }
@@ -134,16 +161,17 @@ impl<'a> Arm9<'a> {
 
     pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> Result<u16, RawArm9Error> {
         let secure_area = self.encrypted_secure_area(key, gamecode)?;
+        print_hex(&secure_area);
         let checksum = CRC_16_MODBUS.checksum(&secure_area);
         Ok(checksum)
     }
 
     pub fn build_info(&self) -> Result<&BuildInfo, RawBuildInfoError> {
-        BuildInfo::borrow_from_slice(&self.data[self.offsets.build_info_offset as usize..])
+        BuildInfo::borrow_from_slice(&self.data[self.offsets.build_info as usize..])
     }
 
-    fn build_info_mut(&mut self) -> Result<&mut BuildInfo, RawBuildInfoError> {
-        BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info_offset as usize..])
+    pub fn build_info_mut(&mut self) -> Result<&mut BuildInfo, RawBuildInfoError> {
+        BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info as usize..])
     }
 
     pub fn is_compressed(&self) -> Result<bool, RawBuildInfoError> {
@@ -238,6 +266,14 @@ impl<'a> Arm9<'a> {
 
     pub fn entry_function(&self) -> u32 {
         self.offsets.entry_function
+    }
+
+    pub fn build_info_offset(&self) -> u32 {
+        self.offsets.build_info
+    }
+
+    pub fn autoload_callback(&self) -> u32 {
+        self.offsets.autoload_callback
     }
 
     pub fn bss(&self) -> Result<Range<u32>, RawBuildInfoError> {

@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    fs::File,
+    fs::{self, File},
     io::{self, Read},
     mem::size_of,
     path::Path,
@@ -8,10 +8,11 @@ use std::{
 
 use snafu::{Backtrace, ResultExt, Snafu};
 
-use crate::rom::{Arm7, Arm9, Arm9Offsets};
+use crate::rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets};
 
 use super::{
-    Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
+    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError,
+    RawHeaderError, RawOverlayError,
 };
 
 #[derive(Debug, Snafu)]
@@ -48,17 +49,40 @@ impl<'a> Rom<'a> {
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
 
-        let build_info_offset = if header.arm9_build_info_offset > header.arm9.offset {
-            (header.arm9_build_info_offset - header.arm9.offset) as usize
+        let build_info_offset = if header.arm9_build_info_offset == 0 {
+            0
+        } else if header.arm9_build_info_offset > header.arm9.offset {
+            header.arm9_build_info_offset - header.arm9.offset
         } else {
-            // `arm9_build_info_offset` is not an absolute offset in DSi titles
-            header.arm9_build_info_offset as usize
+            // `arm9_build_info_offset` is not an absolute ROM offset in DSi titles
+            header.arm9_build_info_offset
         };
 
         Ok(Arm9::new(
             Cow::Borrowed(data),
-            Arm9Offsets { base_address: header.arm9.base_addr, entry_function: header.arm9.entry, build_info_offset },
+            Arm9Offsets {
+                base_address: header.arm9.base_addr,
+                entry_function: header.arm9.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm9_autoload_callback,
+            },
         ))
+    }
+
+    pub fn arm9_footer(&self) -> Result<&Arm9Footer, Arm9FooterError> {
+        let header = self.header()?;
+        let start = (header.arm9.offset + header.arm9.size) as usize;
+        let end = start + size_of::<Arm9Footer>();
+        let data = &self.data[start..end];
+        Arm9Footer::borrow_from_slice(data)
+    }
+
+    pub fn arm9_footer_mut(&mut self) -> Result<&mut Arm9Footer, Arm9FooterError> {
+        let header = self.header()?;
+        let start = (header.arm9.offset + header.arm9.size) as usize;
+        let end = start + size_of::<Arm9Footer>();
+        let data = &mut self.data.to_mut()[start..end];
+        Arm9Footer::borrow_from_slice_mut(data)
     }
 
     pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
@@ -86,7 +110,18 @@ impl<'a> Rom<'a> {
         let end = start + header.arm7.size as usize;
         let data = &self.data[start..end];
 
-        Ok(Arm7::new(Cow::Borrowed(data), header.arm7.base_addr, header.arm7.entry))
+        let build_info_offset =
+            if header.arm7_build_info_offset == 0 { 0 } else { header.arm7_build_info_offset - header.arm7.offset };
+
+        Ok(Arm7::new(
+            Cow::Borrowed(data),
+            Arm7Offsets {
+                base_address: header.arm7.base_addr,
+                entry_function: header.arm7.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm7_autoload_callback,
+            },
+        ))
     }
 
     pub fn arm7_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
@@ -122,7 +157,6 @@ impl<'a> Rom<'a> {
         let end = start + header.file_allocs.size as usize;
         let data = &self.data[start..end];
         let allocs = FileAlloc::borrow_from_slice(data)?;
-        // let files = allocs.iter().map(|a| a.into_file(&self.data)).collect::<Vec<_>>().into_boxed_slice();
         Ok(allocs)
     }
 
@@ -135,5 +169,9 @@ impl<'a> Rom<'a> {
 
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), io::Error> {
+        fs::write(path, self.data())
     }
 }

@@ -6,9 +6,7 @@ use std::{
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
-use super::RawHeaderError;
-
-const NITROCODE: u32 = (0x2106c0de as u32).swap_bytes();
+use super::{RawHeaderError, NITROCODE};
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
@@ -50,7 +48,7 @@ impl BuildInfo {
         match result {
             Ok(build_info) => Ok(build_info),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()
+                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
             }
             Err(PodCastError::AlignmentMismatch) => panic!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
@@ -58,7 +56,7 @@ impl BuildInfo {
         }
     }
 
-    pub fn check_nitrocode(&self) -> Result<(), RawBuildInfoError> {
+    fn check_nitrocode(&self) -> Result<(), RawBuildInfoError> {
         if self.nitrocode != NITROCODE {
             NoNitrocodeSnafu { expected: NITROCODE, actual: self.nitrocode }.fail()
         } else if self.nitrocode_rev != NITROCODE.swap_bytes() {
@@ -73,14 +71,17 @@ impl BuildInfo {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
         let build_info: &Self = Self::handle_pod_cast(bytemuck::try_from_bytes(&data[..size]), addr)?;
-        build_info.check_nitrocode().map(|_| build_info)
+        build_info.check_nitrocode()?;
+        Ok(build_info)
     }
+
     pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut Self, RawBuildInfoError> {
         let size = size_of::<Self>();
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
         let build_info: &mut Self = Self::handle_pod_cast(bytemuck::try_from_bytes_mut(&mut data[..size]), addr)?;
-        build_info.check_nitrocode().map(|_| build_info)
+        build_info.check_nitrocode()?;
+        Ok(build_info)
     }
 
     pub fn is_compressed(&self) -> bool {

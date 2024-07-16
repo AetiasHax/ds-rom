@@ -10,7 +10,7 @@ use crate::{
 
 use super::{
     raw::{self, AccessControl, Capacity, Delay, DsFlags, DsiFlags, DsiFlags2, ProgramOffset, RegionFlags, TableOffset},
-    BuildContext, LogoError, Rom,
+    BuildContext, LogoError, RawArm9Error, Rom,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -39,6 +39,8 @@ pub enum HeaderLoadError {
 pub enum HeaderBuildError {
     #[snafu(transparent)]
     AsciiArray { source: AsciiArrayError },
+    #[snafu(transparent)]
+    RawArm9 { source: RawArm9Error },
 }
 
 impl Header {
@@ -63,6 +65,8 @@ impl Header {
         let logo = rom.header_logo().compress();
         let arm9 = rom.arm9();
         let arm7 = rom.arm7();
+        let arm9_offset = context.arm9_offset.expect("ARM9 offset must be known");
+        let arm7_offset = context.arm7_offset.expect("ARM7 offset must be known");
         let mut header = raw::Header {
             title: AsciiArray::from_str(&self.title)?,
             gamecode: self.gamecode,
@@ -76,13 +80,13 @@ impl Header {
             rom_version: 0,
             autostart: self.autostart,
             arm9: ProgramOffset {
-                offset: context.arm9_offset.expect("ARM9 offset must be known"),
+                offset: arm9_offset,
                 entry: arm9.entry_function(),
                 base_addr: arm9.base_address(),
                 size: arm9.full_data().len() as u32,
             },
             arm7: ProgramOffset {
-                offset: context.arm7_offset.expect("ARM7 offset must be known"),
+                offset: arm7_offset,
                 entry: arm7.entry_function(),
                 base_addr: arm7.base_address(),
                 size: arm7.full_data().len() as u32,
@@ -94,17 +98,19 @@ impl Header {
             normal_cmd_setting: self.normal_cmd_setting,
             key1_cmd_setting: self.key1_cmd_setting,
             banner_offset: context.banner_offset.map(|b| b.offset).expect("Banner offset must be known"),
-            secure_area_crc: context
-                .blowfish_key
-                .map_or(0, |key| arm9.secure_area_crc(key, u32::from_le_bytes(self.gamecode.0)).unwrap()),
+            secure_area_crc: if let Some(key) = context.blowfish_key {
+                arm9.secure_area_crc(key, self.gamecode.to_le_u32())?
+            } else {
+                0
+            },
             secure_area_delay: self.secure_area_delay,
             arm9_autoload_callback: context.arm9_autoload_callback.expect("ARM9 autoload callback must be known"),
             arm7_autoload_callback: context.arm7_autoload_callback.expect("ARM7 autoload callback must be known"),
             secure_area_disable: 0,
             rom_size_ds: context.rom_size.expect("ROM size must be known"),
             header_size: size_of::<raw::Header>() as u32,
-            arm9_build_info_offset: context.arm9_build_info_offset.unwrap_or(0),
-            arm7_build_info_offset: context.arm7_build_info_offset.unwrap_or(0),
+            arm9_build_info_offset: context.arm9_build_info_offset.map(|offset| offset + arm9_offset).unwrap_or(0),
+            arm7_build_info_offset: context.arm7_build_info_offset.map(|offset| offset + arm7_offset).unwrap_or(0),
             ds_rom_region_end: 0,
             dsi_rom_region_end: 0,
             rom_nand_end: self.rom_nand_end,

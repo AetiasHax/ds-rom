@@ -15,6 +15,10 @@ pub struct Overlay<'a> {
 const LZ77: Lz77 = Lz77 {};
 
 impl<'a> Overlay<'a> {
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, info: OverlayInfo) -> Self {
+        Self { info, data: data.into() }
+    }
+
     pub fn parse(overlay: &raw::Overlay, fat: &[FileAlloc], rom: &'a raw::Rom) -> Self {
         let alloc = fat[overlay.file_id as usize];
         let data = &rom.data()[alloc.range()];
@@ -102,14 +106,14 @@ impl<'a> Overlay<'a> {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct OverlayInfo {
-    id: u32,
-    base_address: u32,
-    code_size: u32,
-    bss_size: u32,
-    ctor_start: u32,
-    ctor_end: u32,
-    file_id: u32,
-    compressed: bool,
+    pub id: u32,
+    pub base_address: u32,
+    pub code_size: u32,
+    pub bss_size: u32,
+    pub ctor_start: u32,
+    pub ctor_end: u32,
+    pub file_id: u32,
+    pub compressed: bool,
 }
 
 impl OverlayInfo {
@@ -124,5 +128,9 @@ impl OverlayInfo {
             file_id: overlay.file_id,
             compressed: overlay.compressed.is_compressed() != 0,
         }
+    }
+
+    pub fn is_compressed(&self) -> bool {
+        self.compressed
     }
 }

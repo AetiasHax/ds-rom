@@ -1,11 +1,11 @@
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
-    mem::{align_of, size_of},
+    mem::size_of,
     path::Path,
 };
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use snafu::{Backtrace, Snafu};
 
 #[repr(C)]
@@ -19,10 +19,6 @@ pub struct Blowfish {
 pub enum BlowfishError {
     #[snafu(display("data must have an even number of blocks for Blowfish encryption/decryption:\n{backtrace}"))]
     OddBlockCount { backtrace: Backtrace },
-    #[snafu(display("expected {expected}-alignment for Blowfish key but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned { expected: usize, actual: usize, backtrace: Backtrace },
-    #[snafu(display("expected {expected:#x} bytes for Blowfish key but got {actual:#x}:\n{backtrace}"))]
-    KeySize { expected: usize, actual: usize, backtrace: Backtrace },
 }
 
 impl Blowfish {
@@ -113,16 +109,8 @@ impl Blowfish {
     }
 
     pub fn new(key: &BlowfishKey, seed: u32, level: BlowfishLevel) -> Result<Self, BlowfishError> {
-        let mut blowfish = match bytemuck::try_from_bytes::<Blowfish>(&key.0) {
-            Ok(blowfish) => *blowfish,
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                let addr = &key.0 as *const [u8] as *const () as usize;
-                return Err(MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.build());
-            }
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-        };
+        let mut blowfish = Self { subkeys: [0; 18], sbox: [[0; 0x100]; 4] };
+        bytemuck::bytes_of_mut(&mut blowfish).copy_from_slice(&key.0);
 
         let mut code0 = seed;
         let mut code1 = seed >> 1;

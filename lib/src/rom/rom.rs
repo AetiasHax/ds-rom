@@ -1,20 +1,23 @@
 use std::{
-    fs::{self, create_dir, create_dir_all, File},
+    fs::{self, create_dir_all, File},
     io::{self, Cursor, Write},
     mem::size_of,
     path::Path,
 };
 
 use serde::{Deserialize, Serialize};
-use snafu::{Backtrace, Snafu};
+use snafu::Snafu;
 
 use crate::{crypto::blowfish::BlowfishKey, rom::raw::FileAlloc};
 
 use super::{
-    raw::{self, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError, TableOffset},
-    Arm7, Arm9, Arm9AutoloadError, Arm9Offsets, Banner, BannerError, BannerImageError, BannerLoadError, BuildInfo,
-    FileBuildError, FileParseError, Files, Header, HeaderBuildError, HeaderLoadError, Logo, LogoError, LogoSaveError, Overlay,
-    OverlayInfo, RawArm9Error,
+    raw::{
+        self, Arm9Footer, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
+        TableOffset,
+    },
+    Arm7, Arm9, Arm9AutoloadError, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BannerLoadError, BuildInfo,
+    FileBuildError, FileParseError, Files, FilesLoadError, Header, HeaderBuildError, HeaderLoadError, Logo, LogoError,
+    LogoLoadError, LogoSaveError, Overlay, OverlayInfo, RawArm9Error,
 };
 
 pub struct Rom<'a> {
@@ -74,6 +77,8 @@ pub enum RomSaveError {
     #[snafu(transparent)]
     LogoSave { source: LogoSaveError },
     #[snafu(transparent)]
+    LogoLoad { source: LogoLoadError },
+    #[snafu(transparent)]
     RawBuildInfo { source: RawBuildInfoError },
     #[snafu(transparent)]
     RawArm9 { source: RawArm9Error },
@@ -81,6 +86,8 @@ pub enum RomSaveError {
     Arm9Autoload { source: Arm9AutoloadError },
     #[snafu(transparent)]
     BannerImage { source: BannerImageError },
+    #[snafu(transparent)]
+    FilesLoad { source: FilesLoadError },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -93,7 +100,94 @@ struct Arm9BuildConfig {
     build_info: BuildInfo,
 }
 
+#[derive(Serialize, Deserialize)]
+struct OverlayConfig {
+    #[serde(flatten)]
+    info: OverlayInfo,
+    file_name: String,
+}
+
 impl<'a> Rom<'a> {
+    pub fn load<P: AsRef<Path>>(path: P, key: Option<&BlowfishKey>) -> Result<Self, RomSaveError> {
+        let path = path.as_ref();
+
+        // --------------------- Load header ---------------------
+        let header: Header = serde_yml::from_reader(File::open(path.join("header.yaml"))?)?;
+        let header_logo = Logo::from_png(path.join("header_logo.png"))?;
+
+        // --------------------- Load ARM9 program ---------------------
+        let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(File::open(path.join("arm9.yaml"))?)?;
+        let arm9 = fs::read(path.join("arm9.bin"))?;
+
+        // --------------------- Load ITCM, DTCM ---------------------
+        let itcm = fs::read(path.join("itcm.bin"))?;
+        let itcm_info = serde_yml::from_reader(File::open(path.join("itcm.yaml"))?)?;
+        let itcm = Autoload::new(itcm, itcm_info);
+
+        let dtcm = fs::read(path.join("dtcm.bin"))?;
+        let dtcm_info = serde_yml::from_reader(File::open(path.join("dtcm.yaml"))?)?;
+        let dtcm = Autoload::new(dtcm, dtcm_info);
+
+        // --------------------- Build ARM9 program ---------------------
+        let mut arm9 = Arm9::with_two_tcms(arm9, itcm, dtcm, arm9_build_config.offsets)?;
+        arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
+        if arm9_build_config.compressed {
+            arm9.compress()?;
+        }
+        if arm9_build_config.encrypted {
+            let Some(key) = key else {
+                return BlowfishKeyNeededSnafu {}.fail();
+            };
+            arm9.encrypt(key, header.gamecode.to_le_u32())?;
+        }
+
+        // --------------------- Load ARM9 overlays ---------------------
+        let mut arm9_overlays = vec![];
+        let overlays_path = path.join("arm9_overlays");
+        if overlays_path.exists() && overlays_path.is_dir() {
+            let overlay_configs: Vec<OverlayConfig> =
+                serde_yml::from_reader(File::open(overlays_path.join("arm9_overlays.yaml"))?)?;
+            for mut config in overlay_configs.into_iter() {
+                let data = fs::read(overlays_path.join(config.file_name))?;
+                let compressed = config.info.compressed;
+                config.info.compressed = false;
+                let mut overlay = Overlay::new(data, config.info);
+                if compressed {
+                    overlay.compress()?;
+                }
+                arm9_overlays.push(overlay);
+            }
+        }
+
+        // --------------------- Load ARM7 program ---------------------
+        let arm7 = fs::read(path.join("arm7.bin"))?;
+        let arm7_config = serde_yml::from_reader(File::open(path.join("arm7.yaml"))?)?;
+        let arm7 = Arm7::new(arm7, arm7_config);
+
+        // --------------------- Load ARM7 overlays ---------------------
+        let mut arm7_overlays = vec![];
+        let overlays_path = path.join("arm7_overlays");
+        if overlays_path.exists() && overlays_path.is_dir() {
+            let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(File::open(path.join("arm7_overlays.yaml"))?)?;
+            for config in overlay_configs.into_iter() {
+                let data = fs::read(overlays_path.join(config.file_name))?;
+                arm7_overlays.push(Overlay::new(data, config.info));
+            }
+        }
+
+        // --------------------- Load banner ---------------------
+        let banner_path = path.join("banner");
+        let mut banner: Banner = serde_yml::from_reader(File::open(banner_path.join("banner.yaml"))?)?;
+        banner.images.load_bitmap_file(banner_path.join("bitmap.png"), banner_path.join("palette.png"))?;
+
+        // --------------------- Load files ---------------------
+        let files = Files::load(path.join("files"), arm9_overlays.len() + arm7_overlays.len())?;
+        let path_order =
+            fs::read_to_string(path.join("path_order.txt"))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
+
+        Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order })
+    }
+
     pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<(), RomSaveError> {
         let path = path.as_ref();
         create_dir_all(path)?;
@@ -115,7 +209,7 @@ impl<'a> Rom<'a> {
             let Some(key) = key else {
                 return BlowfishKeyNeededSnafu {}.fail();
             };
-            plain_arm9.decrypt(key, u32::from_le_bytes(self.header.gamecode.0))?;
+            plain_arm9.decrypt(key, self.header.gamecode.to_le_u32())?;
         }
         plain_arm9.decompress()?;
         File::create(path.join("arm9.bin"))?.write(plain_arm9.code()?)?;
@@ -136,19 +230,22 @@ impl<'a> Rom<'a> {
             let path = &path.join("arm9_overlays");
             create_dir_all(path)?;
 
+            let mut configs = vec![];
             for overlay in &self.arm9_overlays {
                 let name = format!("ov{:02}", overlay.id());
 
                 let mut plain_overlay = overlay.clone();
-                plain_overlay.decompress();
+                configs.push(OverlayConfig { info: plain_overlay.info().clone(), file_name: format!("{name}.bin") });
 
+                plain_overlay.decompress();
                 File::create(path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
-                serde_yml::to_writer(File::create(path.join(format!("{name}.yaml")))?, plain_overlay.info())?;
             }
+            serde_yml::to_writer(File::create(path.join(format!("arm9_overlays.yaml")))?, &configs)?;
         }
 
         // --------------------- Save ARM7 program ---------------------
         File::create(path.join("arm7.bin"))?.write(self.arm7.full_data())?;
+        serde_yml::to_writer(File::create(path.join("arm7.yaml"))?, self.arm7.offsets())?;
 
         // --------------------- Save ARM7 overlays ---------------------
         if !self.arm7_overlays.is_empty() {
@@ -179,8 +276,8 @@ impl<'a> Rom<'a> {
         {
             let files_path = path.join("files");
             self.files.traverse_files(["/"], |file, path| {
-                // TODO: Rewrite traverse_files as an iterator so these errors can be returned
                 let path = files_path.join(path);
+                // TODO: Rewrite traverse_files as an iterator so these errors can be returned
                 create_dir_all(&path).expect("failed to create file directory");
                 File::create(&path.join(file.name()))
                     .expect("failed to create file")
@@ -217,8 +314,9 @@ impl<'a> Rom<'a> {
         })
     }
 
-    pub fn build(mut self) -> Result<raw::Rom<'a>, RomBuildError> {
+    pub fn build(mut self, key: Option<&BlowfishKey>) -> Result<raw::Rom<'a>, RomBuildError> {
         let mut context = BuildContext::default();
+        context.blowfish_key = key;
 
         let mut cursor = Cursor::new(Vec::with_capacity(128 * 1024)); // smallest possible ROM
 
@@ -229,7 +327,11 @@ impl<'a> Rom<'a> {
 
         // --------------------- Write ARM9 program ---------------------
         context.arm9_offset = Some(cursor.position() as u32);
+        context.arm9_autoload_callback = Some(self.arm9.autoload_callback());
+        context.arm9_build_info_offset = Some(self.arm9.build_info_offset());
         cursor.write(self.arm9.full_data())?;
+        let footer = Arm9Footer::new(self.arm9.build_info_offset());
+        cursor.write(bytemuck::bytes_of(&footer))?;
         Self::align(&mut cursor)?;
 
         let max_file_id = self.files.max_file_id();
@@ -260,6 +362,8 @@ impl<'a> Rom<'a> {
 
         // --------------------- Write ARM7 program ---------------------
         context.arm7_offset = Some(cursor.position() as u32);
+        context.arm7_autoload_callback = Some(self.arm7.autoload_callback());
+        context.arm7_build_info_offset = None;
         cursor.write(self.arm7.full_data())?;
         Self::align(&mut cursor)?;
 
@@ -289,6 +393,7 @@ impl<'a> Rom<'a> {
         // --------------------- Write file name table (FNT) ---------------------
         self.files.sort_for_fnt();
         let fnt = self.files.build_fnt()?.build()?;
+        context.fnt_offset = Some(TableOffset { offset: cursor.position() as u32, size: fnt.len() as u32 });
         cursor.write(&fnt)?;
         Self::align(&mut cursor)?;
 
@@ -300,24 +405,26 @@ impl<'a> Rom<'a> {
 
         // --------------------- Write banner ---------------------
         let banner = self.banner.build()?;
+        context.banner_offset = Some(TableOffset { offset: cursor.position() as u32, size: banner.full_data().len() as u32 });
         cursor.write(banner.full_data())?;
         Self::align(&mut cursor)?;
 
         // --------------------- Write files ---------------------
         self.files.sort_for_rom();
-        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| {
+        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, path| {
             // TODO: Rewrite traverse_files as an iterator so these errors can be returned
-            let contents = file.contents();
+            Self::align(&mut cursor).expect("failed to align before file");
 
+            let contents = file.contents();
             let start = cursor.position() as u32;
             let end = start + contents.len() as u32;
             file_allocs[file.id() as usize] = FileAlloc { start, end };
 
             cursor.write(contents).expect("failed to write file contents");
-            Self::align(&mut cursor).expect("failed to align after file");
         });
 
         // --------------------- Write padding ---------------------
+        context.rom_size = Some(cursor.position() as u32);
         while !cursor.position().is_power_of_two() && cursor.position() >= 128 * 1024 {
             cursor.write(&[0xff])?;
         }
@@ -335,7 +442,7 @@ impl<'a> Rom<'a> {
     }
 
     fn align(cursor: &mut Cursor<Vec<u8>>) -> Result<(), RomBuildError> {
-        let padding = !cursor.position() & 0x1ff;
+        let padding = (!cursor.position() + 1) & 0x1ff;
         for _ in 0..padding {
             cursor.write(&[0xff])?;
         }

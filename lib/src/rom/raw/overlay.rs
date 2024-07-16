@@ -49,7 +49,7 @@ impl Overlay {
         match bytemuck::try_cast_slice(&data) {
             Ok(table) => Ok(table),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.leading_zeros() }.fail()
+                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
             }
             Err(PodCastError::SizeMismatch) => panic!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),

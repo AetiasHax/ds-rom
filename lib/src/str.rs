@@ -26,6 +26,12 @@ impl<const N: usize> AsciiArray<N> {
     }
 }
 
+impl AsciiArray<4> {
+    pub fn to_le_u32(&self) -> u32 {
+        u32::from_le_bytes(self.0)
+    }
+}
+
 impl<const N: usize> Display for AsciiArray<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for ch in self.0 {

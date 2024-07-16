@@ -40,7 +40,7 @@ impl<'a> Banner<'a> {
         match result {
             Ok(build_info) => Ok(build_info),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<T>(), actual: 1usize << addr.leading_zeros(), section }.fail()
+                MisalignedSnafu { expected: align_of::<T>(), actual: 1usize << addr.trailing_zeros(), section }.fail()
             }
             Err(PodCastError::AlignmentMismatch) => panic!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
@@ -338,9 +338,9 @@ impl BannerPalette {
     pub fn get_color(&self, index: usize) -> (u8, u8, u8) {
         if index < self.0.len() {
             let color = self.0[index];
-            let b = (((color >> 10) & 31) * 255 / 31) as u8;
-            let g = (((color >> 5) & 31) * 255 / 31) as u8;
-            let r = ((color & 31) * 255 / 31) as u8;
+            let b = (((color >> 10) & 31) << 3) as u8;
+            let g = (((color >> 5) & 31) << 3) as u8;
+            let r = ((color & 31) << 3) as u8;
             (r, g, b)
         } else {
             (0, 0, 0)
@@ -348,9 +348,9 @@ impl BannerPalette {
     }
 
     pub fn set_color(&mut self, index: usize, r: u8, g: u8, b: u8) {
-        let r = r as u16 * 31 / 255;
-        let g = g as u16 * 31 / 255;
-        let b = b as u16 * 31 / 255;
+        let r = r as u16 >> 3;
+        let g = g as u16 >> 3;
+        let b = b as u16 >> 3;
         let color = r | (g << 5) | (b << 10);
         self.0[index] = color;
     }

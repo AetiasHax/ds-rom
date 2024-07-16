@@ -20,6 +20,10 @@ impl<'a> Autoload<'a> {
         &self.data
     }
 
+    pub fn into_data(self) -> Box<[u8]> {
+        self.data.into_owned().into_boxed_slice()
+    }
+
     pub fn base_address(&self) -> u32 {
         self.info.base_address
     }

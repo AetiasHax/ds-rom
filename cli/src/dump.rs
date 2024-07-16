@@ -100,13 +100,11 @@ impl Dump {
             let mut arm9 = rom.arm9()?;
             if arm9.is_encrypted() && key.is_some() {
                 let Some(key) = &key else { unreachable!() };
-                let gamecode = u32::from_le_bytes(header.gamecode.0);
-                arm9.decrypt(&key, gamecode)?;
+                arm9.decrypt(&key, header.gamecode.to_le_u32())?;
             }
             if self.encrypt && !arm9.is_encrypted() && key.is_some() {
                 let Some(key) = &key else { unreachable!() };
-                let gamecode = u32::from_le_bytes(header.gamecode.0);
-                arm9.encrypt(&key, gamecode)?;
+                arm9.encrypt(&key, header.gamecode.to_le_u32())?;
             }
             if self.decompress && arm9.build_info()?.is_compressed() {
                 arm9.decompress()?;
