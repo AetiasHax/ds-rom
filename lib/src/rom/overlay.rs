@@ -4,10 +4,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::compress::lz77::Lz77;
 
-use super::raw::{self, FileAlloc, OverlayCompressedSize};
+use super::raw::{self, FileAlloc, HeaderVersion, OverlayCompressedSize, RawHeaderError};
 
 #[derive(Clone)]
 pub struct Overlay<'a> {
+    header_version: HeaderVersion,
     info: OverlayInfo,
     data: Cow<'a, [u8]>,
 }
@@ -15,14 +16,14 @@ pub struct Overlay<'a> {
 const LZ77: Lz77 = Lz77 {};
 
 impl<'a> Overlay<'a> {
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, info: OverlayInfo) -> Self {
-        Self { info, data: data.into() }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, header_version: HeaderVersion, info: OverlayInfo) -> Self {
+        Self { header_version, info, data: data.into() }
     }
 
-    pub fn parse(overlay: &raw::Overlay, fat: &[FileAlloc], rom: &'a raw::Rom) -> Self {
+    pub fn parse(overlay: &raw::Overlay, fat: &[FileAlloc], rom: &'a raw::Rom) -> Result<Self, RawHeaderError> {
         let alloc = fat[overlay.file_id as usize];
         let data = &rom.data()[alloc.range()];
-        Self { info: OverlayInfo::new(overlay), data: Cow::Borrowed(data) }
+        Ok(Self { header_version: rom.header()?.version(), info: OverlayInfo::new(overlay), data: Cow::Borrowed(data) })
     }
 
     pub fn build(&self) -> raw::Overlay {
@@ -86,7 +87,7 @@ impl<'a> Overlay<'a> {
         if self.is_compressed() {
             return Ok(());
         }
-        self.data = LZ77.compress(&self.data, 0)?.into_vec().into();
+        self.data = LZ77.compress(self.header_version, &self.data, 0)?.into_vec().into();
         self.info.compressed = true;
         Ok(())
     }

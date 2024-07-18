@@ -166,7 +166,7 @@ impl Dump {
         if let Some(index) = self.print_arm9_overlay {
             let fat = rom.fat()?;
             let arm9_ovt = rom.arm9_overlay_table()?;
-            let mut overlay = Overlay::parse(&arm9_ovt[index], fat, &rom);
+            let mut overlay = Overlay::parse(&arm9_ovt[index], fat, &rom)?;
 
             if self.decompress && overlay.is_compressed() {
                 overlay.decompress();
@@ -196,7 +196,7 @@ impl Dump {
         if let Some(index) = self.print_arm7_overlay {
             let fat = rom.fat()?;
             let arm7_ovt = rom.arm7_overlay_table()?;
-            let overlay = Overlay::parse(&arm7_ovt[index], fat, &rom);
+            let overlay = Overlay::parse(&arm7_ovt[index], fat, &rom)?;
             print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
         }
 

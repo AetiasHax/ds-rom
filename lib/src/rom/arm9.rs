@@ -6,18 +6,18 @@ use snafu::{Backtrace, Snafu};
 use crate::{
     compress::lz77::Lz77,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
-    str::print_hex,
     CRC_16_MODBUS,
 };
 
 use super::{
-    raw::{AutoloadInfo, AutoloadKind, BuildInfo, RawAutoloadInfoError, RawBuildInfoError},
+    raw::{AutoloadInfo, AutoloadKind, BuildInfo, HeaderVersion, RawAutoloadInfoError, RawBuildInfoError},
     Autoload,
 };
 
 #[derive(Clone)]
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
+    header_version: HeaderVersion,
     offsets: Arm9Offsets,
 }
 
@@ -63,14 +63,15 @@ pub enum Arm9AutoloadError {
 }
 
 impl<'a> Arm9<'a> {
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, offsets: Arm9Offsets) -> Self {
-        Arm9 { data: data.into(), offsets }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, header_version: HeaderVersion, offsets: Arm9Offsets) -> Self {
+        Arm9 { data: data.into(), header_version, offsets }
     }
 
     pub fn with_two_tcms(
         mut data: Vec<u8>,
         itcm: Autoload,
         dtcm: Autoload,
+        header_version: HeaderVersion,
         offsets: Arm9Offsets,
     ) -> Result<Self, RawBuildInfoError> {
         let autoload_infos = [itcm.info().clone(), dtcm.info().clone()];
@@ -82,7 +83,7 @@ impl<'a> Arm9<'a> {
         data.extend(bytemuck::bytes_of(&autoload_infos));
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
-        let mut arm9 = Self { data: data.into(), offsets };
+        let mut arm9 = Self { data: data.into(), header_version, offsets };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -200,7 +201,7 @@ impl<'a> Arm9<'a> {
             return Ok(());
         }
 
-        let data: Cow<[u8]> = LZ77.compress(&self.data, COMPRESSION_START)?.into_vec().into();
+        let data: Cow<[u8]> = LZ77.compress(self.header_version, &self.data, COMPRESSION_START)?.into_vec().into();
         let length = data.len();
         let old_data = replace(&mut self.data, data);
         let base_address = self.base_address();

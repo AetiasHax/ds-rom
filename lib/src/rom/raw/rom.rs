@@ -60,6 +60,7 @@ impl<'a> Rom<'a> {
 
         Ok(Arm9::new(
             Cow::Borrowed(data),
+            header.version(),
             Arm9Offsets {
                 base_address: header.arm9.base_addr,
                 entry_function: header.arm9.entry,

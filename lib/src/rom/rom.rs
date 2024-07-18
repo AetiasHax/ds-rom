@@ -129,7 +129,7 @@ impl<'a> Rom<'a> {
         let dtcm = Autoload::new(dtcm, dtcm_info);
 
         // --------------------- Build ARM9 program ---------------------
-        let mut arm9 = Arm9::with_two_tcms(arm9, itcm, dtcm, arm9_build_config.offsets)?;
+        let mut arm9 = Arm9::with_two_tcms(arm9, itcm, dtcm, header.version(), arm9_build_config.offsets)?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         if arm9_build_config.compressed {
             arm9.compress()?;
@@ -151,7 +151,7 @@ impl<'a> Rom<'a> {
                 let data = fs::read(overlays_path.join(config.file_name))?;
                 let compressed = config.info.compressed;
                 config.info.compressed = false;
-                let mut overlay = Overlay::new(data, config.info);
+                let mut overlay = Overlay::new(data, header.version(), config.info);
                 if compressed {
                     overlay.compress()?;
                 }
@@ -171,7 +171,7 @@ impl<'a> Rom<'a> {
             let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(File::open(path.join("arm7_overlays.yaml"))?)?;
             for config in overlay_configs.into_iter() {
                 let data = fs::read(overlays_path.join(config.file_name))?;
-                arm7_overlays.push(Overlay::new(data, config.info));
+                arm7_overlays.push(Overlay::new(data, header.version(), config.info));
             }
         }
 
@@ -305,9 +305,17 @@ impl<'a> Rom<'a> {
             header: Header::load_raw(&header)?,
             header_logo: Logo::decompress(&header.logo)?,
             arm9: rom.arm9()?,
-            arm9_overlays: rom.arm9_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Vec<_>>(),
+            arm9_overlays: rom
+                .arm9_overlay_table()?
+                .iter()
+                .map(|ov| Overlay::parse(ov, fat, rom))
+                .collect::<Result<Vec<_>, _>>()?,
             arm7: rom.arm7()?,
-            arm7_overlays: rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Vec<_>>(),
+            arm7_overlays: rom
+                .arm7_overlay_table()?
+                .iter()
+                .map(|ov| Overlay::parse(ov, fat, rom))
+                .collect::<Result<Vec<_>, _>>()?,
             banner: Banner::load_raw(&banner)?,
             files: file_root,
             path_order,

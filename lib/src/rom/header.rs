@@ -81,7 +81,7 @@ impl Header {
                 rom_nand_end: header.rom_nand_end,
                 rw_nand_end: header.rw_nand_end,
             },
-            ds_post_dsi: (version <= HeaderVersion::DsPostDsi).then_some(HeaderDsPostDsi {
+            ds_post_dsi: (version >= HeaderVersion::DsPostDsi).then_some(HeaderDsPostDsi {
                 dsi_flags_2: header.dsi_flags_2,
                 sha1_hmac_banner: header.sha1_hmac_banner,
                 sha1_hmac_unk1: header.sha1_hmac_unk1,
@@ -217,5 +217,13 @@ impl Header {
 
         header.header_crc = CRC_16_MODBUS.checksum(&bytemuck::bytes_of(&header)[0..offset_of!(raw::Header, header_crc)]);
         Ok(header)
+    }
+
+    pub fn version(&self) -> HeaderVersion {
+        if self.ds_post_dsi.is_some() {
+            HeaderVersion::DsPostDsi
+        } else {
+            HeaderVersion::Original
+        }
     }
 }

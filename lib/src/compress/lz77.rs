@@ -1,4 +1,9 @@
-use std::io::{self, Write};
+use std::{
+    fmt::Display,
+    io::{self, Write},
+};
+
+use crate::rom::raw::HeaderVersion;
 
 pub struct Lz77 {}
 
@@ -14,7 +19,7 @@ const LOOKAHEAD: usize = 1 << DISTANCE_BITS;
 const MAX_DISTANCE: usize = DISTANCE_MASK + MIN_SUBSEQUENCE;
 
 /// Length-distance pair
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Pair {
     length: usize,
     distance: usize,
@@ -36,11 +41,37 @@ impl Pair {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct BlockInfo {
     pos: usize,
-    total_bytes_saved: isize,
+    bytes_saved: isize,
     flags: u8,
+    flag_count: u8,
+}
+
+impl Display for BlockInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "pos={:#x}, bytes_saved={}, flags=0x{:02x}, flag_count={}, read={}, written={}",
+            self.pos,
+            self.bytes_saved,
+            self.flags,
+            self.flag_count,
+            self.bytes_read(),
+            self.bytes_written()
+        )
+    }
+}
+
+impl BlockInfo {
+    fn bytes_written(&self) -> usize {
+        1 + self.flag_count as usize + self.flags.count_ones() as usize
+    }
+
+    fn bytes_read(&self) -> usize {
+        (self.bytes_written() as isize + self.bytes_saved) as usize
+    }
 }
 
 impl Lz77 {
@@ -71,15 +102,22 @@ impl Lz77 {
             .and_then(|p| (p.length >= MIN_SUBSEQUENCE).then_some(p))
     }
 
-    fn compress_bytes(&self, bytes: &[u8], compressed: &mut Vec<u8>) -> Result<usize, io::Error> {
-        let mut block_infos = vec![];
+    fn should_stop_ignoring_blocks(&self, version: HeaderVersion, saved: isize, next_block: Option<&&BlockInfo>) -> bool {
+        match version {
+            HeaderVersion::Original => saved < 0 && next_block.map_or(true, |b| b.bytes_saved >= 0),
+            HeaderVersion::DsPostDsi => saved <= 0,
+        }
+    }
+
+    fn compress_bytes(&self, version: HeaderVersion, bytes: &[u8], compressed: &mut Vec<u8>) -> Result<usize, io::Error> {
+        let mut block_infos = Vec::with_capacity(bytes.len() / 8);
 
         let mut read = bytes.len();
         let mut flags = 0;
         let mut flag_count = 0;
         let mut flag_pos = compressed.len();
         compressed.push(0); // placeholder for flag byte
-        let mut bytes_saved = 0;
+        let mut bytes_saved = 0; // current block only
         while read > 0 {
             flags <<= 1;
             if let Some(pair) = self.find_match(bytes, read - 1) {
@@ -88,7 +126,8 @@ impl Lz77 {
                 let encoded = pair.to_be_bytes();
                 compressed.write(&encoded)?;
                 flags |= 1;
-                bytes_saved += (pair.length - encoded.len()) as isize;
+                let saved = (pair.length - encoded.len()) as isize;
+                bytes_saved += saved;
             } else {
                 // write literal
                 read -= 1;
@@ -98,73 +137,91 @@ impl Lz77 {
             flag_count += 1;
             if flag_count == 8 {
                 // write flag byte
-                flag_count = 0;
                 compressed[flag_pos] = flags;
                 bytes_saved -= 1;
                 flag_pos = compressed.len();
-                block_infos.push(BlockInfo { pos: compressed.len(), total_bytes_saved: bytes_saved, flags });
+                block_infos.push(BlockInfo { pos: compressed.len(), bytes_saved, flags, flag_count });
+                bytes_saved = 0;
                 compressed.push(0); // placeholder for flag byte
                 flags = 0;
+                flag_count = 0;
             }
         }
 
         if flag_count != 0 {
             // trailing flag byte
             flags <<= 8 - flag_count;
-            block_infos.push(BlockInfo { pos: compressed.len(), total_bytes_saved: bytes_saved, flags });
+            bytes_saved -= 1;
+            block_infos.push(BlockInfo { pos: compressed.len(), bytes_saved, flags, flag_count });
+            bytes_saved = 0;
             compressed[flag_pos] = flags;
         } else {
-            compressed.pop();
+            compressed.pop(); // remove unused flag byte placeholder
         }
 
-        let mut num_identical = 0;
-        let mut i = 0;
-        while i < block_infos.len() - 1 {
-            if block_infos[i].total_bytes_saved != bytes_saved {
-                i += 1;
-                continue;
-            }
+        let mut num_identical: usize = 0;
 
-            // Save more bytes by ignoring blocks that have no length-distance pairs in them
-            let mut flag_bytes_saved = 0;
-            loop {
-                if block_infos[i].flags != 0 {
-                    break;
-                }
-                i -= 1;
-                flag_bytes_saved += 1;
-            }
-
-            num_identical = (compressed.len() - 1) - block_infos[i].pos;
-            compressed.pop();
-
-            // See if it's possible to remove some tokens based on the number of flag bytes saved
-            flags = block_infos[i].flags;
-            for _ in 0..8 {
-                if flag_bytes_saved <= 0 {
-                    break;
-                }
-                if (flags & 0x80) != 0 {
-                    if flag_bytes_saved < 2 {
-                        break;
+        // Save more bytes by ignoring blocks that have no length-distance pairs in them
+        let mut iter = block_infos.iter().rev().peekable();
+        let mut block_bytes_saved = 0;
+        let mut block_bytes_read = 0;
+        let mut last_block = None;
+        while let Some(block) = iter.next() {
+            block_bytes_saved += block.bytes_saved;
+            if block.bytes_saved != 0 {
+                if self.should_stop_ignoring_blocks(version, bytes_saved - block_bytes_saved, iter.peek()) {
+                    if bytes_saved > 0 {
+                        num_identical += block_bytes_read + block.flags.trailing_zeros() as usize;
                     }
-                    num_identical += 2;
-                    flag_bytes_saved -= 2;
-                } else {
-                    num_identical += 1;
-                    flag_bytes_saved -= 1;
+                    last_block = Some(block);
+                    break;
                 }
-                flags >>= 1;
-            }
+                num_identical += block_bytes_read;
+                bytes_saved -= block_bytes_saved;
 
-            let write = compressed.len() - 1;
-            for i in 0..num_identical {
-                compressed[write - i] = bytes[i];
+                // reset
+                block_bytes_saved = 0;
+                block_bytes_read = 0;
             }
-            while compressed[write - num_identical] == bytes[read + num_identical] {
-                num_identical += 1;
+            block_bytes_read += block.bytes_read();
+        }
+
+        // Remove leftover length-distance pairs depending on bytes saved
+        if bytes_saved > 1 {
+            if let Some(block) = last_block {
+                flags = block.flags;
+                read = block.pos - 1;
+
+                for _ in 0..8 {
+                    read -= 1;
+                    if flags & 0x01 != 0 {
+                        if bytes_saved <= 1 {
+                            break;
+                        }
+                        let pair = Pair::from_le_bytes([compressed[read + 1], compressed[read]]);
+                        let pair_bytes_saved = pair.length as isize - 2;
+                        if bytes_saved >= pair_bytes_saved {
+                            bytes_saved -= pair_bytes_saved;
+                            num_identical += pair.length;
+                        } else {
+                            break;
+                        }
+                        read -= 1;
+                    } else {
+                        num_identical += 1;
+                    }
+                    flags >>= 1;
+                }
             }
-            break;
+        }
+
+        // Remove remaining bytes saved from the compressed file
+        // `bytes_saved` is always positive or zero here
+        compressed.resize((compressed.len() as isize - bytes_saved) as usize, 0);
+
+        let write = compressed.len() - 1;
+        for i in 0..num_identical {
+            compressed[write - i] = bytes[i];
         }
 
         Ok(num_identical)
@@ -192,9 +249,9 @@ impl Lz77 {
         Ok(())
     }
 
-    pub fn compress(&self, bytes: &[u8], start: usize) -> Result<Box<[u8]>, io::Error> {
+    pub fn compress(&self, version: HeaderVersion, bytes: &[u8], start: usize) -> Result<Box<[u8]>, io::Error> {
         let mut compressed = Vec::with_capacity(bytes.len());
-        let num_identical = self.compress_bytes(&bytes[start..], &mut compressed)?;
+        let num_identical = self.compress_bytes(version, &bytes[start..], &mut compressed)?;
         for i in (0..start).rev() {
             compressed.push(bytes[i]);
         }
