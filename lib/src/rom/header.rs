@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
+    crc::CRC_16_MODBUS,
     str::{AsciiArray, AsciiArrayError},
-    CRC_16_MODBUS,
 };
 
 use super::{
@@ -13,60 +13,79 @@ use super::{
         self, AccessControl, Capacity, Delay, DsFlags, DsiFlags, DsiFlags2, HeaderVersion, ProgramOffset, RegionFlags,
         TableOffset,
     },
-    BuildContext, LogoError, RawArm9Error, Rom,
+    BuildContext, Rom,
 };
-
+/// ROM header.
 #[derive(Serialize, Deserialize)]
 pub struct Header {
+    /// Values for the original header version, [`HeaderVersion::Original`].
     #[serde(flatten)]
     pub original: HeaderOriginal,
+    /// Values for DS games after DSi release, [`HeaderVersion::DsPostDsi`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ds_post_dsi: Option<HeaderDsPostDsi>,
 }
 
+/// Values for the original header version, [`HeaderVersion::Original`].
 #[derive(Serialize, Deserialize)]
 pub struct HeaderOriginal {
+    /// Short game title, normally in uppercase letters.
     pub title: String,
+    /// 4-character game code in uppercase letters.
     pub gamecode: AsciiArray<4>,
+    /// 2-character maker code, normally "01".
     pub makercode: AsciiArray<2>,
+    /// Unit code, depends on which platform (DS, DSi) this game is for.
     pub unitcode: u8,
+    /// Encryption seed select.
     pub seed_select: u8,
+    /// Flags for both DS and DSi.
     pub ds_flags: DsFlags,
+    /// Autostart, can skip "Health and Safety" screen.
     pub autostart: u8,
+    /// Port 0x40001a4 setting for normal commands.
     pub normal_cmd_setting: u32,
+    /// Port 0x40001a4 setting for KEY1 commands.
     pub key1_cmd_setting: u32,
+    /// Delay to wait for secure area.
     pub secure_area_delay: Delay,
+    /// NAND end of ROM area in multiples of 0x20000 (0x80000 on DSi).
     pub rom_nand_end: u16,
+    /// NAND end of RW area in multiples of 0x20000 (0x80000 on DSi).
     pub rw_nand_end: u16,
 }
 
+/// Values for DS games after DSi release, [`HeaderVersion::DsPostDsi`].
 #[derive(Serialize, Deserialize)]
 pub struct HeaderDsPostDsi {
+    /// DSi-exclusive flags.
     pub dsi_flags_2: DsiFlags2,
+    /// SHA1-HMAC of banner.
     pub sha1_hmac_banner: [u8; 0x14],
+    /// Unknown SHA1-HMAC, defined by some games.
     pub sha1_hmac_unk1: [u8; 0x14],
+    /// Unknown SHA1-HMAC, defined by some games.
     pub sha1_hmac_unk2: [u8; 0x14],
+    /// RSA-SHA1 signature up to [`raw::Header::debug_args`].
     pub rsa_sha1: Box<[u8]>,
 }
 
-#[derive(Snafu, Debug)]
-pub enum HeaderLoadError {
-    #[snafu(transparent)]
-    Logo { source: LogoError },
-}
-
+/// Errors related to [`Header::build`].
 #[derive(Snafu, Debug)]
 pub enum HeaderBuildError {
+    /// See [`AsciiArrayError`].
     #[snafu(transparent)]
-    AsciiArray { source: AsciiArrayError },
-    #[snafu(transparent)]
-    RawArm9 { source: RawArm9Error },
+    AsciiArray {
+        /// Source error.
+        source: AsciiArrayError,
+    },
 }
 
 impl Header {
-    pub fn load_raw(header: &raw::Header) -> Result<Self, HeaderLoadError> {
+    /// Loads from a raw header.
+    pub fn load_raw(header: &raw::Header) -> Self {
         let version = header.version();
-        Ok(Self {
+        Self {
             original: HeaderOriginal {
                 title: header.title.to_string(),
                 gamecode: header.gamecode,
@@ -88,9 +107,18 @@ impl Header {
                 sha1_hmac_unk2: header.sha1_hmac_unk2,
                 rsa_sha1: Box::new(header.rsa_sha1),
             }),
-        })
+        }
     }
 
+    /// Builds a raw header.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a value is missing in the `context`.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the title contains a non-ASCII character.
     pub fn build(&self, context: &BuildContext, rom: &Rom) -> Result<raw::Header, HeaderBuildError> {
         let logo = rom.header_logo().compress();
         let arm9 = rom.arm9();
@@ -129,7 +157,7 @@ impl Header {
             key1_cmd_setting: self.original.key1_cmd_setting,
             banner_offset: context.banner_offset.map(|b| b.offset).expect("Banner offset must be known"),
             secure_area_crc: if let Some(key) = context.blowfish_key {
-                arm9.secure_area_crc(key, self.original.gamecode.to_le_u32())?
+                arm9.secure_area_crc(key, self.original.gamecode.to_le_u32())
             } else {
                 0
             },
@@ -219,6 +247,7 @@ impl Header {
         Ok(header)
     }
 
+    /// Returns the version of this [`Header`].
     pub fn version(&self) -> HeaderVersion {
         if self.ds_post_dsi.is_some() {
             HeaderVersion::DsPostDsi

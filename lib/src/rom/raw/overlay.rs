@@ -10,27 +10,53 @@ use snafu::{Backtrace, Snafu};
 
 use super::RawHeaderError;
 
+/// An entry in an overlay table. This is the raw struct, see the plain one [here](super::super::Overlay).
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 pub struct Overlay {
+    /// Overlay ID.
     pub id: u32,
+    /// Base address.
     pub base_addr: u32,
+    /// Initialized size.
     pub code_size: u32,
+    /// Uninitialized size.
     pub bss_size: u32,
+    /// Offset to start of .ctor section.
     pub ctor_start: u32,
+    /// Offset to end of .ctor section.
     pub ctor_end: u32,
+    /// File ID for the FAT.
     pub file_id: u32,
+    /// Compressed size.
     pub compressed: OverlayCompressedSize,
 }
 
+/// Errors related to [`Overlay`].
 #[derive(Snafu, Debug)]
 pub enum RawOverlayError {
+    /// See [`RawHeaderError`].
     #[snafu(transparent)]
-    RawHeader { source: RawHeaderError },
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// Occurs when the input is not evenly divisible into a slice of [`Overlay`].
     #[snafu(display("the overlay table must be a multiple of {} bytes:\n{backtrace}", size_of::<Overlay>()))]
-    InvalidSize { backtrace: Backtrace },
+    InvalidSize {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input is less aligned than [`Overlay`].
     #[snafu(display("expected {expected}-alignment for overlay table but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned { expected: usize, actual: usize, backtrace: Backtrace },
+    Misaligned {
+        /// Expected alignment.
+        expected: usize,
+        /// Actual input alignment.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl Overlay {
@@ -43,25 +69,36 @@ impl Overlay {
         }
     }
 
-    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawOverlayError> {
-        Self::check_size(data)?;
-        let addr = data as *const [u8] as *const () as usize;
-        match bytemuck::try_cast_slice(&data) {
-            Ok(table) => Ok(table),
+    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, RawOverlayError> {
+        match result {
+            Ok(build_info) => Ok(build_info),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
                 MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
             }
-            Err(PodCastError::SizeMismatch) => panic!(),
+            Err(PodCastError::AlignmentMismatch) => panic!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::AlignmentMismatch) => unreachable!(),
+            Err(PodCastError::SizeMismatch) => unreachable!(),
         }
     }
 
+    /// Reinterprets a `&[u8]` as a reference to [`Overlay`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the input is the wrong size, or not aligned enough.
+    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawOverlayError> {
+        Self::check_size(data)?;
+        let addr = data as *const [u8] as *const () as usize;
+        Self::handle_pod_cast(bytemuck::try_cast_slice(&data), addr)
+    }
+
+    /// Creates a [`DisplayOverlay`] which implements [`Display`].
     pub fn display(&self, indent: usize) -> DisplayOverlay {
         DisplayOverlay { overlay: self, indent }
     }
 }
 
+/// Can be used to display values in [`Overlay`].
 pub struct DisplayOverlay<'a> {
     overlay: &'a Overlay,
     indent: usize,
@@ -84,8 +121,10 @@ impl<'a> Display for DisplayOverlay<'a> {
     }
 }
 
+/// Overlay compressed size bitfield.
 #[bitfield(u32)]
 pub struct OverlayCompressedSize {
+    /// Compressed size, zero if not compressed.
     #[bits(24)]
     pub size: usize,
     pub is_compressed: u8,

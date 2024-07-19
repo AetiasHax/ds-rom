@@ -5,8 +5,8 @@ use snafu::{Backtrace, Snafu};
 
 use crate::{
     compress::lz77::Lz77,
+    crc::CRC_16_MODBUS,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
-    CRC_16_MODBUS,
 };
 
 use super::{
@@ -14,6 +14,7 @@ use super::{
     Autoload,
 };
 
+/// ARM9 program.
 #[derive(Clone)]
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
@@ -21,11 +22,16 @@ pub struct Arm9<'a> {
     offsets: Arm9Offsets,
 }
 
+/// Offsets in the ARM9 program.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct Arm9Offsets {
+    /// Base address.
     pub base_address: u32,
+    /// Entrypoint function address.
     pub entry_function: u32,
+    /// Build info offset.
     pub build_info: u32,
+    /// Autoload callback address.
     pub autoload_callback: u32,
 }
 
@@ -36,37 +42,87 @@ const LZ77: Lz77 = Lz77 {};
 
 const COMPRESSION_START: usize = 0x4000;
 
+/// Errors related to [`Arm9`].
 #[derive(Debug, Snafu)]
-pub enum RawArm9Error {
-    #[snafu(display("expected {expected:#x} bytes for {section} but had only {actual:#x}:\n{backtrace}"))]
-    DataTooSmall { expected: usize, actual: usize, section: &'static str, backtrace: Backtrace },
+pub enum Arm9Error {
+    /// Occurs when the program is too small to contain a secure area.
+    #[snafu(display("expected {expected:#x} bytes for secure area but had only {actual:#x}:\n{backtrace}"))]
+    DataTooSmall {
+        /// Expected minimum size.
+        expected: usize,
+        /// Actual size.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`BlowfishError`].
     #[snafu(transparent)]
-    Blowfish { source: BlowfishError },
+    Blowfish {
+        /// Source error.
+        source: BlowfishError,
+    },
+    /// Occurs when the string "encryObj" is not found when de/encrypting the secure area.
     #[snafu(display("invalid encryption, 'encryObj' not found"))]
-    NotEncryObj { backtrace: Backtrace },
+    NotEncryObj {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`RawBuildInfoError`].
     #[snafu(transparent)]
-    RawBuildInfo { source: RawBuildInfoError },
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// See [`io::Error`].
     #[snafu(transparent)]
-    Io { source: io::Error },
+    Io {
+        /// Source error.
+        source: io::Error,
+    },
 }
 
+/// Errors related to ARM9 autoloads.
 #[derive(Debug, Snafu)]
 pub enum Arm9AutoloadError {
+    /// See [`RawBuildInfoError`].
     #[snafu(transparent)]
-    RawBuildInfo { source: RawBuildInfoError },
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// See [`RawAutoloadInfoError`].
     #[snafu(transparent)]
-    RawAutoloadInfo { source: RawAutoloadInfoError },
+    RawAutoloadInfo {
+        /// Source error.
+        source: RawAutoloadInfoError,
+    },
+    /// Occurs when trying to access autoload blocks while the ARM9 program is compressed.
     #[snafu(display("ARM9 program must be decompressed before accessing autoload blocks:\n{backtrace}"))]
-    Compressed { backtrace: Backtrace },
+    Compressed {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when trying to access a kind of autoload block which doesn't exist in the ARM9 program.
     #[snafu(display("autoload block {kind} could not be found:\n{backtrace}"))]
-    NotFound { kind: AutoloadKind, backtrace: Backtrace },
+    NotFound {
+        /// Kind of autoload.
+        kind: AutoloadKind,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl<'a> Arm9<'a> {
+    /// Creates a new ARM9 program from raw data.
     pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, header_version: HeaderVersion, offsets: Arm9Offsets) -> Self {
         Arm9 { data: data.into(), header_version, offsets }
     }
 
+    /// Creates a new ARM9 program with raw data and two autoloads (ITCM and DTCM).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::build_info_mut`].
     pub fn with_two_tcms(
         mut data: Vec<u8>,
         itcm: Autoload,
@@ -93,26 +149,33 @@ impl<'a> Arm9<'a> {
         Ok(arm9)
     }
 
+    /// Returns whether the secure area is encrypted.
     pub fn is_encrypted(&self) -> bool {
         self.data.len() < 8 || self.data[0..8] != SECURE_AREA_ID
     }
 
-    pub fn decrypt(&mut self, key: &BlowfishKey, gamecode: u32) -> Result<(), RawArm9Error> {
+    /// Decrypts the secure area. Does nothing if already decrypted.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the program is too small to contain a secure area, [`Blowfish::decrypt`] fails or
+    /// "encryObj" was not found.
+    pub fn decrypt(&mut self, key: &BlowfishKey, gamecode: u32) -> Result<(), Arm9Error> {
         if !self.is_encrypted() {
             return Ok(());
         }
 
         if self.data.len() < 0x4000 {
-            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len(), section: "secure area" }.fail()?;
+            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len() }.fail()?;
         }
 
         let mut secure_area = [0u8; 0x4000];
         secure_area.clone_from_slice(&self.data[0..0x4000]);
 
-        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2)?;
+        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2);
         blowfish.decrypt(&mut secure_area[0..8])?;
 
-        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3)?;
+        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3);
         blowfish.decrypt(&mut secure_area[0..0x800])?;
 
         if &secure_area[0..8] != SECURE_AREA_ENCRY_OBJ {
@@ -124,61 +187,89 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    pub fn encrypt(&mut self, key: &BlowfishKey, gamecode: u32) -> Result<(), RawArm9Error> {
+    /// Encrypts the secure area. Does nothing if already encrypted.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the program is too small to contain a secure area, or the secure area ID was not
+    /// found.
+    pub fn encrypt(&mut self, key: &BlowfishKey, gamecode: u32) -> Result<(), Arm9Error> {
         if self.is_encrypted() {
             return Ok(());
         }
 
         if self.data.len() < 0x4000 {
-            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len(), section: "secure area" }.fail()?;
+            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len() }.fail()?;
         }
 
         if self.data[0..8] != SECURE_AREA_ID {
             NotEncryObjSnafu {}.fail()?;
         }
 
-        let secure_area = self.encrypted_secure_area(key, gamecode)?;
+        let secure_area = self.encrypted_secure_area(key, gamecode);
         self.data.to_mut()[0..0x4000].copy_from_slice(&secure_area);
         Ok(())
     }
 
-    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> Result<[u8; 0x4000], RawArm9Error> {
+    /// Returns an encrypted copy of the secure area.
+    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> [u8; 0x4000] {
         let mut secure_area = [0u8; 0x4000];
         secure_area.copy_from_slice(&self.data[0..0x4000]);
         if self.is_encrypted() {
-            return Ok(secure_area);
+            return secure_area;
         }
 
         secure_area[0..8].copy_from_slice(SECURE_AREA_ENCRY_OBJ);
 
-        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3)?;
-        blowfish.encrypt(&mut secure_area[0..0x800])?;
+        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3);
+        blowfish.encrypt(&mut secure_area[0..0x800]).unwrap();
 
-        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2)?;
-        blowfish.encrypt(&mut secure_area[0..8])?;
+        let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2);
+        blowfish.encrypt(&mut secure_area[0..8]).unwrap();
 
-        Ok(secure_area)
+        secure_area
     }
 
-    pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> Result<u16, RawArm9Error> {
-        let secure_area = self.encrypted_secure_area(key, gamecode)?;
+    /// Returns a CRC checksum of the encrypted secure area.
+    pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> u16 {
+        let secure_area = self.encrypted_secure_area(key, gamecode);
         let checksum = CRC_16_MODBUS.checksum(&secure_area);
-        Ok(checksum)
+        checksum
     }
 
+    /// Returns a reference to the build info.
+    ///
+    /// # Errors
+    ///
+    /// See [`BuildInfo::borrow_from_slice`].
     pub fn build_info(&self) -> Result<&BuildInfo, RawBuildInfoError> {
         BuildInfo::borrow_from_slice(&self.data[self.offsets.build_info as usize..])
     }
 
+    /// Returns a mutable reference to the build info.
+    ///
+    /// # Errors
+    ///
+    /// See [`BuildInfo::borrow_from_slice_mut`].
     pub fn build_info_mut(&mut self) -> Result<&mut BuildInfo, RawBuildInfoError> {
         BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info as usize..])
     }
 
+    /// Returns whether this ARM9 program is compressed.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::build_info`].
     pub fn is_compressed(&self) -> Result<bool, RawBuildInfoError> {
         Ok(self.build_info()?.is_compressed())
     }
 
-    pub fn decompress(&mut self) -> Result<(), RawArm9Error> {
+    /// Decompresses this ARM9 program. Does nothing if already decompressed.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::is_compressed`] and [`Self::build_info_mut`].
+    pub fn decompress(&mut self) -> Result<(), Arm9Error> {
         if !self.is_compressed()? {
             return Ok(());
         }
@@ -196,7 +287,12 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    pub fn compress(&mut self) -> Result<(), RawArm9Error> {
+    /// Compresses this ARM9 program. Does nothing if already compressed.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::is_compressed`], [`Lz77::compress`] and [`Self::build_info_mut`].
+    pub fn compress(&mut self) -> Result<(), Arm9Error> {
         if self.is_compressed()? {
             return Ok(());
         }
@@ -223,6 +319,12 @@ impl<'a> Arm9<'a> {
         Ok(autoload_info)
     }
 
+    /// Returns the autoload infos of this [`Arm9`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`Self::build_info`] or [`Self::get_autoload_infos`] fails or this ARM9 program
+    /// is compressed.
     pub fn autoload_infos(&self) -> Result<&[AutoloadInfo], Arm9AutoloadError> {
         let build_info: &BuildInfo = self.build_info()?;
         if build_info.is_compressed() {
@@ -231,6 +333,12 @@ impl<'a> Arm9<'a> {
         self.get_autoload_infos(build_info)
     }
 
+    /// Returns the autoloads of this [`Arm9`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`Self::build_info`] or [`Self::get_autoload_infos`] fails or this ARM9 program
+    /// is compressed.
     pub fn autoloads(&self) -> Result<Box<[Autoload]>, Arm9AutoloadError> {
         let build_info = self.build_info()?;
         if build_info.is_compressed() {
@@ -251,36 +359,52 @@ impl<'a> Arm9<'a> {
         Ok(autoloads.into_boxed_slice())
     }
 
+    /// Returns the code of this ARM9 program.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::build_info`].
     pub fn code(&self) -> Result<&[u8], RawBuildInfoError> {
         let build_info = self.build_info()?;
         Ok(&self.data[..(build_info.bss_start - self.base_address()) as usize])
     }
 
+    /// Returns a reference to the full data.
     pub fn full_data(&self) -> &[u8] {
         &self.data
     }
 
+    /// Returns the base address.
     pub fn base_address(&self) -> u32 {
         self.offsets.base_address
     }
 
+    /// Returns the entry function address.
     pub fn entry_function(&self) -> u32 {
         self.offsets.entry_function
     }
 
+    /// Returns the build info offset.
     pub fn build_info_offset(&self) -> u32 {
         self.offsets.build_info
     }
 
+    /// Returns the autoload callback address.
     pub fn autoload_callback(&self) -> u32 {
         self.offsets.autoload_callback
     }
 
+    /// Returns the [`Range`] of uninitialized data in this ARM9 program.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::build_info`].
     pub fn bss(&self) -> Result<Range<u32>, RawBuildInfoError> {
         let build_info = self.build_info()?;
         Ok(build_info.bss_start..build_info.bss_end)
     }
 
+    /// Returns a reference to the ARM9 offsets.
     pub fn offsets(&self) -> &Arm9Offsets {
         &self.offsets
     }

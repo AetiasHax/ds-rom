@@ -7,6 +7,7 @@ mod file;
 mod header;
 mod logo;
 mod overlay;
+/// Raw ROM access.
 pub mod raw;
 mod rom;
 

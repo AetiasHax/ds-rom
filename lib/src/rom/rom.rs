@@ -15,11 +15,12 @@ use super::{
         self, Arm9Footer, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
         TableOffset,
     },
-    Arm7, Arm9, Arm9AutoloadError, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BannerLoadError, BuildInfo,
-    FileBuildError, FileParseError, Files, FilesLoadError, Header, HeaderBuildError, HeaderLoadError, Logo, LogoError,
-    LogoLoadError, LogoSaveError, Overlay, OverlayInfo, RawArm9Error,
+    Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BuildInfo,
+    FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError,
+    Overlay, OverlayInfo,
 };
 
+/// A plain ROM.
 pub struct Rom<'a> {
     header: Header,
     header_logo: Logo,
@@ -28,66 +29,140 @@ pub struct Rom<'a> {
     arm7: Arm7<'a>,
     arm7_overlays: Vec<Overlay<'a>>,
     banner: Banner,
-    files: Files<'a>,
+    files: FileSystem<'a>,
     path_order: Vec<String>,
 }
 
+/// Errors related to [`Rom::extract`].
 #[derive(Debug, Snafu)]
 pub enum RomExtractError {
+    /// See [`RawHeaderError`].
     #[snafu(transparent)]
-    RawHeader { source: RawHeaderError },
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// See [`LogoError`].
     #[snafu(transparent)]
-    HeaderLoad { source: HeaderLoadError },
+    Logo {
+        /// Source error.
+        source: LogoError,
+    },
+    /// See [`RawOverlayError`].
     #[snafu(transparent)]
-    Logo { source: LogoError },
+    RawOverlay {
+        /// Source error.
+        source: RawOverlayError,
+    },
+    /// See [`RawFntError`].
     #[snafu(transparent)]
-    RawOverlay { source: RawOverlayError },
+    RawFnt {
+        /// Source error.
+        source: RawFntError,
+    },
+    /// See [`RawFatError`].
     #[snafu(transparent)]
-    RawFnt { source: RawFntError },
+    RawFat {
+        /// Source error.
+        source: RawFatError,
+    },
+    /// See [`RawBannerError`].
     #[snafu(transparent)]
-    RawFat { source: RawFatError },
+    RawBanner {
+        /// Source error.
+        source: RawBannerError,
+    },
+    /// See [`FileParseError`].
     #[snafu(transparent)]
-    RawBanner { source: RawBannerError },
-    #[snafu(transparent)]
-    BannerLoad { source: BannerLoadError },
-    #[snafu(transparent)]
-    FileParse { source: FileParseError },
+    FileParse {
+        /// Source error.
+        source: FileParseError,
+    },
 }
 
+/// Errors related to [`Rom::build`].
 #[derive(Snafu, Debug)]
 pub enum RomBuildError {
+    /// See [`io::Error`].
     #[snafu(transparent)]
-    Io { source: io::Error },
+    Io {
+        /// Source error.
+        source: io::Error,
+    },
+    /// See [`FileBuildError`].
     #[snafu(transparent)]
-    FileBuild { source: FileBuildError },
+    FileBuild {
+        /// Source error.
+        source: FileBuildError,
+    },
+    /// See [`BannerError`].
     #[snafu(transparent)]
-    Banner { source: BannerError },
+    Banner {
+        /// Source error.
+        source: BannerError,
+    },
+    /// See [`HeaderBuildError`].
     #[snafu(transparent)]
-    HeaderBuild { source: HeaderBuildError },
+    HeaderBuild {
+        /// Source error.
+        source: HeaderBuildError,
+    },
 }
 
+/// Errors related to [`Rom::save`] and [`Rom::load`].
 #[derive(Snafu, Debug)]
 pub enum RomSaveError {
+    /// Occurs when the ROM is encrypted but no Blowfish key was provided.
     #[snafu(display("blowfish key is required because ARM9 program is encrypted"))]
     BlowfishKeyNeeded,
+    /// See [`io::Error`].
     #[snafu(transparent)]
-    Io { source: io::Error },
+    Io {
+        /// Source error.
+        source: io::Error,
+    },
+    /// See [`serde_yml::Error`].
     #[snafu(transparent)]
-    SerdeJson { source: serde_yml::Error },
+    SerdeJson {
+        /// Source error.
+        source: serde_yml::Error,
+    },
+    /// See [`LogoSaveError`].
     #[snafu(transparent)]
-    LogoSave { source: LogoSaveError },
+    LogoSave {
+        /// Source error.
+        source: LogoSaveError,
+    },
+    /// See [`LogoLoadError`].
     #[snafu(transparent)]
-    LogoLoad { source: LogoLoadError },
+    LogoLoad {
+        /// Source error.
+        source: LogoLoadError,
+    },
+    /// See [`RawBuildInfoError`].
     #[snafu(transparent)]
-    RawBuildInfo { source: RawBuildInfoError },
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// See [`Arm9Error`].
     #[snafu(transparent)]
-    RawArm9 { source: RawArm9Error },
+    RawArm9 {
+        /// Source error.
+        source: Arm9Error,
+    },
+    /// See [`Arm9AutoloadError`].
     #[snafu(transparent)]
-    Arm9Autoload { source: Arm9AutoloadError },
+    Arm9Autoload {
+        /// Source error.
+        source: Arm9AutoloadError,
+    },
+    /// See [`BannerImageError`].
     #[snafu(transparent)]
-    BannerImage { source: BannerImageError },
-    #[snafu(transparent)]
-    FilesLoad { source: FilesLoadError },
+    BannerImage {
+        /// Source error.
+        source: BannerImageError,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -108,6 +183,11 @@ struct OverlayConfig {
 }
 
 impl<'a> Rom<'a> {
+    /// Loads a ROM from a path generated by [`Self::save`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if there's a file missing or the file has an invalid format.
     pub fn load<P: AsRef<Path>>(path: P, key: Option<&BlowfishKey>) -> Result<Self, RomSaveError> {
         let path = path.as_ref();
 
@@ -181,13 +261,18 @@ impl<'a> Rom<'a> {
         banner.images.load_bitmap_file(banner_path.join("bitmap.png"), banner_path.join("palette.png"))?;
 
         // --------------------- Load files ---------------------
-        let files = Files::load(path.join("files"), arm9_overlays.len() + arm7_overlays.len())?;
+        let files = FileSystem::load(path.join("files"), arm9_overlays.len() + arm7_overlays.len())?;
         let path_order =
             fs::read_to_string(path.join("path_order.txt"))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
 
         Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order })
     }
 
+    /// Saves this ROM to a path as separate files.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if a file could not be created or the a component of the ROM has an invalid format.
     pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<(), RomSaveError> {
         let path = path.as_ref();
         create_dir_all(path)?;
@@ -294,15 +379,20 @@ impl<'a> Rom<'a> {
         Ok(())
     }
 
+    /// Extracts from a raw ROM.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if a component is missing from the raw ROM.
     pub fn extract(rom: &'a raw::Rom) -> Result<Self, RomExtractError> {
         let header = rom.header()?;
         let fnt = rom.fnt()?;
         let fat = rom.fat()?;
         let banner = rom.banner()?;
-        let file_root = Files::parse(&fnt, fat, rom)?;
+        let file_root = FileSystem::parse(&fnt, fat, rom)?;
         let path_order = file_root.compute_path_order();
         Ok(Self {
-            header: Header::load_raw(&header)?,
+            header: Header::load_raw(&header),
             header_logo: Logo::decompress(&header.logo)?,
             arm9: rom.arm9()?,
             arm9_overlays: rom
@@ -316,12 +406,17 @@ impl<'a> Rom<'a> {
                 .iter()
                 .map(|ov| Overlay::parse(ov, fat, rom))
                 .collect::<Result<Vec<_>, _>>()?,
-            banner: Banner::load_raw(&banner)?,
+            banner: Banner::load_raw(&banner),
             files: file_root,
             path_order,
         })
     }
 
+    /// Builds a raw ROM.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if an I/O operation fails or a component fails to build.
     pub fn build(mut self, key: Option<&BlowfishKey>) -> Result<raw::Rom<'a>, RomBuildError> {
         let mut context = BuildContext::default();
         context.blowfish_key = key;
@@ -419,7 +514,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Write files ---------------------
         self.files.sort_for_rom();
-        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, path| {
+        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| {
             // TODO: Rewrite traverse_files as an iterator so these errors can be returned
             Self::align(&mut cursor).expect("failed to align before file");
 
@@ -457,42 +552,61 @@ impl<'a> Rom<'a> {
         Ok(())
     }
 
+    /// Returns a reference to the header logo of this [`Rom`].
     pub fn header_logo(&self) -> &Logo {
         &self.header_logo
     }
 
+    /// Returns a reference to the ARM9 program of this [`Rom`].
     pub fn arm9(&self) -> &Arm9 {
         &self.arm9
     }
 
+    /// Returns a reference to the ARM9 overlays of this [`Rom`].
     pub fn arm9_overlays(&self) -> &[Overlay] {
         &self.arm9_overlays
     }
 
+    /// Returns a reference to the ARM7 program of this [`Rom`].
     pub fn arm7(&self) -> &Arm7 {
         &self.arm7
     }
 
+    /// Returns a reference to the ARM7 overlays of this [`Rom`].
     pub fn arm7_overlays(&self) -> &[Overlay] {
         &self.arm7_overlays
     }
 }
 
+/// Build context, generated during [`Rom::build`] and later passed to [`Header::build`] to fill in the header.
 #[derive(Default)]
 pub struct BuildContext<'a> {
+    /// Header offset.
     pub header_offset: Option<u32>,
+    /// ARM9 program offset.
     pub arm9_offset: Option<u32>,
+    /// ARM7 program offset.
     pub arm7_offset: Option<u32>,
+    /// FNT offset.
     pub fnt_offset: Option<TableOffset>,
+    /// FAT offset.
     pub fat_offset: Option<TableOffset>,
+    /// ARM9 overlay table offset.
     pub arm9_ovt_offset: Option<TableOffset>,
+    /// ARM7 overlay table offset.
     pub arm7_ovt_offset: Option<TableOffset>,
+    /// Banner offset.
     pub banner_offset: Option<TableOffset>,
+    /// Blowfish key.
     pub blowfish_key: Option<&'a BlowfishKey>,
+    /// ARM9 autoload callback.
     pub arm9_autoload_callback: Option<u32>,
+    /// ARM7 autoload callback.
     pub arm7_autoload_callback: Option<u32>,
+    /// ARM9 build info offset.
     pub arm9_build_info_offset: Option<u32>,
+    /// ARM7 build info offset.
     pub arm7_build_info_offset: Option<u32>,
-
+    /// Total ROM size.
     pub rom_size: Option<u32>,
 }

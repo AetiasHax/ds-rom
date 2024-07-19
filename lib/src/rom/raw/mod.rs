@@ -18,4 +18,5 @@ pub use header::*;
 pub use overlay::*;
 pub use rom::*;
 
+/// Nitrocode, interpreted as `2` (ni), `10` (tō), `6` (roku), `c0de`.
 pub const NITROCODE: u32 = (0x2106c0de as u32).swap_bytes();

@@ -7,85 +7,103 @@ use image::{io::Reader, GenericImageView, ImageError, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
-use crate::{str::Unicode16Array, CRC_16_MODBUS};
+use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
 
 use super::{
-    raw::{self, BannerBitmap, BannerPalette, BannerVersion, Language, RawBannerError},
+    raw::{self, BannerBitmap, BannerPalette, BannerVersion, Language},
     ImageSize,
 };
 
+/// ROM banner.
 #[derive(Serialize, Deserialize)]
 pub struct Banner {
     version: BannerVersion,
+    /// Game title in different languages.
     pub title: BannerTitle,
+    /// Icon to show on the home screen.
     #[serde(skip)]
     pub images: BannerImages,
+    /// Keyframes for animated icons.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keyframes: Option<Vec<BannerKeyframe>>,
 }
 
-#[derive(Debug, Snafu)]
-pub enum BannerLoadError {
-    #[snafu(transparent)]
-    RawBanner { source: RawBannerError },
-}
-
+/// Errors related to [`Banner`].
 #[derive(Debug, Snafu)]
 pub enum BannerError {
+    /// See [`BannerImageError`].
     #[snafu(transparent)]
-    RawBanner { source: RawBannerError },
-    #[snafu(transparent)]
-    BannerFile { source: BannerImageError },
+    BannerFile {
+        /// Source error.
+        source: BannerImageError,
+    },
+    /// Occurs when trying to build a banner to place in the ROM, but there were too many keyframes.
     #[snafu(display("maximum keyframe count is {max} but got {actual}:\n{backtrace}"))]
-    TooManyKeyframes { max: usize, actual: usize, backtrace: Backtrace },
+    TooManyKeyframes {
+        /// Max allowed amount.
+        max: usize,
+        /// Actual amount.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when trying to build a banner to place in the ROM, but the version is not yet supported by this library.
     #[snafu(display("maximum supported banner version is currently {max} but got {actual}:\n{backtrace}"))]
-    VersionNotSupported { max: BannerVersion, actual: BannerVersion, backtrace: Backtrace },
+    VersionNotSupported {
+        /// Max supported version.
+        max: BannerVersion,
+        /// Actual version.
+        actual: BannerVersion,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl Banner {
-    fn load_title(
-        banner: &raw::Banner,
-        version: BannerVersion,
-        language: Language,
-    ) -> Result<Option<String>, BannerLoadError> {
+    fn load_title(banner: &raw::Banner, version: BannerVersion, language: Language) -> Option<String> {
         if version.supports_language(language) {
             if let Some(title) = banner.title(language) {
-                Ok(Some(title?.to_string()))
+                Some(title.to_string())
             } else {
-                Ok(None)
+                None
             }
         } else {
-            Ok(None)
+            None
         }
     }
 
-    pub fn load_raw(banner: &raw::Banner) -> Result<Self, BannerLoadError> {
+    /// Loads from a raw banner.
+    pub fn load_raw(banner: &raw::Banner) -> Self {
         let version = banner.version();
-        Ok(Self {
+        Self {
             version,
             title: BannerTitle {
-                japanese: Self::load_title(banner, version, Language::Japanese)?.unwrap(),
-                english: Self::load_title(banner, version, Language::English)?.unwrap(),
-                french: Self::load_title(banner, version, Language::French)?.unwrap(),
-                german: Self::load_title(banner, version, Language::German)?.unwrap(),
-                italian: Self::load_title(banner, version, Language::Italian)?.unwrap(),
-                spanish: Self::load_title(banner, version, Language::Spanish)?.unwrap(),
-                chinese: Self::load_title(banner, version, Language::Chinese)?,
-                korean: Self::load_title(banner, version, Language::Korean)?,
+                japanese: Self::load_title(banner, version, Language::Japanese).unwrap(),
+                english: Self::load_title(banner, version, Language::English).unwrap(),
+                french: Self::load_title(banner, version, Language::French).unwrap(),
+                german: Self::load_title(banner, version, Language::German).unwrap(),
+                italian: Self::load_title(banner, version, Language::Italian).unwrap(),
+                spanish: Self::load_title(banner, version, Language::Spanish).unwrap(),
+                chinese: Self::load_title(banner, version, Language::Chinese),
+                korean: Self::load_title(banner, version, Language::Korean),
             },
-            images: BannerImages::from_bitmap(*banner.bitmap()?, *banner.palette()?),
+            images: BannerImages::from_bitmap(*banner.bitmap(), *banner.palette()),
             keyframes: None,
-        })
-    }
-
-    fn crc(&self, banner: &mut raw::Banner, version: BannerVersion) -> Result<(), BannerError> {
-        if self.version < version {
-            return Ok(());
         }
-        *banner.crc_mut(version.crc_index())? = CRC_16_MODBUS.checksum(&banner.full_data()[version.crc_range()]);
-        Ok(())
     }
 
+    fn crc(&self, banner: &mut raw::Banner, version: BannerVersion) {
+        if self.version >= version {
+            *banner.crc_mut(version.crc_index()) = CRC_16_MODBUS.checksum(&banner.full_data()[version.crc_range()]);
+        }
+    }
+
+    /// Builds a raw banner to place in a ROM.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the banner version is not yet supported by this library, or there are too many
+    /// keyframes.
     pub fn build(&self) -> Result<raw::Banner, BannerError> {
         // TODO: Increase max version to Animated
         // The challenge is to convert the animated icon to indexed bitmaps. Each bitmap can use any of the 8 palettes at any
@@ -97,17 +115,17 @@ impl Banner {
         }
 
         let mut banner = raw::Banner::new(self.version);
-        self.title.copy_to_banner(&mut banner)?;
+        self.title.copy_to_banner(&mut banner);
 
-        *banner.bitmap_mut()? = self.images.bitmap;
-        *banner.palette_mut()? = self.images.palette;
+        *banner.bitmap_mut() = self.images.bitmap;
+        *banner.palette_mut() = self.images.palette;
 
         if let Some(keyframes) = &self.keyframes {
             if keyframes.len() > 64 {
                 TooManyKeyframesSnafu { max: 64usize, actual: keyframes.len() }.fail()?;
             }
 
-            let animation = banner.animation_mut()?;
+            let animation = banner.animation_mut().unwrap();
             for i in 0..keyframes.len() {
                 animation.keyframes[i] = keyframes[i].build();
             }
@@ -116,42 +134,79 @@ impl Banner {
             }
         }
 
-        self.crc(&mut banner, BannerVersion::Original)?;
-        self.crc(&mut banner, BannerVersion::China)?;
-        self.crc(&mut banner, BannerVersion::Korea)?;
-        self.crc(&mut banner, BannerVersion::Animated)?;
+        self.crc(&mut banner, BannerVersion::Original);
+        self.crc(&mut banner, BannerVersion::China);
+        self.crc(&mut banner, BannerVersion::Korea);
+        self.crc(&mut banner, BannerVersion::Animated);
 
         Ok(banner)
     }
-
-    pub fn save_images(&self) {}
 }
 
+/// Icon for the [`Banner`].
 #[derive(Default)]
 pub struct BannerImages {
+    /// Main bitmap.
     pub bitmap: BannerBitmap,
+    /// Main palette.
     pub palette: BannerPalette,
-    pub animation_bitmap_paths: Option<Box<[BannerBitmap]>>,
-    pub animation_palette_paths: Option<Box<[BannerPalette]>>,
+    /// Bitmaps for animated icon.
+    pub animation_bitmaps: Option<Box<[BannerBitmap]>>,
+    /// Palettes for animated icon
+    pub animation_palettes: Option<Box<[BannerPalette]>>,
 }
 
+/// Errors related to [`BannerImages`].
 #[derive(Debug, Snafu)]
 pub enum BannerImageError {
+    /// See [`io::Error`].
     #[snafu(transparent)]
-    Io { source: io::Error },
+    Io {
+        /// Error source.
+        source: io::Error,
+    },
+    /// See [`ImageError`].
     #[snafu(transparent)]
-    Image { source: ImageError },
+    Image {
+        /// Source error.
+        source: ImageError,
+    },
+    /// Occurs when loading a banner image with the wrong size.
     #[snafu(display("banner icon must be {expected} pixels but got {actual} pixels:\n{backtrace}"))]
-    WrongSize { expected: ImageSize, actual: ImageSize, backtrace: Backtrace },
+    WrongSize {
+        /// Expected size.
+        expected: ImageSize,
+        /// Actual input size.
+        actual: ImageSize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the bitmap has a pixel not present in the palette.
     #[snafu(display("banner icon {bitmap:?} contains a pixel at {x},{y} which is not present in the palette:\n{backtrace}"))]
-    InvalidPixel { bitmap: PathBuf, x: u32, y: u32, backtrace: Backtrace },
+    InvalidPixel {
+        /// Path to the bitmap.
+        bitmap: PathBuf,
+        /// X coordinate.
+        x: u32,
+        /// Y coordinate.
+        y: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl BannerImages {
+    /// Creates a new [`BannerImages`] from a bitmap and palette.
     pub fn from_bitmap(bitmap: BannerBitmap, palette: BannerPalette) -> Self {
-        Self { bitmap, palette, animation_bitmap_paths: None, animation_palette_paths: None }
+        Self { bitmap, palette, animation_bitmaps: None, animation_palettes: None }
     }
 
+    /// Loads from a bitmap and palette file.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`Reader::open`] or [`Reader::decode`] fails, or if the images are the wrong
+    /// size, or the bitmap has a color not present in the palette.
     pub fn load_bitmap_file<P: AsRef<Path> + Into<PathBuf>>(
         &mut self,
         bitmap_path: P,
@@ -195,6 +250,11 @@ impl BannerImages {
         Ok(())
     }
 
+    /// Saves to a bitmap and palette file in the given path.
+    ///
+    /// # Errors
+    ///
+    /// See [`RgbImage::save`].
     pub fn save_bitmap_file(&self, path: &Path) -> Result<(), BannerImageError> {
         let mut bitmap_image = RgbImage::new(32, 32);
         for y in 0..32 {
@@ -217,31 +277,39 @@ impl BannerImages {
     }
 }
 
+/// Game title in different languages.
 #[derive(Serialize, Deserialize)]
 pub struct BannerTitle {
+    /// Japanese.
     pub japanese: String,
+    /// English.
     pub english: String,
+    /// French.
     pub french: String,
+    /// German.
     pub german: String,
+    /// Italian.
     pub italian: String,
+    /// Spanish.
     pub spanish: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Chinese.
     pub chinese: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Korean.
     pub korean: Option<String>,
 }
 
 macro_rules! copy_title {
     ($banner:ident, $language:expr, $title:expr) => {
         if let Some(title) = $banner.title_mut($language) {
-            let title = title?;
             *title = Unicode16Array::from_str($title);
         }
     };
 }
 
 impl BannerTitle {
-    fn copy_to_banner(&self, banner: &mut raw::Banner) -> Result<(), BannerError> {
+    fn copy_to_banner(&self, banner: &mut raw::Banner) {
         copy_title!(banner, Language::Japanese, &self.japanese);
         copy_title!(banner, Language::English, &self.english);
         copy_title!(banner, Language::French, &self.french);
@@ -254,20 +322,30 @@ impl BannerTitle {
         if let Some(korean) = &self.korean {
             copy_title!(banner, Language::Korean, korean);
         }
-        Ok(())
     }
 }
 
+/// Keyframe for animated icon.
 #[derive(Serialize, Deserialize)]
 pub struct BannerKeyframe {
+    /// Flips the bitmap vertically.
     pub flip_vertically: bool,
+    /// Flips the bitmap horizontally.
     pub flip_horizontally: bool,
+    /// Palette index.
     pub palette: usize,
+    /// Bitmap index.
     pub bitmap: usize,
+    /// Duration in frames.
     pub frame_duration: usize,
 }
 
 impl BannerKeyframe {
+    /// Builds a raw keyframe.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the frame duration, bitmap index or palette do not fit in the raw keyframe.
     pub fn build(&self) -> raw::BannerKeyframe {
         raw::BannerKeyframe::new()
             .with_frame_duration(self.frame_duration.try_into().unwrap())

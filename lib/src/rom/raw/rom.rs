@@ -6,8 +6,6 @@ use std::{
     path::Path,
 };
 
-use snafu::{Backtrace, ResultExt, Snafu};
-
 use crate::rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets};
 
 use super::{
@@ -15,34 +13,45 @@ use super::{
     RawHeaderError, RawOverlayError,
 };
 
-#[derive(Debug, Snafu)]
-pub enum RomReadError {
-    #[snafu(display("io error: {source}:\n{backtrace}"))]
-    Io { source: io::Error, backtrace: Backtrace },
-}
-
+/// A raw DS ROM, see the plain struct [here](super::super::Rom).
 pub struct Rom<'a> {
     data: Cow<'a, [u8]>,
 }
 
 impl<'a> Rom<'a> {
+    /// Creates a new ROM from raw data.
     pub fn new<T: Into<Cow<'a, [u8]>>>(data: T) -> Self {
         Self { data: data.into() }
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, RomReadError> {
-        let mut file = File::open(path).context(IoSnafu {})?;
-        let size = file.metadata().context(IoSnafu {})?.len();
+    /// Loads from a ROM file.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if an I/O operation fails.
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, io::Error> {
+        let mut file = File::open(path)?;
+        let size = file.metadata()?.len();
         let mut buf = vec![0; size as usize];
-        file.read_exact(&mut buf).context(IoSnafu)?;
+        file.read_exact(&mut buf)?;
         let data: Cow<[u8]> = buf.into();
         Ok(Self::new(data))
     }
 
+    /// Returns the header of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Header::borrow_from_slice`].
     pub fn header(&self) -> Result<&Header, RawHeaderError> {
         Header::borrow_from_slice(self.data.as_ref())
     }
 
+    /// Returns the ARM9 program of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
     pub fn arm9(&self) -> Result<Arm9, RawHeaderError> {
         let header = self.header()?;
         let start = header.arm9.offset as usize;
@@ -70,6 +79,11 @@ impl<'a> Rom<'a> {
         ))
     }
 
+    /// Returns a reference to the ARM9 footer of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice`].
     pub fn arm9_footer(&self) -> Result<&Arm9Footer, Arm9FooterError> {
         let header = self.header()?;
         let start = (header.arm9.offset + header.arm9.size) as usize;
@@ -78,6 +92,11 @@ impl<'a> Rom<'a> {
         Arm9Footer::borrow_from_slice(data)
     }
 
+    /// Returns a mutable reference to the ARM9 footer of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice_mut`].
     pub fn arm9_footer_mut(&mut self) -> Result<&mut Arm9Footer, Arm9FooterError> {
         let header = self.header()?;
         let start = (header.arm9.offset + header.arm9.size) as usize;
@@ -86,6 +105,11 @@ impl<'a> Rom<'a> {
         Arm9Footer::borrow_from_slice_mut(data)
     }
 
+    /// Returns the ARM9 overlay table of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Overlay::borrow_from_slice`].
     pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
         let start = header.arm9_overlays.offset as usize;
@@ -98,6 +122,11 @@ impl<'a> Rom<'a> {
         }
     }
 
+    /// Returns the number of ARM9 overlays in this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
     pub fn num_arm9_overlays(&self) -> Result<usize, RawHeaderError> {
         let header = self.header()?;
         let start = header.arm9_overlays.offset as usize;
@@ -105,6 +134,11 @@ impl<'a> Rom<'a> {
         Ok((end - start) / size_of::<Overlay>())
     }
 
+    /// Returns the ARM7 program of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
     pub fn arm7(&self) -> Result<Arm7, RawHeaderError> {
         let header = self.header()?;
         let start = header.arm7.offset as usize;
@@ -125,6 +159,11 @@ impl<'a> Rom<'a> {
         ))
     }
 
+    /// Returns the ARM7 overlay table of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Overlay::borrow_from_slice`].
     pub fn arm7_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
         let start = header.arm7_overlays.offset as usize;
@@ -137,6 +176,11 @@ impl<'a> Rom<'a> {
         }
     }
 
+    /// Returns the number of ARM7 overlays in this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
     pub fn num_arm7_overlays(&self) -> Result<usize, RawHeaderError> {
         let header = self.header()?;
         let start = header.arm7_overlays.offset as usize;
@@ -144,6 +188,11 @@ impl<'a> Rom<'a> {
         Ok((end - start) / size_of::<Overlay>())
     }
 
+    /// Returns the FNT of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Fnt::borrow_from_slice`].
     pub fn fnt(&self) -> Result<Fnt, RawFntError> {
         let header = self.header()?;
         let start = header.file_names.offset as usize;
@@ -152,6 +201,11 @@ impl<'a> Rom<'a> {
         Fnt::borrow_from_slice(data)
     }
 
+    /// Returns the FAT of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`FileAlloc::borrow_from_slice`].
     pub fn fat(&self) -> Result<&[FileAlloc], RawFatError> {
         let header = self.header()?;
         let start = header.file_allocs.offset as usize;
@@ -161,6 +215,11 @@ impl<'a> Rom<'a> {
         Ok(allocs)
     }
 
+    /// Returns the banner of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Banner::borrow_from_slice`].
     pub fn banner(&self) -> Result<Banner, RawBannerError> {
         let header = self.header()?;
         let start = header.banner_offset as usize;
@@ -168,10 +227,16 @@ impl<'a> Rom<'a> {
         Banner::borrow_from_slice(data)
     }
 
+    /// Returns a reference to the data of this [`Rom`].
     pub fn data(&self) -> &[u8] {
         &self.data
     }
 
+    /// Saves this ROM to a new file.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if an I/O operation fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), io::Error> {
         fs::write(path, self.data())
     }

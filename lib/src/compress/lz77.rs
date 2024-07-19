@@ -5,6 +5,8 @@ use std::{
 
 use crate::rom::raw::HeaderVersion;
 
+/// De/compresses data using a backwards [LZ77])(https://en.wikipedia.org/wiki/LZ77_and_LZ78#LZ77) algorithm. "Backwards"
+/// refers to starting the de/compression from the end of the file and moving towards the beginning.
 pub struct Lz77 {}
 
 const LENGTH_BITS: usize = 4;
@@ -249,6 +251,12 @@ impl Lz77 {
         Ok(())
     }
 
+    /// Compresses `bytes[start..]` and returns the result. All bytes before `start` are included in the output. Due to version
+    /// differences in the compression algorithm, there is a `version` parameter taken from the ROM header.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if an I/O operation fails.
     pub fn compress(&self, version: HeaderVersion, bytes: &[u8], start: usize) -> Result<Box<[u8]>, io::Error> {
         let mut compressed = Vec::with_capacity(bytes.len());
         let num_identical = self.compress_bytes(version, &bytes[start..], &mut compressed)?;
@@ -307,6 +315,7 @@ impl Lz77 {
         (total_size, read_offset, write_offset)
     }
 
+    /// Decompresses `bytes` and returns the result.
     pub fn decompress(&self, bytes: &[u8]) -> Box<[u8]> {
         let (total_size, read_offset, write_offset) = self.read_footer(bytes);
 

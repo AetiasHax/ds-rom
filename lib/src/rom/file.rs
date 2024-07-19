@@ -5,7 +5,7 @@ use std::{
     fmt::Display,
     fs::{self},
     io::{self, Write},
-    path::{Path, PathBuf, StripPrefixError},
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -15,7 +15,8 @@ use crate::str::BlobSize;
 
 use super::raw::{self, FileAlloc, Fnt, FntDirectory, FntFile, FntSubtable, RawHeaderError};
 
-pub struct Files<'a> {
+/// Contains files and directories to be placed into a ROM.
+pub struct FileSystem<'a> {
     num_overlays: usize,
     files: Vec<File<'a>>,
     dirs: Vec<Dir>,
@@ -23,15 +24,16 @@ pub struct Files<'a> {
     next_dir_id: u16,
 }
 
+/// A file for the [`FileSystem`] struct.
 #[derive(Clone)]
 pub struct File<'a> {
     id: u16,
     name: String,
-    parent_id: u16,
     original_offset: u32,
     contents: Cow<'a, [u8]>,
 }
 
+/// A directory for the [`FileSystem`] struct.
 #[derive(Clone)]
 pub struct Dir {
     id: u16,
@@ -40,39 +42,57 @@ pub struct Dir {
     children: Vec<u16>,
 }
 
+/// Errors related to [`FileSystem::parse`].
 #[derive(Debug, Snafu)]
 pub enum FileParseError {
+    /// Occurs when a file ID is missing from the raw FNT.
     #[snafu(display("the file ID {id} is missing from the FNT:\n{backtrace}"))]
-    MissingFileId { id: u16, backtrace: Backtrace },
+    MissingFileId {
+        /// File ID.
+        id: u16,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when a directory ID is missing from the faw FNT.
     #[snafu(display("the directory ID {id} is missing from the FNT:\n{backtrace}"))]
-    MissingDirId { id: u16, backtrace: Backtrace },
+    MissingDirId {
+        /// Directory ID.
+        id: u16,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`RawHeaderError`].
     #[snafu(transparent)]
-    RawHeader { source: RawHeaderError },
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
 }
 
+/// Errors related to [`FileSystem::build_fnt`].
 #[derive(Debug, Snafu)]
 pub enum FileBuildError {
+    /// Occurs when a file name contains non-ASCII characters.
     #[snafu(display("the file name {name} contains one or more non-ASCII characters:\n{backtrace}"))]
-    NotAscii { name: String, backtrace: Backtrace },
-}
-
-#[derive(Debug, Snafu)]
-pub enum FilesLoadError {
-    #[snafu(transparent)]
-    Io { source: io::Error },
-    #[snafu(transparent)]
-    StripPrefix { source: StripPrefixError },
+    NotAscii {
+        /// File name.
+        name: String,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 const ROOT_DIR_ID: u16 = 0xf000;
 
-impl<'a> Files<'a> {
+impl<'a> FileSystem<'a> {
+    /// Creates a new [`FileSystem`]. The number of overlays are used to determine the first file ID, since overlays are also
+    /// located in the FAT but not the FNT.
     pub fn new(num_overlays: usize) -> Self {
         let root = Dir { id: ROOT_DIR_ID, name: "/".to_string(), parent_id: 0, children: vec![] };
         Self { num_overlays, files: vec![], dirs: vec![root], next_file_id: num_overlays as u16, next_dir_id: ROOT_DIR_ID + 1 }
     }
 
-    fn load_in<P: AsRef<Path>>(&mut self, path: P, parent_id: u16) -> Result<(), FilesLoadError> {
+    fn load_in<P: AsRef<Path>>(&mut self, path: P, parent_id: u16) -> Result<(), io::Error> {
         // Sort children by FNT order so the file/dir IDs become correct
         let mut children =
             fs::read_dir(&path)?.collect::<Result<Vec<_>, _>>()?.into_iter().map(|entry| entry.path()).collect::<Vec<_>>();
@@ -95,20 +115,29 @@ impl<'a> Files<'a> {
         Ok(())
     }
 
-    pub fn load<P: AsRef<Path>>(root: P, num_overlays: usize) -> Result<Self, FilesLoadError> {
+    /// Loads a file system from the given root directory. This will traverse and add all folders and files into the
+    /// [`FileSystem`] struct.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if an I/O operation fails.
+    pub fn load<P: AsRef<Path>>(root: P, num_overlays: usize) -> Result<Self, io::Error> {
         let mut files = Self::new(num_overlays);
         files.load_in(root, ROOT_DIR_ID)?;
         Ok(files)
     }
 
+    /// Returns whether the ID is a directory ID.
     pub fn is_dir(id: u16) -> bool {
         id >= ROOT_DIR_ID
     }
 
+    /// Returns whether the ID is a file ID.
     pub fn is_file(id: u16) -> bool {
         !Self::is_dir(id)
     }
 
+    /// Returns the name of a directory or file.
     pub fn name(&self, id: u16) -> &str {
         if Self::is_dir(id) {
             &self.dir(id).name
@@ -117,6 +146,7 @@ impl<'a> Files<'a> {
         }
     }
 
+    /// Returns a directory.
     pub fn dir(&self, id: u16) -> &Dir {
         &self.dirs[id as usize & 0xfff]
     }
@@ -125,6 +155,7 @@ impl<'a> Files<'a> {
         &mut self.dirs[id as usize & 0xfff]
     }
 
+    /// Returns a file.
     pub fn file(&self, id: u16) -> &File {
         &self.files[id as usize - self.num_overlays]
     }
@@ -158,19 +189,19 @@ impl<'a> Files<'a> {
                 max_file_id = max_file_id.max(id);
                 let alloc = fat[id as usize];
                 let contents = &rom.data()[alloc.range()];
-                files[id as usize] = Some(File {
-                    id,
-                    name,
-                    parent_id: parent.id,
-                    original_offset: alloc.start,
-                    contents: Cow::Borrowed(contents),
-                });
+                files[id as usize] = Some(File { id, name, original_offset: alloc.start, contents: Cow::Borrowed(contents) });
                 parent.children.push(id);
             }
         }
         (max_file_id, max_dir_id)
     }
 
+    /// Parses an FNT, FAT and ROM to create a [`FileSystem`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`raw::Rom::num_arm9_overlays`] or [`raw::Rom::num_arm7_overlays`] fails, or if
+    /// a file or directory ID is missing from the FNT.
     pub fn parse(fnt: &Fnt, fat: &[FileAlloc], rom: &'a raw::Rom) -> Result<Self, FileParseError> {
         let num_overlays = rom.num_arm9_overlays()? + rom.num_arm7_overlays()?;
 
@@ -192,7 +223,7 @@ impl<'a> Files<'a> {
             .map(|(id, d)| d.ok_or(MissingDirIdSnafu { id: id as u16 + ROOT_DIR_ID }.build()))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Files { files, dirs, num_overlays, next_file_id: max_file_id + 1, next_dir_id: max_dir_id + 1 })
+        Ok(FileSystem { files, dirs, num_overlays, next_file_id: max_file_id + 1, next_dir_id: max_dir_id + 1 })
     }
 
     fn find_first_file_id(&self, parent: &Dir) -> u16 {
@@ -250,13 +281,18 @@ impl<'a> Files<'a> {
         Ok(())
     }
 
+    /// Builds an FNT from this [`FileSystem`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if a file/directory name contains non-ASCII characters.
     pub fn build_fnt(&self) -> Result<Fnt, FileBuildError> {
         let mut subtables = vec![];
         self.build_fnt_recursive(&mut subtables, ROOT_DIR_ID)?;
         Ok(Fnt { subtables: subtables.into_boxed_slice() })
     }
 
-    pub fn compare_for_fnt(a: &str, a_dir: bool, b: &str, b_dir: bool) -> Ordering {
+    fn compare_for_fnt(a: &str, a_dir: bool, b: &str, b_dir: bool) -> Ordering {
         let files_first = a_dir.cmp(&b_dir);
 
         let len = a.len().min(b.len());
@@ -269,7 +305,7 @@ impl<'a> Files<'a> {
         files_first.then(alphabetic_order).then(shortest_first)
     }
 
-    pub fn sort_for_fnt_in(&mut self, parent_id: u16) {
+    fn sort_for_fnt_in(&mut self, parent_id: u16) {
         let mut parent = self.dir(parent_id).clone();
         parent
             .children
@@ -284,11 +320,12 @@ impl<'a> Files<'a> {
         *self.dir_mut(parent_id) = parent;
     }
 
+    /// Sorts the entire [`FileSystem`] so that it's laid out in the right order for the FNT.
     pub fn sort_for_fnt(&mut self) {
         self.sort_for_fnt_in(ROOT_DIR_ID);
     }
 
-    pub fn compare_for_rom(a: &str, b: &str) -> Ordering {
+    fn compare_for_rom(a: &str, b: &str) -> Ordering {
         let len = a.len().min(b.len());
         let a_chars = a[..len].chars();
         let b_chars = b[..len].chars();
@@ -299,7 +336,7 @@ impl<'a> Files<'a> {
         ascii_order.then(shortest_first)
     }
 
-    pub fn sort_for_rom_in(&mut self, parent_id: u16) {
+    fn sort_for_rom_in(&mut self, parent_id: u16) {
         let mut parent = self.dir(parent_id).clone();
         parent.children.sort_by(|a, b| Self::compare_for_rom(self.name(*a), self.name(*b)));
 
@@ -312,6 +349,7 @@ impl<'a> Files<'a> {
         *self.dir_mut(parent_id) = parent;
     }
 
+    /// Sorts the entire [`FileSystem`] so that files laid out in the right order for appending to the ROM.
     pub fn sort_for_rom(&mut self) {
         self.sort_for_rom_in(ROOT_DIR_ID);
     }
@@ -331,7 +369,7 @@ impl<'a> Files<'a> {
         }
     }
 
-    pub fn find_path(&self, path: &str) -> Option<u16> {
+    fn find_path(&self, path: &str) -> Option<u16> {
         self.find_path_in(path, ROOT_DIR_ID)
     }
 
@@ -346,7 +384,7 @@ impl<'a> Files<'a> {
 
     fn make_child_file(&mut self, name: String, parent_id: u16, contents: Vec<u8>) -> &File {
         let id = self.next_file_id;
-        self.files.push(File { id, name, parent_id, original_offset: 0, contents: contents.into() });
+        self.files.push(File { id, name, original_offset: 0, contents: contents.into() });
         let parent = self.dir_mut(parent_id);
         parent.children.push(id);
         self.next_file_id += 1;
@@ -371,6 +409,8 @@ impl<'a> Files<'a> {
         visited.insert(subdir.id);
     }
 
+    /// Traverses the [`FileSystem`] and calls `callback` for each file found. The directories will be prioritized according to
+    /// the `path_order`.
     pub fn traverse_files<I, Cb>(&self, path_order: I, mut callback: Cb)
     where
         I: IntoIterator<Item = &'a str>,
@@ -397,7 +437,7 @@ impl<'a> Files<'a> {
         }
     }
 
-    pub fn max_file_id_in(&self, parent_id: u16) -> u16 {
+    fn max_file_id_in(&self, parent_id: u16) -> u16 {
         let mut max_id = 0;
         let parent = self.dir(parent_id);
         for child in &parent.children {
@@ -409,12 +449,14 @@ impl<'a> Files<'a> {
         max_id
     }
 
+    /// Returns the max file ID of this [`FileSystem`].
     pub fn max_file_id(&self) -> u16 {
         self.max_file_id_in(ROOT_DIR_ID)
     }
 
-    pub fn display(&self, indent: usize) -> DisplayFiles {
-        DisplayFiles { files: self, parent_id: ROOT_DIR_ID, indent }
+    /// Creates a [`DisplayFileSystem`] which implements [`Display`].
+    pub fn display(&self, indent: usize) -> DisplayFileSystem {
+        DisplayFileSystem { files: self, parent_id: ROOT_DIR_ID, indent }
     }
 
     fn traverse_and_compute_path_order(&self, path: &str, path_order: &mut BinaryHeap<PathOrder>, parent: &Dir) {
@@ -437,6 +479,8 @@ impl<'a> Files<'a> {
         paths.windows(2).all(|w| Self::compare_for_rom(self.name(w[0].id), self.name(w[1].id)).is_lt())
     }
 
+    /// Computes the path order that the [`FileSystem`] is currently in. This can be saved and reused in
+    /// [`Self::traverse_files`] to traverse in the same order later.
     pub fn compute_path_order(&self) -> Vec<String> {
         let mut path_order = BinaryHeap::new();
         self.traverse_and_compute_path_order("", &mut path_order, self.dir(ROOT_DIR_ID));
@@ -492,20 +536,24 @@ impl<'a> Files<'a> {
 }
 
 impl<'a> File<'a> {
+    /// Returns a reference to the name of this [`File`].
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the ID of this [`File`].
     pub fn id(&self) -> u16 {
         self.id
     }
 
+    /// Returns a reference to the contents of this [`File`].
     pub fn contents(&self) -> &[u8] {
         &self.contents
     }
 }
 
 impl Dir {
+    /// Returns whether this [`Dir`] is the root directory.
     pub fn is_root(&self) -> bool {
         self.id == ROOT_DIR_ID
     }
@@ -531,19 +579,20 @@ impl Ord for PathOrder {
     }
 }
 
-pub struct DisplayFiles<'a> {
-    files: &'a Files<'a>,
+/// Can be used to display the file hierarchy of a [`FileSystem`].
+pub struct DisplayFileSystem<'a> {
+    files: &'a FileSystem<'a>,
     parent_id: u16,
     indent: usize,
 }
 
-impl<'a> Display for DisplayFiles<'a> {
+impl<'a> Display for DisplayFileSystem<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let parent = self.files.dir(self.parent_id);
         let files = &self.files;
         for child in &parent.children {
-            if Files::is_dir(*child) {
+            if FileSystem::is_dir(*child) {
                 write!(f, "{i}0x{:04x}: {: <32}", *child, files.name(*child))?;
                 writeln!(f)?;
                 write!(f, "{}", Self { files, parent_id: *child, indent: self.indent + 2 })?;

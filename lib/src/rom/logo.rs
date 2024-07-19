@@ -8,22 +8,22 @@ use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode};
 /// Huffman codes for every combination of 4 pixels
 const HUFFMAN: NibbleHuffman = NibbleHuffman {
     codes: [
-        NibbleHuffmanCode { value: 0b0000, length: 1, bits: 0b1 },
-        NibbleHuffmanCode { value: 0b0001, length: 4, bits: 0b0110 },
-        NibbleHuffmanCode { value: 0b0010, length: 5, bits: 0b01010 },
-        NibbleHuffmanCode { value: 0b0011, length: 4, bits: 0b0100 },
-        NibbleHuffmanCode { value: 0b0100, length: 5, bits: 0b00010 },
-        NibbleHuffmanCode { value: 0b0101, length: 6, bits: 0b011110 },
-        NibbleHuffmanCode { value: 0b0110, length: 6, bits: 0b010110 },
-        NibbleHuffmanCode { value: 0b0111, length: 6, bits: 0b000110 },
-        NibbleHuffmanCode { value: 0b1000, length: 5, bits: 0b00110 },
-        NibbleHuffmanCode { value: 0b1001, length: 6, bits: 0b011111 },
-        NibbleHuffmanCode { value: 0b1010, length: 6, bits: 0b010111 },
-        NibbleHuffmanCode { value: 0b1011, length: 6, bits: 0b000111 },
-        NibbleHuffmanCode { value: 0b1100, length: 4, bits: 0b0010 },
-        NibbleHuffmanCode { value: 0b1101, length: 5, bits: 0b01110 },
-        NibbleHuffmanCode { value: 0b1110, length: 5, bits: 0b00111 },
-        NibbleHuffmanCode { value: 0b1111, length: 4, bits: 0b0000 },
+        /* 0000 */ NibbleHuffmanCode { length: 1, bits: 0b1 },
+        /* 0001 */ NibbleHuffmanCode { length: 4, bits: 0b0110 },
+        /* 0010 */ NibbleHuffmanCode { length: 5, bits: 0b01010 },
+        /* 0011 */ NibbleHuffmanCode { length: 4, bits: 0b0100 },
+        /* 0100 */ NibbleHuffmanCode { length: 5, bits: 0b00010 },
+        /* 0101 */ NibbleHuffmanCode { length: 6, bits: 0b011110 },
+        /* 0110 */ NibbleHuffmanCode { length: 6, bits: 0b010110 },
+        /* 0111 */ NibbleHuffmanCode { length: 6, bits: 0b000110 },
+        /* 1000 */ NibbleHuffmanCode { length: 5, bits: 0b00110 },
+        /* 1001 */ NibbleHuffmanCode { length: 6, bits: 0b011111 },
+        /* 1010 */ NibbleHuffmanCode { length: 6, bits: 0b010111 },
+        /* 1011 */ NibbleHuffmanCode { length: 6, bits: 0b000111 },
+        /* 1100 */ NibbleHuffmanCode { length: 4, bits: 0b0010 },
+        /* 1101 */ NibbleHuffmanCode { length: 5, bits: 0b01110 },
+        /* 1110 */ NibbleHuffmanCode { length: 5, bits: 0b00111 },
+        /* 1111 */ NibbleHuffmanCode { length: 4, bits: 0b0000 },
     ],
 };
 
@@ -34,6 +34,7 @@ const SIZE: usize = WIDTH * HEIGHT / 8;
 const LOGO_HEADER: u32 = 0x0000d082;
 const LOGO_FOOTER: u32 = 0xfff4c307;
 
+/// Header logo.
 pub struct Logo {
     pixels: [u8; SIZE],
 }
@@ -44,37 +45,95 @@ impl Default for Logo {
     }
 }
 
+/// Errors related to [`Logo`].
 #[derive(Snafu, Debug)]
 pub enum LogoError {
+    /// Occurs when decompressing a logo with an invalid header.
     #[snafu(display("invalid logo header, expected {expected:08x} but got {actual:08x}:\n{backtrace}"))]
-    InvalidHeader { expected: u32, actual: u32, backtrace: Backtrace },
+    InvalidHeader {
+        /// Expected header.
+        expected: u32,
+        /// Actual input header.
+        actual: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when decompressing a logo with an invalid footer.
     #[snafu(display("invalid logo footer, expected {expected:08x} but got {actual:08x}:\n{backtrace}"))]
-    InvalidFooter { expected: u32, actual: u32, backtrace: Backtrace },
+    InvalidFooter {
+        /// Expected footer.
+        expected: u32,
+        /// Actual input footer.
+        actual: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when decompressing a logo which doesn't yield the correct bitmap size.
     #[snafu(display("wrong logo size, expected {expected} bytes but got {actual} bytes:\n{backtrace}"))]
-    WrongSize { expected: usize, actual: usize, backtrace: Backtrace },
+    WrongSize {
+        /// Expected size.
+        expected: usize,
+        /// Actual input size.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
+/// Errors when loading a [`Logo`].
 #[derive(Snafu, Debug)]
 pub enum LogoLoadError {
+    /// See [`io::Error`].
     #[snafu(transparent)]
-    Io { source: io::Error },
+    Io {
+        /// Source error.
+        source: io::Error,
+    },
+    /// See [`ImageError`].
     #[snafu(transparent)]
-    Image { source: ImageError },
+    Image {
+        /// Source error.
+        source: ImageError,
+    },
+    /// Occurs when the input image has a pixel which isn't white or black.
     #[snafu(display("logo image contains a pixel at {x},{y} which isn't white or black:\n{backtrace}"))]
-    InvalidColor { x: u32, y: u32, backtrace: Backtrace },
+    InvalidColor {
+        /// X coordinate.
+        x: u32,
+        /// Y coordinate.
+        y: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input image has the wrong size.
     #[snafu(display("logo image must be {expected} pixels but got {actual} pixels:\n{backtrace}"))]
-    ImageSize { expected: ImageSize, actual: ImageSize, backtrace: Backtrace },
+    ImageSize {
+        /// Expected size.
+        expected: ImageSize,
+        /// Actual input size.
+        actual: ImageSize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
+/// Errors when saving a [`Logo`].
 #[derive(Snafu, Debug)]
 pub enum LogoSaveError {
+    /// See [`ImageError`].
     #[snafu(transparent)]
-    Image { source: ImageError },
+    Image {
+        /// Source error.
+        source: ImageError,
+    },
 }
 
+/// Size of an image.
 #[derive(Debug)]
 pub struct ImageSize {
+    /// Image width.
     pub width: u32,
+    /// Image height.
     pub height: u32,
 }
 
@@ -93,6 +152,11 @@ fn reverse32(data: &mut [u8]) {
 }
 
 impl Logo {
+    /// Saves this [`Logo`] to a PNG image.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`GrayImage::save`] fails.
     pub fn save_png<P: AsRef<Path>>(&self, path: P) -> Result<(), LogoSaveError> {
         let mut image = GrayImage::new(WIDTH as u32, HEIGHT as u32);
         for y in 0..HEIGHT {
@@ -105,6 +169,11 @@ impl Logo {
         Ok(())
     }
 
+    /// Loads a [`Logo`] from a PNG image.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if it failed to open or decode the image, or the image has the wrong size or colors.
     pub fn from_png<P: AsRef<Path>>(path: P) -> Result<Self, LogoLoadError> {
         let image = Reader::open(path)?.decode()?;
         if image.width() != WIDTH as u32 || image.height() != HEIGHT as u32 {
@@ -126,6 +195,11 @@ impl Logo {
         Ok(logo)
     }
 
+    /// Decompresses a [`Logo`] from a compressed logo in the ROM header.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the compressed logo yields an invalid header, footer or bitmap size.
     pub fn decompress(data: &[u8]) -> Result<Self, LogoError> {
         let data = {
             let mut swapped_data = data.to_owned();
@@ -134,7 +208,7 @@ impl Logo {
         };
 
         let mut bytes = [0u8; SIZE + 8];
-        HUFFMAN.decompress(&data, &mut bytes);
+        HUFFMAN.decompress_to_slice(&data, &mut bytes);
 
         let header = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         if header != LOGO_HEADER {
@@ -163,6 +237,7 @@ impl Logo {
         Ok(logo)
     }
 
+    /// Compresses this [`Logo`] to put into a ROM header.
     pub fn compress(&self) -> [u8; 0x9c] {
         let mut diff = [0u8; SIZE + 8];
         self.store_tiles(&mut diff[4..SIZE + 4]);
@@ -172,7 +247,7 @@ impl Logo {
         diff[SIZE + 4..SIZE + 8].copy_from_slice(&LOGO_FOOTER.to_le_bytes());
 
         let mut bytes = [0u8; 0x9c];
-        HUFFMAN.compress(&diff, &mut bytes);
+        HUFFMAN.compress_to_slice(&diff, &mut bytes);
         reverse32(&mut bytes);
         bytes
     }
@@ -205,6 +280,7 @@ impl Logo {
         }
     }
 
+    /// Returns the pixel value at the given coordinates.
     pub fn get_pixel(&self, x: usize, y: usize) -> bool {
         let index = (y * WIDTH + x) / 8;
         if index >= self.pixels.len() {
@@ -215,6 +291,7 @@ impl Logo {
         }
     }
 
+    /// Sets the pixel value at the given coordinates.
     pub fn set_pixel(&mut self, x: usize, y: usize, value: bool) {
         let index = (y * WIDTH + x) / 8;
         if index < self.pixels.len() {

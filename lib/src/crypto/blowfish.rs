@@ -8,6 +8,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use snafu::{Backtrace, Snafu};
 
+/// De/encrypts data using the [Blowfish](https://en.wikipedia.org/wiki/Blowfish_(cipher)) block cipher.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Blowfish {
@@ -15,10 +16,16 @@ pub struct Blowfish {
     sbox: [[u32; 0x100]; 4],
 }
 
+/// Errors related to [`Blowfish`].
 #[derive(Debug, Snafu)]
 pub enum BlowfishError {
+    /// Occurs when there's an odd number of blocks when de/encrypting, which happens if the data is not a multiple of 8 bytes
+    /// long.
     #[snafu(display("data must have an even number of blocks for Blowfish encryption/decryption:\n{backtrace}"))]
-    OddBlockCount { backtrace: Backtrace },
+    OddBlockCount {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl Blowfish {
@@ -44,6 +51,11 @@ impl Blowfish {
         *right = y ^ self.subkeys[17];
     }
 
+    /// Encrypts `data` in place.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if `data.len()` is not a multiple of 8.
     pub fn encrypt(&self, data: &mut [u8]) -> Result<(), BlowfishError> {
         if data.len() % 8 != 0 {
             OddBlockCountSnafu {}.fail()?;
@@ -70,6 +82,11 @@ impl Blowfish {
         *right = y ^ self.subkeys[0];
     }
 
+    /// Decrypts `data` in place.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if `data.len()` is not a multiple of 8.
     pub fn decrypt(&self, data: &mut [u8]) -> Result<(), BlowfishError> {
         if data.len() % 8 != 0 {
             OddBlockCountSnafu {}.fail()?;
@@ -108,7 +125,10 @@ impl Blowfish {
         }
     }
 
-    pub fn new(key: &BlowfishKey, seed: u32, level: BlowfishLevel) -> Result<Self, BlowfishError> {
+    /// Creates a new Blowfish instance from the `key`, `seed` and `level`. The `key` is found inside the ARM7 BIOS, and is
+    /// modulated by the `seed` which is normally the gamecode found in the ROM header. The `level` is the number of times to
+    /// modulate the key using the seed.
+    pub fn new(key: &BlowfishKey, seed: u32, level: BlowfishLevel) -> Self {
         let mut blowfish = Self { subkeys: [0; 18], sbox: [[0; 0x100]; 4] };
         bytemuck::bytes_of_mut(&mut blowfish).copy_from_slice(&key.0);
 
@@ -127,29 +147,52 @@ impl Blowfish {
             blowfish.apply_code(&mut code0, &mut code1, &mut code2);
         }
 
-        Ok(blowfish)
+        blowfish
     }
 }
 
+/// Number of times to modulate the [`Blowfish`] key.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BlowfishLevel {
+    /// One modulation.
     Level1,
+    /// Two modulations.
     Level2,
+    /// Three modulations.
     Level3,
 }
 
+/// A base key used for [`Blowfish`].
 pub struct BlowfishKey([u8; 0x1048]);
 
+/// Errors related to [`BlowfishKey`].
 #[derive(Snafu, Debug)]
 pub enum BlowfishKeyError {
+    /// I/O error.
     #[snafu(transparent)]
-    Io { source: io::Error },
+    Io {
+        /// Source error.
+        source: io::Error,
+    },
+    /// Occurs when the input is too small to be used as a Blowfish key.
     #[snafu(display("expected ARM7 BIOS to be at least {expected} bytes long but got {actual} bytes:\n{backtrace}"))]
-    TooSmall { expected: usize, actual: usize, backtrace: Backtrace },
+    TooSmall {
+        /// Expected minimum size.
+        expected: usize,
+        /// Actual input size.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl BlowfishKey {
-    pub fn from_arm7_bios<P: AsRef<Path>>(path: P) -> Result<Self, BlowfishKeyError> {
+    /// Extracts the base Blowfish key from the ARM7 BIOS.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the file is too small to contain a Blowfish key.
+    pub fn from_arm7_bios_path<P: AsRef<Path>>(path: P) -> Result<Self, BlowfishKeyError> {
         let mut file = File::open(path)?;
         let size = file.metadata()?.len() as usize;
         if size < 0x30 + size_of::<Self>() {

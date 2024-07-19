@@ -4,16 +4,29 @@ use bytemuck::{Pod, Zeroable};
 use serde::{de, Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
+/// A fixed-size ASCII string.
 #[derive(Clone, Copy)]
 pub struct AsciiArray<const N: usize>(pub [u8; N]);
 
+/// Errors related to [`AsciiArray`].
 #[derive(Debug, Snafu)]
 pub enum AsciiArrayError {
+    /// Occurs when an input character is not in ASCII.
     #[snafu(display("the provided string '{string}' contains one or more non-ASCII characters:\n{backtrace}"))]
-    NotAscii { string: String, backtrace: Backtrace },
+    NotAscii {
+        /// The invalid string.
+        string: String,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl<const N: usize> AsciiArray<N> {
+    /// Loads from a `&str`.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the string contains a non-ASCII character.
     pub fn from_str(string: &str) -> Result<Self, AsciiArrayError> {
         let mut chars = [0u8; N];
         for (i, ch) in string.chars().take(N).enumerate() {
@@ -27,6 +40,7 @@ impl<const N: usize> AsciiArray<N> {
 }
 
 impl AsciiArray<4> {
+    /// Converts a four-character ASCII string to a `u32`.
     pub fn to_le_u32(&self) -> u32 {
         u32::from_le_bytes(self.0)
     }
@@ -63,6 +77,7 @@ impl<'de, const N: usize> Deserialize<'de> for AsciiArray<N> {
     }
 }
 
+/// A fixed-size 16-bit Unicode string.
 #[derive(Clone, Copy)]
 pub struct Unicode16Array<const N: usize>(pub [u16; N]);
 
@@ -70,6 +85,7 @@ unsafe impl<const N: usize> Zeroable for Unicode16Array<N> {}
 unsafe impl<const N: usize> Pod for Unicode16Array<N> {}
 
 impl<const N: usize> Unicode16Array<N> {
+    /// Loads from a `&str`.
     pub fn from_str(string: &str) -> Self {
         let mut chars = [0u16; N];
         let mut i = 0;
@@ -119,6 +135,8 @@ impl Display for BlobSize {
     }
 }
 
+/// For debugging purposes.
+#[allow(unused)]
 pub(crate) fn write_hex(f: &mut std::fmt::Formatter<'_>, data: &[u8]) -> std::fmt::Result {
     for (offset, chunk) in data.chunks(16).enumerate() {
         write!(f, "{:08x} ", offset * 16)?;
@@ -131,6 +149,8 @@ pub(crate) fn write_hex(f: &mut std::fmt::Formatter<'_>, data: &[u8]) -> std::fm
     Ok(())
 }
 
+/// For debugging purposes.
+#[allow(unused)]
 pub(crate) fn print_hex(data: &[u8]) {
     for (offset, chunk) in data.chunks(16).enumerate() {
         print!("{:08x} ", offset * 16);

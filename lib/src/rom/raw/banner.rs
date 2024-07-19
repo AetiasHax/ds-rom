@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Display, mem::align_of, ops::Range};
+use std::{borrow::Cow, fmt::Display, ops::Range};
 
 use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
@@ -9,26 +9,56 @@ use crate::str::Unicode16Array;
 
 use super::RawHeaderError;
 
+/// Banner for displaying an icon and title on the home menu. This is the raw struct, see the plain one [here](super::super::Banner).
 pub struct Banner<'a> {
     version: BannerVersion,
     data: Cow<'a, [u8]>,
 }
 
+/// Errors related to [`Banner`].
 #[derive(Debug, Snafu)]
 pub enum RawBannerError {
+    /// See [`RawHeaderError`].
     #[snafu(transparent)]
-    RawHeader { source: RawHeaderError },
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// Occurs when the input banner has an unknown version. Should not occur unless there's an undocumented banner version
+    /// we're unaware of.
     #[snafu(display("unknown banner version {version}:\n{backtrace}"))]
-    UnknownVersion { version: u16, backtrace: Backtrace },
+    UnknownVersion {
+        /// Input banner version.
+        version: u16,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input is not the right size according to its version number.
     #[snafu(display("banner version {version:x} must be {expected} bytes but got {actual} bytes"))]
-    InvalidSize { version: u16, expected: usize, actual: usize, backtrace: Backtrace },
-    #[snafu(display("expected {expected}-alignment for {section} but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned { expected: usize, actual: usize, section: &'static str, backtrace: Backtrace },
-    #[snafu(display("not supported in banner version {actual:x}, must be version {expected:x} or higher:\n{backtrace}"))]
-    NotSupported { expected: u16, actual: u16, backtrace: Backtrace },
+    InvalidSize {
+        /// Version number.
+        version: u16,
+        /// Expected size for this version.
+        expected: usize,
+        /// Actual input size.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input is less aligned than the banner
+    #[snafu(display("expected {expected}-alignment but got {actual}-alignment:\n{backtrace}"))]
+    Misaligned {
+        /// Expected alignment.
+        expected: usize,
+        /// Actual alignment.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl<'a> Banner<'a> {
+    /// Creates a new [`Banner`].
     pub fn new(version: BannerVersion) -> Self {
         let size = version.banner_size();
         let mut data = vec![0u8; size];
@@ -36,19 +66,28 @@ impl<'a> Banner<'a> {
         Self { version, data: data.into() }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize, section: &'static str) -> Result<T, RawBannerError> {
+    fn handle_pod_cast<T>(result: Result<T, PodCastError>) -> T {
         match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<T>(), actual: 1usize << addr.trailing_zeros(), section }.fail()
-            }
+            Ok(build_info) => build_info,
+            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => unreachable!(),
             Err(PodCastError::AlignmentMismatch) => panic!(),
             Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
             Err(PodCastError::SizeMismatch) => unreachable!(),
         }
     }
 
+    /// Reinterprets a `&[u8]` as a reference to [`Banner`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the input has an unknown banner version, or has the wrong size for its version,
+    /// or is not aligned enough.
     pub fn borrow_from_slice(data: &'a [u8]) -> Result<Self, RawBannerError> {
+        let addr = data as *const [u8] as *const () as usize;
+        if addr % 2 != 0 {
+            return MisalignedSnafu { expected: 2usize, actual: 1usize << addr.trailing_zeros() as usize }.fail();
+        }
+
         let version_value = u16::from_le_bytes([data[0], data[1]]);
         let Some(version) = BannerVersion::from_u16(version_value) else {
             return UnknownVersionSnafu { version: version_value }.fail();
@@ -70,99 +109,104 @@ impl<'a> Banner<'a> {
         Ok(Self { version, data: Cow::Borrowed(data) })
     }
 
+    /// Returns the version of this [`Banner`].
     pub fn version(&self) -> BannerVersion {
         self.version
     }
 
+    /// Returns the CRC checksum at the given index.
     pub fn crc(&self, index: usize) -> u16 {
         u16::from_le_bytes([self.data[2 + index * 2], self.data[3 + index * 2]])
     }
 
-    pub fn crc_mut(&mut self, index: usize) -> Result<&mut u16, RawBannerError> {
+    /// Returns a mutable CRC checksum at the given index.
+    pub fn crc_mut(&mut self, index: usize) -> &mut u16 {
         let start = 2 + index * 2;
         let end = start + 2;
         let data = &mut self.data.to_mut()[start..end];
-        let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr, "banner CRC")
+        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data))
     }
 
-    pub fn bitmap(&self) -> Result<&BannerBitmap, RawBannerError> {
+    /// Returns a reference to the bitmap of this [`Banner`].
+    pub fn bitmap(&self) -> &BannerBitmap {
         let data = &self.data[0x20..0x220];
-        let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes(data), addr, "banner bitmap")
+        Self::handle_pod_cast(bytemuck::try_from_bytes(data))
     }
 
-    pub fn bitmap_mut(&mut self) -> Result<&mut BannerBitmap, RawBannerError> {
+    /// Returns a mutable reference to the bitmap of this [`Banner`].
+    pub fn bitmap_mut(&mut self) -> &mut BannerBitmap {
         let data = &mut self.data.to_mut()[0x20..0x220];
-        let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr, "banner bitmap")
+        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data))
     }
 
-    pub fn palette(&self) -> Result<&BannerPalette, RawBannerError> {
+    /// Returns a reference to the palette of this [`Banner`].
+    pub fn palette(&self) -> &BannerPalette {
         let data = &self.data[0x220..0x240];
-        let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes(data), addr, "banner palette")
+        Self::handle_pod_cast(bytemuck::try_from_bytes(data))
     }
 
-    pub fn palette_mut(&mut self) -> Result<&mut BannerPalette, RawBannerError> {
+    /// Returns a mutable reference to the palette of this [`Banner`].
+    pub fn palette_mut(&mut self) -> &mut BannerPalette {
         let data = &mut self.data.to_mut()[0x220..0x240];
-        let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr, "banner palette")
+        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data))
     }
 
-    pub fn title(&self, language: Language) -> Option<Result<&Unicode16Array<0x80>, RawBannerError>> {
+    /// Returns a title for the given language, or `None` the language is not supported by this banner version.
+    pub fn title(&self, language: Language) -> Option<&Unicode16Array<0x80>> {
         if !self.version.supports_language(language) {
             None
         } else {
             let start = 0x240 + language as usize * 0x100;
             let end = start + 0x100;
             let data = &self.data[start..end];
-            let addr = data as *const [u8] as *const () as usize;
-            Some(Self::handle_pod_cast(bytemuck::try_from_bytes(data), addr, "banner title"))
+            Some(Self::handle_pod_cast(bytemuck::try_from_bytes(data)))
         }
     }
 
-    pub fn title_mut(&mut self, language: Language) -> Option<Result<&mut Unicode16Array<0x80>, RawBannerError>> {
+    /// Returns a mutable title for the given language, or `None` the language is not supported by this banner version.
+    pub fn title_mut(&mut self, language: Language) -> Option<&mut Unicode16Array<0x80>> {
         if !self.version.supports_language(language) {
             None
         } else {
             let start = 0x240 + language as usize * 0x100;
             let end = start + 0x100;
             let data = &mut self.data.to_mut()[start..end];
-            let addr = data as *const [u8] as *const () as usize;
-            Some(Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr, "banner title"))
+            Some(Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data)))
         }
     }
 
-    pub fn animation(&self) -> Result<&BannerAnimation, RawBannerError> {
+    /// Returns a reference to the animation of this [`Banner`], if it exists in this banner version.
+    pub fn animation(&self) -> Option<&BannerAnimation> {
         if !self.version.has_animation() {
-            NotSupportedSnafu { expected: BannerVersion::Animated as u16, actual: self.version as u16 }.fail()
+            None
         } else {
             let data = &self.data[0x1240..0x23c0];
-            let addr = data as *const [u8] as *const () as usize;
-            Self::handle_pod_cast(bytemuck::try_from_bytes(data), addr, "banner animation")
+            Some(Self::handle_pod_cast(bytemuck::try_from_bytes(data)))
         }
     }
 
-    pub fn animation_mut(&mut self) -> Result<&mut BannerAnimation, RawBannerError> {
+    /// Returns a mutable reference to the animation of this [`Banner`], if it exists in this banner version.
+    pub fn animation_mut(&mut self) -> Option<&mut BannerAnimation> {
         if !self.version.has_animation() {
-            NotSupportedSnafu { expected: BannerVersion::Animated as u16, actual: self.version as u16 }.fail()
+            None
         } else {
             let data = &mut self.data.to_mut()[0x1240..0x23c0];
-            let addr = data as *const [u8] as *const () as usize;
-            Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr, "banner animation")
+            Some(Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data)))
         }
     }
 
+    /// Returns a reference to the full data of this [`Banner`].
     pub fn full_data(&self) -> &[u8] {
         &self.data
     }
 
+    /// Creates a [`DisplayBanner`] which implements [`Display`].
     pub fn display(&self, indent: usize) -> DisplayBanner {
         DisplayBanner { banner: self, indent }
     }
 }
 
+/// Can be used to display values inside [`Banner`].
 pub struct DisplayBanner<'a> {
     banner: &'a Banner<'a>,
     indent: usize,
@@ -171,11 +215,7 @@ pub struct DisplayBanner<'a> {
 macro_rules! write_title {
     ($f:ident, $fmt:literal, $banner:ident, $language:expr) => {
         if let Some(title) = $banner.title($language) {
-            if let Ok(title) = title {
-                writeln!($f, $fmt, '\n', title, '\n')
-            } else {
-                writeln!($f, $fmt, "", "Failed to load", "")
-            }
+            writeln!($f, $fmt, '\n', title, '\n')
         } else {
             Ok(())
         }
@@ -205,26 +245,21 @@ impl<'a> Display for DisplayBanner<'a> {
         if banner.version >= BannerVersion::Animated {
             writeln!(f, "{i}Animation CRC ... : {:#x}", banner.crc(BannerVersion::Animated.crc_index()))?;
         }
-        if let Ok(palette) = banner.palette() {
-            if let Ok(bitmap) = banner.bitmap() {
-                writeln!(f, "{i}Bitmap .......... :\n{}", bitmap.display(palette))?;
-            } else {
-                writeln!(f, "{i}Bitmap .......... :\nFailed to load bitmap")?;
-            }
-            writeln!(f, "{i}Palette ......... : {}", palette)?;
-        } else {
-            writeln!(f, "{i}Bitmap .......... :\nFailed to load palette")?;
-            writeln!(f, "{i}Palette ......... :\nFailed to load palette")?;
-        }
+        writeln!(f, "{i}Bitmap .......... :\n{}", banner.bitmap().display(banner.palette()))?;
         Ok(())
     }
 }
 
+/// Known banner versions.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub enum BannerVersion {
+    /// Original version with titles in Japanese, English, French, German, Italian and Spanish.
     Original = 1,
+    /// Inherits from [`BannerVersion::Original`] and adds Chinese.
     China = 2,
+    /// Inherits from [`BannerVersion::China`] and adds Korean.
     Korea = 3,
+    /// Inherits from [`BannerVersion::Korea`] and adds an animated icon.
     Animated = 0x103,
 }
 
@@ -239,18 +274,22 @@ impl BannerVersion {
         }
     }
 
+    /// Returns whether this version has a Chinese title.
     pub fn has_chinese(self) -> bool {
         self >= Self::China
     }
 
+    /// Returns whether this version has a Korean title.
     pub fn has_korean(self) -> bool {
         self >= Self::Korea
     }
 
+    /// Returns whether this version has an animated icon.
     pub fn has_animation(self) -> bool {
         self >= Self::Animated
     }
 
+    /// Returns whether this version supports the given language.
     pub fn supports_language(self, language: Language) -> bool {
         match language {
             Language::Japanese => true,
@@ -264,6 +303,7 @@ impl BannerVersion {
         }
     }
 
+    /// Returns the CRC index of this version.
     pub fn crc_index(self) -> usize {
         match self {
             BannerVersion::Original => 0,
@@ -273,6 +313,7 @@ impl BannerVersion {
         }
     }
 
+    /// Returns the CRC checksum range of this version.
     pub fn crc_range(self) -> Range<usize> {
         match self {
             BannerVersion::Original => 0x20..0x840,
@@ -282,6 +323,7 @@ impl BannerVersion {
         }
     }
 
+    /// Returns the banner size of this version.
     pub fn banner_size(self) -> usize {
         match self {
             BannerVersion::Original => 0x840,
@@ -303,15 +345,24 @@ impl Display for BannerVersion {
     }
 }
 
+/// Languages present in the banner.
 #[derive(Clone, Copy, Debug)]
 pub enum Language {
+    /// Japanese.
     Japanese = 0,
+    /// English.
     English = 1,
+    /// French.
     French = 2,
+    /// German.
     German = 3,
+    /// Italian.
     Italian = 4,
+    /// Spanish.
     Spanish = 5,
+    /// Chinese.
     Chinese = 6,
+    /// Korean.
     Korean = 7,
 }
 
@@ -330,11 +381,13 @@ impl Display for Language {
     }
 }
 
+/// Contains a palette for a banner bitmap, where each color is 15-bit BGR.
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod, Default)]
 pub struct BannerPalette(pub [u16; 16]);
 
 impl BannerPalette {
+    /// Returns the color from 24-bit `(r, g, b)` at the given index.
     pub fn get_color(&self, index: usize) -> (u8, u8, u8) {
         if index < self.0.len() {
             let color = self.0[index];
@@ -347,6 +400,7 @@ impl BannerPalette {
         }
     }
 
+    /// Sets the color from 24-bit `(r, g, b)` at the given index.
     pub fn set_color(&mut self, index: usize, r: u8, g: u8, b: u8) {
         let r = r as u16 >> 3;
         let g = g as u16 >> 3;
@@ -366,11 +420,13 @@ impl Display for BannerPalette {
     }
 }
 
+/// A bitmap in the banner.
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 pub struct BannerBitmap(pub [u8; 0x200]);
 
 impl BannerBitmap {
+    /// Creates a [`DisplayBannerBitmap`] which implements [`Display`].
     pub fn display<'a>(&'a self, palette: &'a BannerPalette) -> DisplayBannerBitmap<'a> {
         DisplayBannerBitmap { bitmap: self, palette }
     }
@@ -383,6 +439,7 @@ impl BannerBitmap {
         (index, offset)
     }
 
+    /// Gets a palette index at the given coordinates.
     pub fn get_pixel(&self, x: usize, y: usize) -> usize {
         let (index, offset) = Self::get_index(x, y);
         if index < self.0.len() {
@@ -392,6 +449,7 @@ impl BannerBitmap {
         }
     }
 
+    /// Sets a palette index at the given coordinates.
     pub fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
         let (index, offset) = Self::get_index(x, y);
         if index < self.0.len() {
@@ -406,6 +464,7 @@ impl Default for BannerBitmap {
     }
 }
 
+/// Can be used to display a [`BannerBitmap`].
 pub struct DisplayBannerBitmap<'a> {
     bitmap: &'a BannerBitmap,
     palette: &'a BannerPalette,
@@ -426,22 +485,32 @@ impl<'a> Display for DisplayBannerBitmap<'a> {
     }
 }
 
+/// An animated banner icon.
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 pub struct BannerAnimation {
+    /// Up to 8 bitmaps.
     pub bitmaps: [BannerBitmap; 8],
+    /// Up to 8 palettes.
     pub palettes: [BannerPalette; 8],
+    /// Up to 64 keyframes.
     pub keyframes: [BannerKeyframe; 64],
 }
 
+/// A keyframe for [`BannerAnimation`].
 #[bitfield(u16)]
 pub struct BannerKeyframe {
+    /// How long to show this keyframe for, in frames.
     pub frame_duration: u8,
+    /// Which of the 8 bitmaps to show.
     #[bits(3)]
     pub bitmap_index: u8,
+    /// Which of the 8 palettes to use.
     #[bits(3)]
     pub palette_index: u8,
+    /// Flips the bitmap horizontally.
     pub flip_horizontally: bool,
+    /// Flips the bitmap vertically.
     pub flip_vertically: bool,
 }
 

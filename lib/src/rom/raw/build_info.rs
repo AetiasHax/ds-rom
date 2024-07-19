@@ -8,30 +8,67 @@ use snafu::{Backtrace, Snafu};
 
 use super::{RawHeaderError, NITROCODE};
 
+/// Build info for the ARM9 module. This is the raw version, see the plain one [here](super::super::BuildInfo).
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 pub struct BuildInfo {
+    /// Offset to the start of [`super::AutoloadInfo`]s.
     pub autoload_infos_start: u32,
+    /// Offset to the end of [`super::AutoloadInfo`]s.
     pub autoload_infos_end: u32,
+    /// Offset to where the autoload blocks start.
     pub autoload_blocks: u32,
+    /// Offset to the start of uninitialized data in this module.
     pub bss_start: u32,
+    /// Offset to the end of uninitialized data in this module.
     pub bss_end: u32,
+    /// Size of this module after compression.
     pub compressed_code_end: u32,
+    /// SDK version? Value is higher for newer games, but it's unclear what this value is for.
     pub sdk_version: u32,
     nitrocode: u32,
     nitrocode_rev: u32,
 }
 
+/// Errors related to [`BuildInfo`].
 #[derive(Debug, Snafu)]
 pub enum RawBuildInfoError {
+    /// See [`RawHeaderError`].
     #[snafu(transparent)]
-    RawHeader { source: RawHeaderError },
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// Occurs when the input is too small to fit [`BuildInfo`].
     #[snafu(display("expected {expected:#x} bytes for build info but had only {actual:#x}:\n{backtrace}"))]
-    DataTooSmall { expected: usize, actual: usize, backtrace: Backtrace },
+    DataTooSmall {
+        /// Expected size.
+        expected: usize,
+        /// Actual input size.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input is less aligned than [`BuildInfo`].
     #[snafu(display("expected {expected}-alignment for build info but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned { expected: usize, actual: usize, backtrace: Backtrace },
+    Misaligned {
+        /// Expected alignment.
+        expected: usize,
+        /// Actual input alignment.
+        actual: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input does not contain the nitrocode.
     #[snafu(display("expected nitrocode {expected:#x} at the end of build info but got {actual:#x}:\n{backtrace}"))]
-    NoNitrocode { expected: u32, actual: u32, backtrace: Backtrace },
+    NoNitrocode {
+        /// Expected value.
+        expected: u32,
+        /// Actual value.
+        actual: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 impl BuildInfo {
@@ -66,6 +103,11 @@ impl BuildInfo {
         }
     }
 
+    /// Reinterprets a `&[u8]` as a reference to [`BuildInfo`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the input is too small, not aligned enough or doesn't contain the nitrocode.
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ Self, RawBuildInfoError> {
         let size = size_of::<Self>();
         Self::check_size(data)?;
@@ -75,6 +117,11 @@ impl BuildInfo {
         Ok(build_info)
     }
 
+    /// Reinterprets a `&mut [u8]` as a mutable reference to [`BuildInfo`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the input is too small, not aligned enough or doesn't contain the nitrocode.
     pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut Self, RawBuildInfoError> {
         let size = size_of::<Self>();
         Self::check_size(data)?;
@@ -84,15 +131,18 @@ impl BuildInfo {
         Ok(build_info)
     }
 
+    /// Returns whether this [`BuildInfo`] is compressed.
     pub fn is_compressed(&self) -> bool {
         self.compressed_code_end != 0
     }
 
+    /// Creates a [`DisplayBuildInfo`] which implements [`Display`].
     pub fn display(&self, indent: usize) -> DisplayBuildInfo {
         DisplayBuildInfo { build_info: self, indent }
     }
 }
 
+/// Can be used to display values inside [`BuildInfo`].
 pub struct DisplayBuildInfo<'a> {
     build_info: &'a BuildInfo,
     indent: usize,

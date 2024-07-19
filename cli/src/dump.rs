@@ -9,6 +9,7 @@ use nds_io::{
 
 use crate::print_hex;
 
+/// Prints information about a ROM
 #[derive(Debug, Args)]
 pub struct Dump {
     /// Nintendo DS game ROM
@@ -90,7 +91,8 @@ pub struct Dump {
 
 impl Dump {
     pub fn run(&self) -> Result<()> {
-        let key = if let Some(arm7_bios) = &self.arm7_bios { Some(BlowfishKey::from_arm7_bios(arm7_bios)?) } else { None };
+        let key =
+            if let Some(arm7_bios) = &self.arm7_bios { Some(BlowfishKey::from_arm7_bios_path(arm7_bios)?) } else { None };
 
         let header_logo = if let Some(header_logo) = &self.header_logo { Some(Logo::from_png(header_logo)?) } else { None };
 
@@ -203,7 +205,7 @@ impl Dump {
         if self.show_fnt {
             let fnt = rom.fnt()?;
             let fat = rom.fat()?;
-            let root = rom::Files::parse(&fnt, fat, &rom)?;
+            let root = rom::FileSystem::parse(&fnt, fat, &rom)?;
             println!("Files:\n{}", root.display(2));
         }
         Ok(())
