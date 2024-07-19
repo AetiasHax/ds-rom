@@ -132,8 +132,8 @@ impl<'a> Arm9<'a> {
         let autoload_infos = [itcm.info().clone(), dtcm.info().clone()];
 
         let autoload_blocks = data.len() as u32 + offsets.base_address;
-        data.extend(itcm.into_data().into_iter());
-        data.extend(dtcm.into_data().into_iter());
+        data.extend(itcm.into_data().iter());
+        data.extend(dtcm.into_data().iter());
         let autoload_infos_start = data.len() as u32 + offsets.base_address;
         data.extend(bytemuck::bytes_of(&autoload_infos));
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
