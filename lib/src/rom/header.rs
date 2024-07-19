@@ -3,17 +3,16 @@ use std::mem::{offset_of, size_of};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::{
-    crc::CRC_16_MODBUS,
-    str::{AsciiArray, AsciiArrayError},
-};
-
 use super::{
     raw::{
         self, AccessControl, Capacity, Delay, DsFlags, DsiFlags, DsiFlags2, HeaderVersion, ProgramOffset, RegionFlags,
         TableOffset,
     },
     BuildContext, Rom,
+};
+use crate::{
+    crc::CRC_16_MODBUS,
+    str::{AsciiArray, AsciiArrayError},
 };
 /// ROM header.
 #[derive(Serialize, Deserialize)]

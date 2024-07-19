@@ -5,9 +5,8 @@ use bytemuck::{Pod, PodCastError, Zeroable};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
-use crate::str::Unicode16Array;
-
 use super::RawHeaderError;
+use crate::str::Unicode16Array;
 
 /// Banner for displaying an icon and title on the home menu. This is the raw struct, see the plain one [here](super::super::Banner).
 pub struct Banner<'a> {

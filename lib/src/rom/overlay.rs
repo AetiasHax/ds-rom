@@ -2,9 +2,8 @@ use std::{borrow::Cow, io};
 
 use serde::{Deserialize, Serialize};
 
-use crate::compress::lz77::Lz77;
-
 use super::raw::{self, FileAlloc, HeaderVersion, OverlayCompressedSize, RawHeaderError};
+use crate::compress::lz77::Lz77;
 
 /// An overlay module for ARM9/ARM7.
 #[derive(Clone)]

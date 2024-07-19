@@ -8,8 +8,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::{crypto::blowfish::BlowfishKey, rom::raw::FileAlloc};
-
 use super::{
     raw::{
         self, Arm9Footer, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
@@ -19,6 +17,7 @@ use super::{
     FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError,
     Overlay, OverlayInfo,
 };
+use crate::{crypto::blowfish::BlowfishKey, rom::raw::FileAlloc};
 
 /// A plain ROM.
 pub struct Rom<'a> {

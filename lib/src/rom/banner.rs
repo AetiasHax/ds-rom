@@ -7,12 +7,11 @@ use image::{io::Reader, GenericImageView, ImageError, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
-use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
-
 use super::{
     raw::{self, BannerBitmap, BannerPalette, BannerVersion, Language},
     ImageSize,
 };
+use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
 
 /// ROM banner.
 #[derive(Serialize, Deserialize)]

@@ -11,9 +11,8 @@ use std::{
 
 use snafu::{Backtrace, Snafu};
 
-use crate::str::BlobSize;
-
 use super::raw::{self, FileAlloc, Fnt, FntDirectory, FntFile, FntSubtable, RawHeaderError};
+use crate::str::BlobSize;
 
 /// Contains files and directories to be placed into a ROM.
 pub struct FileSystem<'a> {

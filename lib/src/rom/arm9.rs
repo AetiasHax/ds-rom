@@ -3,15 +3,14 @@ use std::{borrow::Cow, io, mem::replace, ops::Range};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
+use super::{
+    raw::{AutoloadInfo, AutoloadKind, BuildInfo, HeaderVersion, RawAutoloadInfoError, RawBuildInfoError},
+    Autoload,
+};
 use crate::{
     compress::lz77::Lz77,
     crc::CRC_16_MODBUS,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
-};
-
-use super::{
-    raw::{AutoloadInfo, AutoloadKind, BuildInfo, HeaderVersion, RawAutoloadInfoError, RawBuildInfoError},
-    Autoload,
 };
 
 /// ARM9 program.
