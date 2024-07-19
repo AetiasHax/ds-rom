@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use clap::Args;
-use nds_io::{
+use ds_rom::{
     crypto::blowfish::BlowfishKey,
     rom::{Rom, RomSaveError},
 };

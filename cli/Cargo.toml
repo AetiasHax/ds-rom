@@ -1,19 +1,19 @@
 [package]
-name = "nds-io-cli"
+name = "ds-rom-cli"
 version = "0.1.0"
 edition = "2021"
 authors = ["Aetias <aetias@outlook.com>"]
 license = "MIT"
-repository = "https://github.com/AetiasHax/nds-io"
+repository = "https://github.com/AetiasHax/ds-rom"
 readme = "../README.md"
-description = "Command-line interface for reading/writing Nintendo DS files."
+description = "Command-line interface for extracting/building Nintendo DS ROMs."
 publish = false
 
 [[bin]]
-name = "ndsio"
+name = "dsrom"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.86"
 clap = { version = "4.5.7", features = ["derive"] }
-nds-io = { path = "../lib" }
+ds-rom = { path = "../lib" }
