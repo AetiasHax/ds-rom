@@ -13,12 +13,12 @@ Library for extracting and building matching Nintendo DS ROMs. DSi/DSiware not s
 
 - Extract all components of a ROM to files on disk.
 - Build ROMs using those files.
-- The files should be modifiable so that the a modded ROM can be built.
+- The files should be modifiable so that a modded ROM can be built.
 - The built ROMs should exactly match the originals when the files are unmodified.
 
 ## Extraction
 
-`ds-rom` has two representations of the ROM: raw and plain. To extract files from a ROM, it first reads the raw ROM, with the exact byte-for-byte content of the ROM file. Then, the plain ROM can extract all the components out of the raw ROM. Lastly, the plain ROM can be saved to files on disk
+`ds-rom` has two representations of the ROM: raw and plain. To extract files from a ROM, it first reads the raw ROM, with the exact byte-for-byte content of the ROM file. Then, the plain ROM can extract all the components out of the raw ROM. Lastly, the plain ROM can be saved to files on disk.
 
 ```rs
 use ds_rom::{rom::{raw, Rom}};
