@@ -2,3 +2,4 @@
 *.nds
 /.vscode
 /*.bin
+/test
