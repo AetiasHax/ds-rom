@@ -1,16 +1,13 @@
-use std::{
-    borrow::Cow,
-    fs::{self, File},
-    io::{self, Read},
-    mem::size_of,
-    path::Path,
-};
+use std::{borrow::Cow, io::Read, mem::size_of, path::Path};
 
 use super::{
     Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError,
     RawHeaderError, RawOverlayError,
 };
-use crate::rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets};
+use crate::{
+    io::{open_file, write_file, FileError},
+    rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets},
+};
 
 /// A raw DS ROM, see the plain struct [here](super::super::Rom).
 pub struct Rom<'a> {
@@ -28,8 +25,8 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if an I/O operation fails.
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, io::Error> {
-        let mut file = File::open(path)?;
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, FileError> {
+        let mut file = open_file(path)?;
         let size = file.metadata()?.len();
         let mut buf = vec![0; size as usize];
         file.read_exact(&mut buf)?;
@@ -66,12 +63,16 @@ impl<'a> Rom<'a> {
             header.arm9_build_info_offset
         };
 
-        Ok(Arm9::new(Cow::Borrowed(data), header.version(), Arm9Offsets {
-            base_address: header.arm9.base_addr,
-            entry_function: header.arm9.entry,
-            build_info: build_info_offset,
-            autoload_callback: header.arm9_autoload_callback,
-        }))
+        Ok(Arm9::new(
+            Cow::Borrowed(data),
+            header.version(),
+            Arm9Offsets {
+                base_address: header.arm9.base_addr,
+                entry_function: header.arm9.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm9_autoload_callback,
+            },
+        ))
     }
 
     /// Returns a reference to the ARM9 footer of this [`Rom`].
@@ -143,12 +144,15 @@ impl<'a> Rom<'a> {
         let build_info_offset =
             if header.arm7_build_info_offset == 0 { 0 } else { header.arm7_build_info_offset - header.arm7.offset };
 
-        Ok(Arm7::new(Cow::Borrowed(data), Arm7Offsets {
-            base_address: header.arm7.base_addr,
-            entry_function: header.arm7.entry,
-            build_info: build_info_offset,
-            autoload_callback: header.arm7_autoload_callback,
-        }))
+        Ok(Arm7::new(
+            Cow::Borrowed(data),
+            Arm7Offsets {
+                base_address: header.arm7.base_addr,
+                entry_function: header.arm7.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm7_autoload_callback,
+            },
+        ))
     }
 
     /// Returns the ARM7 overlay table of this [`Rom`].
@@ -229,7 +233,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if an I/O operation fails.
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), io::Error> {
-        fs::write(path, self.data())
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), FileError> {
+        write_file(path, self.data())
     }
 }

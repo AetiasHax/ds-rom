@@ -3,8 +3,7 @@ use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashSet},
     fmt::Display,
-    fs::{self},
-    io::{self, Write},
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -12,7 +11,10 @@ use std::{
 use snafu::{Backtrace, Snafu};
 
 use super::raw::{self, FileAlloc, Fnt, FntDirectory, FntFile, FntSubtable, RawHeaderError};
-use crate::str::BlobSize;
+use crate::{
+    io::{read_dir, read_file, FileError},
+    str::BlobSize,
+};
 
 /// Contains files and directories to be placed into a ROM.
 pub struct FileSystem<'a> {
@@ -91,10 +93,10 @@ impl<'a> FileSystem<'a> {
         Self { num_overlays, files: vec![], dirs: vec![root], next_file_id: num_overlays as u16, next_dir_id: ROOT_DIR_ID + 1 }
     }
 
-    fn load_in<P: AsRef<Path>>(&mut self, path: P, parent_id: u16) -> Result<(), io::Error> {
+    fn load_in<P: AsRef<Path>>(&mut self, path: P, parent_id: u16) -> Result<(), FileError> {
         // Sort children by FNT order so the file/dir IDs become correct
         let mut children =
-            fs::read_dir(&path)?.collect::<Result<Vec<_>, _>>()?.into_iter().map(|entry| entry.path()).collect::<Vec<_>>();
+            read_dir(&path)?.collect::<Result<Vec<_>, _>>()?.into_iter().map(|entry| entry.path()).collect::<Vec<_>>();
         children.sort_unstable_by(|a, b| {
             Self::compare_for_fnt(a.to_string_lossy().as_ref(), a.is_dir(), b.to_string_lossy().as_ref(), b.is_dir())
         });
@@ -107,7 +109,7 @@ impl<'a> FileSystem<'a> {
                 self.make_child_dir(name, parent_id);
                 self.load_in(child_path, child_id)?;
             } else {
-                let contents = fs::read(child)?;
+                let contents = read_file(child)?;
                 self.make_child_file(name, parent_id, contents);
             }
         }
@@ -120,7 +122,7 @@ impl<'a> FileSystem<'a> {
     /// # Errors
     ///
     /// This function will return an error if an I/O operation fails.
-    pub fn load<P: AsRef<Path>>(root: P, num_overlays: usize) -> Result<Self, io::Error> {
+    pub fn load<P: AsRef<Path>>(root: P, num_overlays: usize) -> Result<Self, FileError> {
         let mut files = Self::new(num_overlays);
         files.load_in(root, ROOT_DIR_ID)?;
         Ok(files)

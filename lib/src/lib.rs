@@ -8,6 +8,7 @@ pub mod compress;
 pub mod crc;
 /// Encryption algorithms.
 pub mod crypto;
+pub(crate) mod io;
 /// ROM structs.
 pub mod rom;
 /// String utilities.
