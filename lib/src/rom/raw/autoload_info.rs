@@ -22,7 +22,7 @@ pub struct AutoloadInfo {
 }
 
 /// Autoload kind.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Deserialize, Serialize)]
 pub enum AutoloadKind {
     /// Instruction TCM (Tightly Coupled Memory). Mainly used to make functions have fast and predictable load times.
     Itcm,

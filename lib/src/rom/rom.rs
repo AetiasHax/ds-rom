@@ -22,6 +22,13 @@ use crate::{
     rom::raw::FileAlloc,
 };
 
+/// Path from extract root to main ARM9 binary
+pub const ARM9_BIN_PATH: &str = "arm9/arm9.bin"; // TODO: Move these to config file
+/// Path from extract root to ITCM binary
+pub const ITCM_BIN_PATH: &str = "arm9/itcm.bin";
+/// Path from extract root to DTCM binary
+pub const DTCM_BIN_PATH: &str = "arm9/dtcm.bin";
+
 /// A plain ROM.
 pub struct Rom<'a> {
     header: Header,
@@ -204,7 +211,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if there's a file missing or the file has an invalid format.
-    pub fn load<P: AsRef<Path>>(path: P, key: Option<&BlowfishKey>) -> Result<Self, RomSaveError> {
+    pub fn load<P: AsRef<Path>>(path: P, options: RomLoadOptions) -> Result<Self, RomSaveError> {
         eprintln!();
         let path = path.as_ref();
 
@@ -215,32 +222,32 @@ impl<'a> Rom<'a> {
         // --------------------- Load ARM9 program ---------------------
         let arm9_path = path.join("arm9");
         let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(arm9_path.join("arm9.yaml"))?)?;
-        let arm9 = read_file(arm9_path.join("arm9.bin"))?;
+        let arm9 = read_file(path.join(ARM9_BIN_PATH))?;
 
         // --------------------- Load ITCM, DTCM ---------------------
-        let itcm = read_file(arm9_path.join("itcm.bin"))?;
+        let itcm = read_file(path.join(ITCM_BIN_PATH))?;
         let itcm_info = serde_yml::from_reader(open_file(arm9_path.join("itcm.yaml"))?)?;
         let itcm = Autoload::new(itcm, itcm_info);
 
-        let dtcm = read_file(arm9_path.join("dtcm.bin"))?;
+        let dtcm = read_file(path.join(DTCM_BIN_PATH))?;
         let dtcm_info = serde_yml::from_reader(open_file(arm9_path.join("dtcm.yaml"))?)?;
         let dtcm = Autoload::new(dtcm, dtcm_info);
 
         // --------------------- Build ARM9 program ---------------------
         let mut arm9 = Arm9::with_two_tcms(arm9, itcm, dtcm, header.version(), arm9_build_config.offsets)?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
-        if arm9_build_config.compressed {
+        if arm9_build_config.compressed && options.compress {
             arm9.compress()?;
         }
-        if arm9_build_config.encrypted {
-            let Some(key) = key else {
+        if arm9_build_config.encrypted && options.encrypt {
+            let Some(key) = options.key else {
                 return BlowfishKeyNeededSnafu {}.fail();
             };
             arm9.encrypt(key, header.original.gamecode.to_le_u32())?;
         }
 
         // --------------------- Load ARM9 overlays ---------------------
-        let arm9_overlays = Self::load_overlays(path, &header, "arm9")?;
+        let arm9_overlays = Self::load_overlays(path, &header, "arm9", &options)?;
 
         // --------------------- Load ARM7 program ---------------------
         let arm7_path = path.join("arm7");
@@ -249,7 +256,7 @@ impl<'a> Rom<'a> {
         let arm7 = Arm7::new(arm7, arm7_config);
 
         // --------------------- Load ARM7 overlays ---------------------
-        let arm7_overlays = Self::load_overlays(path, &header, "arm7")?;
+        let arm7_overlays = Self::load_overlays(path, &header, "arm7", &options)?;
 
         // --------------------- Load banner ---------------------
         let banner_path = path.join("banner");
@@ -257,14 +264,25 @@ impl<'a> Rom<'a> {
         banner.images.load_bitmap_file(banner_path.join("bitmap.png"), banner_path.join("palette.png"))?;
 
         // --------------------- Load files ---------------------
-        let files = FileSystem::load(path.join("files"), arm9_overlays.len() + arm7_overlays.len())?;
-        let path_order =
-            read_to_string(path.join("path_order.txt"))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
+        let num_overlays = arm9_overlays.len() + arm7_overlays.len();
+        let (files, path_order) = if options.load_files {
+            let files = FileSystem::load(path.join("files"), num_overlays)?;
+            let path_order =
+                read_to_string(path.join("path_order.txt"))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
+            (files, path_order)
+        } else {
+            (FileSystem::new(num_overlays), vec![])
+        };
 
         Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order })
     }
 
-    fn load_overlays(path: &Path, header: &Header, processor: &str) -> Result<Vec<Overlay<'a>>, RomSaveError> {
+    fn load_overlays(
+        path: &Path,
+        header: &Header,
+        processor: &str,
+        options: &RomLoadOptions,
+    ) -> Result<Vec<Overlay<'a>>, RomSaveError> {
         let mut overlays = vec![];
         let overlays_path = path.join(format!("{processor}_overlays"));
         if overlays_path.exists() && overlays_path.is_dir() {
@@ -274,7 +292,7 @@ impl<'a> Rom<'a> {
                 let compressed = config.info.compressed;
                 config.info.compressed = false;
                 let mut overlay = Overlay::new(data, header.version(), config.info);
-                if compressed {
+                if compressed && options.compress {
                     overlay.compress()?;
                 }
                 overlays.push(overlay);
@@ -314,7 +332,7 @@ impl<'a> Rom<'a> {
             plain_arm9.decrypt(key, self.header.original.gamecode.to_le_u32())?;
         }
         plain_arm9.decompress()?;
-        create_file(arm9_path.join("arm9.bin"))?.write(plain_arm9.code()?)?;
+        create_file(path.join(ARM9_BIN_PATH))?.write(plain_arm9.code()?)?;
 
         // --------------------- Save ITCM, DTCM ---------------------
         for autoload in plain_arm9.autoloads()?.iter() {
@@ -587,6 +605,11 @@ impl<'a> Rom<'a> {
     pub fn arm7_overlays(&self) -> &[Overlay] {
         &self.arm7_overlays
     }
+
+    /// Returns a reference to the header of this [`Rom`].
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
 }
 
 /// Build context, generated during [`Rom::build`] and later passed to [`Header::build`] to fill in the header.
@@ -620,4 +643,22 @@ pub struct BuildContext<'a> {
     pub arm7_build_info_offset: Option<u32>,
     /// Total ROM size.
     pub rom_size: Option<u32>,
+}
+
+/// Options for [`Rom::load`].
+pub struct RomLoadOptions<'a> {
+    /// Blowfish encryption key.
+    pub key: Option<&'a BlowfishKey>,
+    /// If true (default), compress ARM9 and overlays if they are configured with `compressed: true`.
+    pub compress: bool,
+    /// If true (default), encrypt ARM9 if it's configured with `encrypted: true`.
+    pub encrypt: bool,
+    /// If true (default), load asset files.
+    pub load_files: bool,
+}
+
+impl<'a> Default for RomLoadOptions<'a> {
+    fn default() -> Self {
+        Self { key: None, compress: true, encrypt: true, load_files: true }
+    }
 }
