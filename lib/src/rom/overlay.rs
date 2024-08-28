@@ -31,7 +31,7 @@ impl<'a> Overlay<'a> {
     /// Builds a raw overlay table entry.
     pub fn build(&self) -> raw::Overlay {
         raw::Overlay {
-            id: self.id(),
+            id: self.id() as u32,
             base_addr: self.base_address(),
             code_size: self.code_size(),
             bss_size: self.bss_size(),
@@ -47,8 +47,8 @@ impl<'a> Overlay<'a> {
     }
 
     /// Returns the ID of this [`Overlay`].
-    pub fn id(&self) -> u32 {
-        self.info.id
+    pub fn id(&self) -> u16 {
+        self.info.id as u16
     }
 
     /// Returns the base address of this [`Overlay`].
