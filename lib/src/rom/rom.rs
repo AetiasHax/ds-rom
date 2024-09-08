@@ -212,8 +212,8 @@ impl<'a> Rom<'a> {
     ///
     /// This function will return an error if there's a file missing or the file has an invalid format.
     pub fn load<P: AsRef<Path>>(path: P, options: RomLoadOptions) -> Result<Self, RomSaveError> {
-        eprintln!();
         let path = path.as_ref();
+        log::info!("Loading ROM from path {}", path.display());
 
         // --------------------- Load header ---------------------
         let header: Header = serde_yml::from_reader(open_file(path.join("header.yaml"))?)?;
@@ -237,12 +237,14 @@ impl<'a> Rom<'a> {
         let mut arm9 = Arm9::with_two_tcms(arm9, itcm, dtcm, header.version(), arm9_build_config.offsets)?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         if arm9_build_config.compressed && options.compress {
+            log::info!("Compressing ARM9 program");
             arm9.compress()?;
         }
         if arm9_build_config.encrypted && options.encrypt {
             let Some(key) = options.key else {
                 return BlowfishKeyNeededSnafu {}.fail();
             };
+            log::info!("Encrypting ARM9 program");
             arm9.encrypt(key, header.original.gamecode.to_le_u32())?;
         }
 
@@ -264,6 +266,7 @@ impl<'a> Rom<'a> {
         banner.images.load_bitmap_file(banner_path.join("bitmap.png"), banner_path.join("palette.png"))?;
 
         // --------------------- Load files ---------------------
+        log::info!("Loading ROM assets");
         let num_overlays = arm9_overlays.len() + arm7_overlays.len();
         let (files, path_order) = if options.load_files {
             let files = FileSystem::load(path.join("files"), num_overlays)?;
@@ -287,12 +290,14 @@ impl<'a> Rom<'a> {
         let overlays_path = path.join(format!("{processor}_overlays"));
         if overlays_path.exists() && overlays_path.is_dir() {
             let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(open_file(overlays_path.join("overlays.yaml"))?)?;
+            let num_overlays = overlay_configs.len();
             for mut config in overlay_configs.into_iter() {
                 let data = read_file(overlays_path.join(config.file_name))?;
                 let compressed = config.info.compressed;
                 config.info.compressed = false;
                 let mut overlay = Overlay::new(data, header.version(), config.info);
                 if compressed && options.compress {
+                    log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
                     overlay.compress()?;
                 }
                 overlays.push(overlay);
@@ -309,6 +314,8 @@ impl<'a> Rom<'a> {
     pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<(), RomSaveError> {
         let path = path.as_ref();
         create_dir_all(path)?;
+
+        log::info!("Saving ROM to path {}", path.display());
 
         // --------------------- Save header ---------------------
         serde_yml::to_writer(create_file(path.join("header.yaml"))?, &self.header)?;
@@ -329,9 +336,13 @@ impl<'a> Rom<'a> {
             let Some(key) = key else {
                 return BlowfishKeyNeededSnafu {}.fail();
             };
+            log::info!("Decrypting ARM9 program");
             plain_arm9.decrypt(key, self.header.original.gamecode.to_le_u32())?;
         }
-        plain_arm9.decompress()?;
+        if plain_arm9.is_compressed()? {
+            log::info!("Decompressing ARM9 program");
+            plain_arm9.decompress()?;
+        }
         create_file(path.join(ARM9_BIN_PATH))?.write(plain_arm9.code()?)?;
 
         // --------------------- Save ITCM, DTCM ---------------------
@@ -368,6 +379,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Save files ---------------------
         {
+            log::info!("Saving ROM assets");
             let files_path = path.join("files");
             self.files.traverse_files(["/"], |file, path| {
                 let path = files_path.join(path);
@@ -400,6 +412,7 @@ impl<'a> Rom<'a> {
                 let mut plain_overlay = overlay.clone();
                 configs.push(OverlayConfig { info: plain_overlay.info().clone(), file_name: format!("{name}.bin") });
 
+                log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
                 plain_overlay.decompress();
                 create_file(path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
             }

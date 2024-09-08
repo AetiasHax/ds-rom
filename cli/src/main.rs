@@ -9,6 +9,7 @@ use argp::FromArgs;
 use build::Build;
 use dump::Dump;
 use extract::Extract;
+use log::LevelFilter;
 
 /// Command-line interface for extracting/building Nintendo DS ROMs.
 #[derive(FromArgs)]
@@ -36,6 +37,8 @@ impl Command {
 }
 
 fn main() -> Result<()> {
+    env_logger::builder().filter_level(LevelFilter::Info).init();
+
     let args: Args = argp::parse_args_or_exit(argp::DEFAULT);
     args.command.run()
 }
