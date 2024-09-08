@@ -5,19 +5,20 @@ mod extract;
 use std::io::Write;
 
 use anyhow::Result;
+use argp::FromArgs;
 use build::Build;
-use clap::{Parser, Subcommand};
 use dump::Dump;
 use extract::Extract;
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+/// Command-line interface for extracting/building Nintendo DS ROMs.
+#[derive(FromArgs)]
 struct Args {
-    #[command(subcommand)]
+    #[argp(subcommand)]
     command: Command,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(FromArgs)]
+#[argp(subcommand)]
 enum Command {
     Dump(Dump),
     Extract(Extract),
@@ -35,7 +36,7 @@ impl Command {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let args: Args = argp::parse_args_or_exit(argp::DEFAULT);
     args.command.run()
 }
 

@@ -15,5 +15,5 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.86"
-clap = { version = "4.5.7", features = ["derive"] }
+argp = "0.3.0"
 ds-rom = { path = "../lib" }

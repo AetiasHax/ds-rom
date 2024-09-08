@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use clap::Args;
+use argp::FromArgs;
 use ds_rom::{
     crypto::blowfish::BlowfishKey,
     rom::{self, raw, Logo, Overlay},
@@ -10,82 +10,83 @@ use ds_rom::{
 use crate::print_hex;
 
 /// Prints information about a ROM
-#[derive(Debug, Args)]
+#[derive(FromArgs)]
+#[argp(subcommand, name = "dump")]
 pub struct Dump {
     /// Nintendo DS game ROM
-    #[arg(short = 'r', long)]
+    #[argp(option, short = 'r')]
     rom: PathBuf,
 
     /// Shows the contents of the ROM header.
-    #[arg(short = 'H', long)]
+    #[argp(switch, short = 'H')]
     show_header: bool,
 
     /// Nintendo DS ARM7 BIOS file
-    #[arg(short = '7', long)]
+    #[argp(option, short = '7')]
     arm7_bios: Option<PathBuf>,
 
     /// Prints the contents of the ARM9 program. If an ARM7 BIOS is provided, the contents will be decrypted.
-    #[arg(short = 'n', long)]
+    #[argp(switch, short = 'n')]
     print_arm9: bool,
 
     /// Shows the contents of the ARM9 build info.
-    #[arg(short = 'i', long)]
+    #[argp(switch, short = 'i')]
     show_build_info: bool,
 
     /// Prints the contents of the ARM7 program.
-    #[arg(short = 's', long)]
+    #[argp(switch, short = 's')]
     print_arm7: bool,
 
     /// Encrypts the secure area.
-    #[arg(short = 'e', long)]
+    #[argp(switch, short = 'e')]
     encrypt: bool,
 
     /// Changes the header logo to this PNG.
-    #[arg(short = 'l', long)]
+    #[argp(option, short = 'l')]
     header_logo: Option<PathBuf>,
 
     /// Prints the contents of the ARM9 overlay table.
-    #[arg(short = 'N', long)]
+    #[argp(switch, short = 'N')]
     print_arm9_ovt: bool,
 
     /// Prints the contents of the ARM7 overlay table.
-    #[arg(short = 'S', long)]
+    #[argp(switch, short = 'S')]
     print_arm7_ovt: bool,
 
     /// Compresses code modules.
-    #[arg(short = 'c', long)]
+    #[argp(switch, short = 'c')]
     compress: bool,
 
     /// Decompresses code modules.
-    #[arg(short = 'd', long)]
+    #[argp(switch, short = 'd')]
     decompress: bool,
 
     /// Prints contents as raw bytes.
-    #[arg(short = 'R', long)]
+    #[argp(switch, short = 'R')]
     raw: bool,
 
     /// Prints information about autoload blocks.
-    #[arg(short = 'A', long)]
+    #[argp(switch, short = 'A')]
     print_autoload_info: bool,
 
     /// Prints the contents of an autoload block.
-    #[arg(short = 'a', long, value_name = "INDEX")]
+    #[argp(option, short = 'a')]
     print_autoload: Option<usize>,
 
     /// Shows the contents of the file name table.
-    #[arg(short = 'f', long)]
+    #[argp(switch, short = 'f')]
     show_fnt: bool,
 
     /// Shows the contents of the banner.
-    #[arg(short = 'b', long)]
+    #[argp(switch, short = 'b')]
     show_banner: bool,
 
     /// Prints the contents of an ARM9 overlay.
-    #[arg(short = 'y', long, value_name = "INDEX")]
+    #[argp(option, short = 'y')]
     print_arm9_overlay: Option<usize>,
 
     /// Prints the contents of an ARM7 overlay.
-    #[arg(short = 'Y', long, value_name = "INDEX")]
+    #[argp(option, short = 'Y')]
     print_arm7_overlay: Option<usize>,
 }
 
