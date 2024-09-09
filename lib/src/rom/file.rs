@@ -8,6 +8,7 @@ use std::{
     str::FromStr,
 };
 
+use encoding_rs::SHIFT_JIS;
 use snafu::{Backtrace, Snafu};
 
 use super::raw::{self, FileAlloc, Fnt, FntDirectory, FntFile, FntSubtable, RawHeaderError};
@@ -73,9 +74,9 @@ pub enum FileParseError {
 /// Errors related to [`FileSystem::build_fnt`].
 #[derive(Debug, Snafu)]
 pub enum FileBuildError {
-    /// Occurs when a file name contains non-ASCII characters.
-    #[snafu(display("the file name {name} contains one or more non-ASCII characters:\n{backtrace}"))]
-    NotAscii {
+    /// Occurs when a file name contains unmappable characters that could not be encoded to SHIFT-JIS.
+    #[snafu(display("the file name {name} contains unmappable character(s):\n{backtrace}"))]
+    EncodingFailed {
         /// File name.
         name: String,
         /// Backtrace to the source of the error.
@@ -247,15 +248,16 @@ impl<'a> FileSystem<'a> {
             let is_dir = Self::is_dir(child);
             let name = self.name(child);
 
-            let name_length = name.len() as u8 & 0x7f;
+            let (sjis_name, _, had_errors) = SHIFT_JIS.encode(name);
+            if had_errors {
+                return EncodingFailedSnafu { name }.fail();
+            }
+
+            let name_length = sjis_name.len() as u8 & 0x7f;
             let directory_bit = if is_dir { 0x80 } else { 0 };
             data.push(name_length | directory_bit);
-            for ch in name.chars().take(0x7f) {
-                if !ch.is_ascii() {
-                    return NotAsciiSnafu { name }.fail();
-                }
-                data.push(ch as u8);
-            }
+
+            data.extend(sjis_name.iter().take(0x7f));
             if is_dir {
                 data.write(&u16::to_le_bytes(child)).unwrap();
             }
@@ -295,15 +297,17 @@ impl<'a> FileSystem<'a> {
 
     fn compare_for_fnt(a: &str, a_dir: bool, b: &str, b_dir: bool) -> Ordering {
         let files_first = a_dir.cmp(&b_dir);
+        if files_first.is_ne() {
+            return files_first;
+        }
 
-        let len = a.len().min(b.len());
-        let a_chars = a[..len].chars().map(|c| c.to_ascii_lowercase());
-        let b_chars = b[..len].chars().map(|c| c.to_ascii_lowercase());
-        let alphabetic_order = a_chars.cmp(b_chars);
+        let a_lower = a.to_lowercase();
+        let b_lower = b.to_lowercase();
+        let (a_bytes, _, _) = SHIFT_JIS.encode(&a_lower);
+        let (b_bytes, _, _) = SHIFT_JIS.encode(&b_lower);
 
-        let shortest_first = a.len().cmp(&b.len());
-
-        files_first.then(alphabetic_order).then(shortest_first)
+        // Lexicographic, case-insensitive Shift-JIS order
+        a_bytes.cmp(&b_bytes)
     }
 
     fn sort_for_fnt_in(&mut self, parent_id: u16) {
@@ -327,14 +331,8 @@ impl<'a> FileSystem<'a> {
     }
 
     fn compare_for_rom(a: &str, b: &str) -> Ordering {
-        let len = a.len().min(b.len());
-        let a_chars = a[..len].chars();
-        let b_chars = b[..len].chars();
-        let ascii_order = a_chars.cmp(b_chars);
-
-        let shortest_first = a.len().cmp(&b.len());
-
-        ascii_order.then(shortest_first)
+        // Lexicographic UTF-8 order
+        a.cmp(b)
     }
 
     fn sort_for_rom_in(&mut self, parent_id: u16) {
@@ -600,7 +598,7 @@ impl<'a> Display for DisplayFileSystem<'a> {
             } else {
                 let file = files.file(*child);
                 let size = BlobSize(file.contents.len()).to_string();
-                write!(f, "{i}0x{:04x}: {: <32}{size: >7}", file.id, file.name)?;
+                write!(f, "{i}0x{:04x}: {: <48}{size: >7}", file.id, file.name)?;
                 writeln!(f)?;
             }
         }

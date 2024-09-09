@@ -1,6 +1,6 @@
 [package]
 name = "ds-rom"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Aetias <aetias@outlook.com>"]
 license = "MIT"
@@ -13,6 +13,7 @@ bitfield-struct = "0.8.0"
 bitreader = "0.3.8"
 bytemuck = { version = "1.16.1", features = ["derive"] }
 crc = "3.2.1"
+encoding_rs = "0.8.34"
 image = { version = "0.25.1", default-features = false, features = ["png"] }
 log = "0.4.22"
 rust-bitwriter = "0.0.1"
