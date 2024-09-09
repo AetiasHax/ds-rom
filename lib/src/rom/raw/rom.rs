@@ -72,7 +72,16 @@ impl<'a> Rom<'a> {
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
-        let footer = self.arm9_footer()?;
+
+        let build_info_offset = if header.arm9_build_info_offset == 0 {
+            let footer = self.arm9_footer()?;
+            footer.build_info_offset
+        } else if header.arm9_build_info_offset > header.arm9.offset {
+            header.arm9_build_info_offset - header.arm9.offset
+        } else {
+            // `arm9_build_info_offset` is not an absolute ROM offset in DSi titles
+            header.arm9_build_info_offset
+        };
 
         Ok(Arm9::new(
             Cow::Borrowed(data),
@@ -80,7 +89,7 @@ impl<'a> Rom<'a> {
             Arm9Offsets {
                 base_address: header.arm9.base_addr,
                 entry_function: header.arm9.entry,
-                build_info: footer.build_info_offset,
+                build_info: build_info_offset,
                 autoload_callback: header.arm9_autoload_callback,
             },
         ))
