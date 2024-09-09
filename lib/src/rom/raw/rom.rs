@@ -243,6 +243,25 @@ impl<'a> Rom<'a> {
         Banner::borrow_from_slice(data)
     }
 
+    /// Returns the padding value between sections of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Self::banner`].
+    pub fn padding_value(&self) -> Result<u8, RawBannerError> {
+        let header = self.header()?;
+        let banner = self.banner()?;
+
+        // The banner has a known size which is never a multiple of 512,
+        // so it can't coincide with the start of another section.
+        //
+        // Therefore, we can use the first byte after the banner to determine
+        // the padding value.
+
+        let end = header.banner_offset as usize + banner.version().banner_size();
+        Ok(self.data[end])
+    }
+
     /// Returns a reference to the data of this [`Rom`].
     pub fn data(&self) -> &[u8] {
         &self.data
