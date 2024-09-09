@@ -297,12 +297,17 @@ impl<'a> FileSystem<'a> {
 
     fn compare_for_fnt(a: &str, a_dir: bool, b: &str, b_dir: bool) -> Ordering {
         let files_first = a_dir.cmp(&b_dir);
+        if files_first.is_ne() {
+            return files_first;
+        }
 
-        let a_chars = a.chars().map(|c| c.to_ascii_lowercase());
-        let b_chars = b.chars().map(|c| c.to_ascii_lowercase());
-        let lexicographic_alphabetic_order = a_chars.cmp(b_chars);
+        let a_lower = a.to_lowercase();
+        let b_lower = b.to_lowercase();
+        let (a_bytes, _, _) = SHIFT_JIS.encode(&a_lower);
+        let (b_bytes, _, _) = SHIFT_JIS.encode(&b_lower);
 
-        files_first.then(lexicographic_alphabetic_order)
+        // Lexicographic, case-insensitive Shift-JIS order
+        a_bytes.cmp(&b_bytes)
     }
 
     fn sort_for_fnt_in(&mut self, parent_id: u16) {
@@ -326,8 +331,8 @@ impl<'a> FileSystem<'a> {
     }
 
     fn compare_for_rom(a: &str, b: &str) -> Ordering {
-        let lexicographic_order = a.cmp(b);
-        lexicographic_order
+        // Lexicographic UTF-8 order
+        a.cmp(b)
     }
 
     fn sort_for_rom_in(&mut self, parent_id: u16) {
