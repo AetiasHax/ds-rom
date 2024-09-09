@@ -3,3 +3,4 @@
 /.vscode
 /*.bin
 /test
+/build.sh
