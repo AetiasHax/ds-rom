@@ -412,8 +412,10 @@ impl<'a> Rom<'a> {
                 let mut plain_overlay = overlay.clone();
                 configs.push(OverlayConfig { info: plain_overlay.info().clone(), file_name: format!("{name}.bin") });
 
-                log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
-                plain_overlay.decompress();
+                if plain_overlay.is_compressed() {
+                    log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
+                    plain_overlay.decompress();
+                }
                 create_file(path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
             }
             serde_yml::to_writer(create_file(path.join("overlays.yaml"))?, &configs)?;
