@@ -96,7 +96,7 @@ impl AutoloadInfo {
     pub fn kind(&self) -> AutoloadKind {
         match self.base_address {
             0x1ff8000 => AutoloadKind::Itcm,
-            0x27e0000 => AutoloadKind::Dtcm,
+            0x27e0000 | 0x27c0000 => AutoloadKind::Dtcm,
             _ => AutoloadKind::Unknown,
         }
     }

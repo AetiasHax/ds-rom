@@ -23,6 +23,10 @@ pub struct Header {
     /// Values for DS games after DSi release, [`HeaderVersion::DsPostDsi`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ds_post_dsi: Option<HeaderDsPostDsi>,
+
+    /// Byte value to append between ROM sections. Note that this value is not actually from the header, but is still important
+    /// to define somewhere in order to obtain a matching ROM build.
+    pub padding_value: u8,
 }
 
 /// Values for the original header version, [`HeaderVersion::Original`].
@@ -82,9 +86,10 @@ pub enum HeaderBuildError {
 
 impl Header {
     /// Loads from a raw header.
-    pub fn load_raw(header: &raw::Header) -> Self {
+    pub fn load_raw(header: &raw::Header, padding_value: Option<u8>) -> Self {
         let version = header.version();
         Self {
+            padding_value: padding_value.unwrap_or(0xff),
             original: HeaderOriginal {
                 title: header.title.to_string(),
                 gamecode: header.gamecode,

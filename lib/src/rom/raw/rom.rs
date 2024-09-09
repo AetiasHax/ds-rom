@@ -1,5 +1,7 @@
 use std::{borrow::Cow, io::Read, mem::size_of, path::Path};
 
+use snafu::Snafu;
+
 use super::{
     Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError,
     RawHeaderError, RawOverlayError,
@@ -12,6 +14,23 @@ use crate::{
 /// A raw DS ROM, see the plain struct [here](super::super::Rom).
 pub struct Rom<'a> {
     data: Cow<'a, [u8]>,
+}
+
+/// Errors related to [`Rom::arm9`].
+#[derive(Debug, Snafu)]
+pub enum RawArm9Error {
+    /// See [`RawHeaderError`].
+    #[snafu(transparent)]
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// See [`Arm9FooterError`].
+    #[snafu(transparent)]
+    Arm9Footer {
+        /// Source error.
+        source: Arm9FooterError,
+    },
 }
 
 impl<'a> Rom<'a> {
@@ -48,14 +67,15 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`].
-    pub fn arm9(&self) -> Result<Arm9, RawHeaderError> {
+    pub fn arm9(&self) -> Result<Arm9, RawArm9Error> {
         let header = self.header()?;
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
 
         let build_info_offset = if header.arm9_build_info_offset == 0 {
-            0
+            let footer = self.arm9_footer()?;
+            footer.build_info_offset
         } else if header.arm9_build_info_offset > header.arm9.offset {
             header.arm9_build_info_offset - header.arm9.offset
         } else {
@@ -221,6 +241,25 @@ impl<'a> Rom<'a> {
         let start = header.banner_offset as usize;
         let data = &self.data[start..];
         Banner::borrow_from_slice(data)
+    }
+
+    /// Returns the padding value between sections of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Self::banner`].
+    pub fn padding_value(&self) -> Result<u8, RawBannerError> {
+        let header = self.header()?;
+        let banner = self.banner()?;
+
+        // The banner has a known size which is never a multiple of 512,
+        // so it can't coincide with the start of another section.
+        //
+        // Therefore, we can use the first byte after the banner to determine
+        // the padding value.
+
+        let end = header.banner_offset as usize + banner.version().banner_size();
+        Ok(self.data[end])
     }
 
     /// Returns a reference to the data of this [`Rom`].
