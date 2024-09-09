@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "ds-rom"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bitfield-struct",
  "bitreader",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "ds-rom-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "argp",
