@@ -2,10 +2,10 @@ use std::{
     borrow::Cow,
     io::{self, Write},
     mem::size_of,
-    str::from_utf8,
 };
 
 use bytemuck::{Pod, PodCastError, Zeroable};
+use encoding_rs::SHIFT_JIS;
 use snafu::{Backtrace, Snafu};
 
 use super::RawHeaderError;
@@ -169,7 +169,11 @@ impl<'a> Iterator for IterFntSubtable<'a> {
         let subdir = self.data[0] & 0x80 != 0;
         self.data = &self.data[1..];
 
-        let name = from_utf8(&self.data[..length]).expect("file name could not be parsed");
+        let (name, _, had_errors) = SHIFT_JIS.decode(&self.data[..length]);
+        if had_errors {
+            log::warn!("The file name '{name}' contains a malformed byte sequence");
+        }
+
         self.data = &self.data[length..];
 
         let id = if subdir {
@@ -191,5 +195,5 @@ pub struct FntFile<'a> {
     /// File ID if less than `0xf000`, otherwise it's a directory ID.
     pub id: u16,
     /// File/directory name.
-    pub name: &'a str,
+    pub name: Cow<'a, str>,
 }
