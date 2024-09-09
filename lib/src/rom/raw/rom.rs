@@ -1,5 +1,7 @@
 use std::{borrow::Cow, io::Read, mem::size_of, path::Path};
 
+use snafu::Snafu;
+
 use super::{
     Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError,
     RawHeaderError, RawOverlayError,
@@ -12,6 +14,23 @@ use crate::{
 /// A raw DS ROM, see the plain struct [here](super::super::Rom).
 pub struct Rom<'a> {
     data: Cow<'a, [u8]>,
+}
+
+/// Errors related to [`Rom::arm9`].
+#[derive(Debug, Snafu)]
+pub enum RawArm9Error {
+    /// See [`RawHeaderError`].
+    #[snafu(transparent)]
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// See [`Arm9FooterError`].
+    #[snafu(transparent)]
+    Arm9Footer {
+        /// Source error.
+        source: Arm9FooterError,
+    },
 }
 
 impl<'a> Rom<'a> {
@@ -48,20 +67,12 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`].
-    pub fn arm9(&self) -> Result<Arm9, RawHeaderError> {
+    pub fn arm9(&self) -> Result<Arm9, RawArm9Error> {
         let header = self.header()?;
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
-
-        let build_info_offset = if header.arm9_build_info_offset == 0 {
-            0
-        } else if header.arm9_build_info_offset > header.arm9.offset {
-            header.arm9_build_info_offset - header.arm9.offset
-        } else {
-            // `arm9_build_info_offset` is not an absolute ROM offset in DSi titles
-            header.arm9_build_info_offset
-        };
+        let footer = self.arm9_footer()?;
 
         Ok(Arm9::new(
             Cow::Borrowed(data),
@@ -69,7 +80,7 @@ impl<'a> Rom<'a> {
             Arm9Offsets {
                 base_address: header.arm9.base_addr,
                 entry_function: header.arm9.entry,
-                build_info: build_info_offset,
+                build_info: footer.build_info_offset,
                 autoload_callback: header.arm9_autoload_callback,
             },
         ))

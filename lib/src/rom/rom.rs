@@ -9,8 +9,8 @@ use snafu::Snafu;
 
 use super::{
     raw::{
-        self, Arm9Footer, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
-        TableOffset,
+        self, Arm9Footer, RawArm9Error, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError,
+        RawOverlayError, TableOffset,
     },
     Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BuildInfo,
     FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError,
@@ -87,6 +87,12 @@ pub enum RomExtractError {
         /// Source error.
         source: FileParseError,
     },
+    /// See [`RawArm9Error`].
+    #[snafu(transparent)]
+    RawArm9 {
+        /// Source error.
+        source: RawArm9Error,
+    },
 }
 
 /// Errors related to [`Rom::build`].
@@ -162,7 +168,7 @@ pub enum RomSaveError {
     },
     /// See [`Arm9Error`].
     #[snafu(transparent)]
-    RawArm9 {
+    Arm9 {
         /// Source error.
         source: Arm9Error,
     },
