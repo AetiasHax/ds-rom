@@ -593,7 +593,7 @@ impl<'a> Display for DisplayFileSystem<'a> {
             } else {
                 let file = files.file(*child);
                 let size = BlobSize(file.contents.len()).to_string();
-                write!(f, "{i}0x{:04x}: {: <32}{size: >7}", file.id, file.name)?;
+                write!(f, "{i}0x{:04x}: {: <48}{size: >7}", file.id, file.name)?;
                 writeln!(f)?;
             }
         }
