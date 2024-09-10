@@ -20,7 +20,6 @@ pub struct Banner {
     /// Game title in different languages.
     pub title: BannerTitle,
     /// Icon to show on the home screen.
-    #[serde(skip)]
     pub images: BannerImages,
     /// Keyframes for animated icons.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,16 +142,25 @@ impl Banner {
 }
 
 /// Icon for the [`Banner`].
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct BannerImages {
     /// Main bitmap.
+    #[serde(skip)]
     pub bitmap: BannerBitmap,
     /// Main palette.
+    #[serde(skip)]
     pub palette: BannerPalette,
     /// Bitmaps for animated icon.
+    #[serde(skip)]
     pub animation_bitmaps: Option<Box<[BannerBitmap]>>,
     /// Palettes for animated icon
+    #[serde(skip)]
     pub animation_palettes: Option<Box<[BannerPalette]>>,
+
+    /// Path to bitmap PNG.
+    pub bitmap_path: PathBuf,
+    /// Path to palette PNG.
+    pub palette_path: PathBuf,
 }
 
 /// Errors related to [`BannerImages`].
@@ -197,21 +205,24 @@ pub enum BannerImageError {
 impl BannerImages {
     /// Creates a new [`BannerImages`] from a bitmap and palette.
     pub fn from_bitmap(bitmap: BannerBitmap, palette: BannerPalette) -> Self {
-        Self { bitmap, palette, animation_bitmaps: None, animation_palettes: None }
+        Self {
+            bitmap,
+            palette,
+            animation_bitmaps: None,
+            animation_palettes: None,
+            bitmap_path: "bitmap.png".into(),
+            palette_path: "palette.png".into(),
+        }
     }
 
-    /// Loads from a bitmap and palette file.
+    /// Loads the bitmap and palette
     ///
     /// # Errors
     ///
     /// This function will return an error if [`Reader::open`] or [`Reader::decode`] fails, or if the images are the wrong
     /// size, or the bitmap has a color not present in the palette.
-    pub fn load_bitmap_file<P: AsRef<Path> + Into<PathBuf>>(
-        &mut self,
-        bitmap_path: P,
-        palette_path: P,
-    ) -> Result<(), BannerImageError> {
-        let bitmap_image = Reader::open(&bitmap_path)?.decode()?;
+    pub fn load(&mut self, path: &Path) -> Result<(), BannerImageError> {
+        let bitmap_image = Reader::open(path.join(&self.bitmap_path))?.decode()?;
         if bitmap_image.width() != 32 || bitmap_image.height() != 32 {
             return WrongSizeSnafu {
                 expected: ImageSize { width: 32, height: 32 },
@@ -220,7 +231,7 @@ impl BannerImages {
             .fail();
         }
 
-        let palette_image = Reader::open(palette_path)?.decode()?;
+        let palette_image = Reader::open(path.join(&self.palette_path))?.decode()?;
         if palette_image.width() != 16 || palette_image.height() != 1 {
             return WrongSizeSnafu {
                 expected: ImageSize { width: 16, height: 1 },
@@ -233,7 +244,7 @@ impl BannerImages {
         for (x, y, color) in bitmap_image.pixels() {
             let index = palette_image.pixels().find_map(|(i, _, c)| (color == c).then_some(i));
             let Some(index) = index else {
-                return InvalidPixelSnafu { bitmap: bitmap_path, x, y }.fail();
+                return InvalidPixelSnafu { bitmap: path.join(&self.bitmap_path), x, y }.fail();
             };
             bitmap.set_pixel(x as usize, y as usize, index as u8);
         }
@@ -270,8 +281,8 @@ impl BannerImages {
             palette_image.put_pixel(index as u32, 0, Rgb([r, g, b]));
         }
 
-        bitmap_image.save(path.join("bitmap.png"))?;
-        palette_image.save(path.join("palette.png"))?;
+        bitmap_image.save(path.join(&self.bitmap_path))?;
+        palette_image.save(path.join(&self.palette_path))?;
         Ok(())
     }
 }
