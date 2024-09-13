@@ -378,6 +378,12 @@ impl<'a> Arm9<'a> {
         self.offsets.base_address
     }
 
+    /// Returns the end address.
+    pub fn end_address(&self) -> Result<u32, RawBuildInfoError> {
+        let build_info = self.build_info()?;
+        Ok(build_info.bss_end)
+    }
+
     /// Returns the entry function address.
     pub fn entry_function(&self) -> u32 {
         self.offsets.entry_function

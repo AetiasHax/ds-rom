@@ -56,6 +56,11 @@ impl<'a> Overlay<'a> {
         self.info.base_address
     }
 
+    /// Returns the end address of this [`Overlay`].
+    pub fn end_address(&self) -> u32 {
+        self.info.base_address + self.info.code_size + self.info.bss_size
+    }
+
     /// Returns the size of initialized data in this [`Overlay`].
     pub fn code_size(&self) -> u32 {
         self.info.code_size
