@@ -19,6 +19,8 @@ pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
     header_version: HeaderVersion,
     offsets: Arm9Offsets,
+    originally_compressed: bool,
+    originally_encrypted: bool,
 }
 
 /// Offsets in the ARM9 program.
@@ -111,10 +113,26 @@ pub enum Arm9AutoloadError {
     },
 }
 
+/// Options for [`Arm9::with_two_tcms`].
+pub struct Arm9WithTcmsOptions {
+    /// Whether the program was compressed originally.
+    pub originally_compressed: bool,
+    /// Whether the program was encrypted originally.
+    pub originally_encrypted: bool,
+}
+
 impl<'a> Arm9<'a> {
     /// Creates a new ARM9 program from raw data.
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, header_version: HeaderVersion, offsets: Arm9Offsets) -> Self {
-        Arm9 { data: data.into(), header_version, offsets }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(
+        data: T,
+        header_version: HeaderVersion,
+        offsets: Arm9Offsets,
+    ) -> Result<Self, RawBuildInfoError> {
+        let mut arm9 =
+            Arm9 { data: data.into(), header_version, offsets, originally_compressed: false, originally_encrypted: false };
+        arm9.originally_compressed = arm9.is_compressed()?;
+        arm9.originally_encrypted = arm9.is_encrypted();
+        Ok(arm9)
     }
 
     /// Creates a new ARM9 program with raw data and two autoloads (ITCM and DTCM).
@@ -128,6 +146,7 @@ impl<'a> Arm9<'a> {
         dtcm: Autoload,
         header_version: HeaderVersion,
         offsets: Arm9Offsets,
+        options: Arm9WithTcmsOptions,
     ) -> Result<Self, RawBuildInfoError> {
         let autoload_infos = [itcm.info().clone(), dtcm.info().clone()];
 
@@ -138,7 +157,8 @@ impl<'a> Arm9<'a> {
         data.extend(bytemuck::bytes_of(&autoload_infos));
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
-        let mut arm9 = Self { data: data.into(), header_version, offsets };
+        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted } = options;
+        let mut arm9 = Self { data: data.into(), header_version, offsets, originally_compressed, originally_encrypted };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -148,7 +168,8 @@ impl<'a> Arm9<'a> {
         Ok(arm9)
     }
 
-    /// Returns whether the secure area is encrypted.
+    /// Returns whether the secure area is encrypted. See [`Self::originally_encrypted`] for whether the secure area was
+    /// encrypted originally.
     pub fn is_encrypted(&self) -> bool {
         self.data.len() < 8 || self.data[0..8] != SECURE_AREA_ID
     }
@@ -254,7 +275,8 @@ impl<'a> Arm9<'a> {
         BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info as usize..])
     }
 
-    /// Returns whether this ARM9 program is compressed.
+    /// Returns whether this ARM9 program is compressed. See [`Self::originally_compressed`] for whether the program was
+    /// compressed originally.
     ///
     /// # Errors
     ///
@@ -412,6 +434,16 @@ impl<'a> Arm9<'a> {
     /// Returns a reference to the ARM9 offsets.
     pub fn offsets(&self) -> &Arm9Offsets {
         &self.offsets
+    }
+
+    /// Returns whether the ARM9 program was compressed originally. See [`Self::is_compressed`] for the current state.
+    pub fn originally_compressed(&self) -> bool {
+        self.originally_compressed
+    }
+
+    /// Returns whether the ARM9 program was encrypted originally. See [`Self::is_encrypted`] for the current state.
+    pub fn originally_encrypted(&self) -> bool {
+        self.originally_encrypted
     }
 }
 

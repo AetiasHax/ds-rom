@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+/// Config file mainly consisting of paths to extracted files.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RomConfig {
     /// Byte value to append between ROM sections
     pub padding_value: u8,
