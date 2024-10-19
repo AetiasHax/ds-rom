@@ -3,8 +3,8 @@ use std::{borrow::Cow, io::Read, mem::size_of, path::Path};
 use snafu::Snafu;
 
 use super::{
-    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawFatError, RawFntError,
-    RawHeaderError, RawOverlayError,
+    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawBuildInfoError, RawFatError,
+    RawFntError, RawHeaderError, RawOverlayError,
 };
 use crate::{
     io::{open_file, write_file, FileError},
@@ -30,6 +30,12 @@ pub enum RawArm9Error {
     Arm9Footer {
         /// Source error.
         source: Arm9FooterError,
+    },
+    /// See [`RawBuildInfoError`].
+    #[snafu(transparent)]
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
     },
 }
 
@@ -92,7 +98,7 @@ impl<'a> Rom<'a> {
                 build_info: build_info_offset,
                 autoload_callback: header.arm9_autoload_callback,
             },
-        ))
+        )?)
     }
 
     /// Returns a reference to the ARM9 footer of this [`Rom`].

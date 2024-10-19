@@ -9,6 +9,7 @@ use crate::compress::lz77::Lz77;
 #[derive(Clone)]
 pub struct Overlay<'a> {
     header_version: HeaderVersion,
+    originally_compressed: bool,
     info: OverlayInfo,
     data: Cow<'a, [u8]>,
 }
@@ -17,15 +18,25 @@ const LZ77: Lz77 = Lz77 {};
 
 impl<'a> Overlay<'a> {
     /// Creates a new [`Overlay`] from plain data.
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, header_version: HeaderVersion, info: OverlayInfo) -> Self {
-        Self { header_version, info, data: data.into() }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(
+        data: T,
+        header_version: HeaderVersion,
+        info: OverlayInfo,
+        originally_compressed: bool,
+    ) -> Self {
+        Self { header_version, originally_compressed, info, data: data.into() }
     }
 
     /// Parses an [`Overlay`] from a FAT and ROM.
     pub fn parse(overlay: &raw::Overlay, fat: &[FileAlloc], rom: &'a raw::Rom) -> Result<Self, RawHeaderError> {
         let alloc = fat[overlay.file_id as usize];
         let data = &rom.data()[alloc.range()];
-        Ok(Self { header_version: rom.header()?.version(), info: OverlayInfo::new(overlay), data: Cow::Borrowed(data) })
+        Ok(Self {
+            header_version: rom.header()?.version(),
+            originally_compressed: overlay.compressed.is_compressed() != 0,
+            info: OverlayInfo::new(overlay),
+            data: Cow::Borrowed(data),
+        })
     }
 
     /// Builds a raw overlay table entry.
@@ -56,6 +67,11 @@ impl<'a> Overlay<'a> {
         self.info.base_address
     }
 
+    /// Returns the end address of this [`Overlay`].
+    pub fn end_address(&self) -> u32 {
+        self.info.base_address + self.info.code_size + self.info.bss_size
+    }
+
     /// Returns the size of initialized data in this [`Overlay`].
     pub fn code_size(&self) -> u32 {
         self.info.code_size
@@ -81,7 +97,8 @@ impl<'a> Overlay<'a> {
         self.info.file_id
     }
 
-    /// Returns whether this [`Overlay`] is compressed.
+    /// Returns whether this [`Overlay`] is compressed. See [`Self::originally_compressed`] for whether this overlay was
+    /// compressed originally.
     pub fn is_compressed(&self) -> bool {
         self.info.compressed
     }
@@ -122,6 +139,11 @@ impl<'a> Overlay<'a> {
     /// Returns a reference to the info of this [`Overlay`].
     pub fn info(&self) -> &OverlayInfo {
         &self.info
+    }
+
+    /// Returns whether this [`Overlay`] was compressed originally. See [`Self::is_compressed`] for the current state.
+    pub fn originally_compressed(&self) -> bool {
+        self.originally_compressed
     }
 }
 

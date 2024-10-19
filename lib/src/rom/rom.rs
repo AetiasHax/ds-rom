@@ -18,16 +18,9 @@ use super::{
 };
 use crate::{
     crypto::blowfish::BlowfishKey,
-    io::{create_dir_all, create_file, open_file, read_file, read_to_string, FileError},
-    rom::raw::FileAlloc,
+    io::{create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string, FileError},
+    rom::{raw::FileAlloc, Arm9WithTcmsOptions, RomConfig},
 };
-
-/// Path from extract root to main ARM9 binary
-pub const ARM9_BIN_PATH: &str = "arm9/arm9.bin"; // TODO: Move these to config file
-/// Path from extract root to ITCM binary
-pub const ITCM_BIN_PATH: &str = "arm9/itcm.bin";
-/// Path from extract root to DTCM binary
-pub const DTCM_BIN_PATH: &str = "arm9/dtcm.bin";
 
 /// A plain ROM.
 pub struct Rom<'a> {
@@ -40,6 +33,7 @@ pub struct Rom<'a> {
     banner: Banner,
     files: FileSystem<'a>,
     path_order: Vec<String>,
+    config: RomConfig,
 }
 
 /// Errors related to [`Rom::extract`].
@@ -217,30 +211,42 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if there's a file missing or the file has an invalid format.
-    pub fn load<P: AsRef<Path>>(path: P, options: RomLoadOptions) -> Result<Self, RomSaveError> {
-        let path = path.as_ref();
-        log::info!("Loading ROM from path {}", path.display());
+    pub fn load<P: AsRef<Path>>(config_path: P, options: RomLoadOptions) -> Result<Self, RomSaveError> {
+        let config_path = config_path.as_ref();
+        log::info!("Loading ROM from {}", config_path.display());
+
+        let config: RomConfig = serde_yml::from_reader(open_file(config_path)?)?;
+        let path = config_path.parent().unwrap();
 
         // --------------------- Load header ---------------------
-        let header: Header = serde_yml::from_reader(open_file(path.join("header.yaml"))?)?;
-        let header_logo = Logo::from_png(path.join("header_logo.png"))?;
+        let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
+        let header_logo = Logo::from_png(path.join(&config.header_logo))?;
 
         // --------------------- Load ARM9 program ---------------------
-        let arm9_path = path.join("arm9");
-        let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(arm9_path.join("arm9.yaml"))?)?;
-        let arm9 = read_file(path.join(ARM9_BIN_PATH))?;
+        let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(path.join(&config.arm9_config))?)?;
+        let arm9 = read_file(path.join(&config.arm9_bin))?;
 
         // --------------------- Load ITCM, DTCM ---------------------
-        let itcm = read_file(path.join(ITCM_BIN_PATH))?;
-        let itcm_info = serde_yml::from_reader(open_file(arm9_path.join("itcm.yaml"))?)?;
+        let itcm = read_file(path.join(&config.itcm_bin))?;
+        let itcm_info = serde_yml::from_reader(open_file(path.join(&config.itcm_config))?)?;
         let itcm = Autoload::new(itcm, itcm_info);
 
-        let dtcm = read_file(path.join(DTCM_BIN_PATH))?;
-        let dtcm_info = serde_yml::from_reader(open_file(arm9_path.join("dtcm.yaml"))?)?;
+        let dtcm = read_file(path.join(&config.dtcm_bin))?;
+        let dtcm_info = serde_yml::from_reader(open_file(path.join(&config.dtcm_config))?)?;
         let dtcm = Autoload::new(dtcm, dtcm_info);
 
         // --------------------- Build ARM9 program ---------------------
-        let mut arm9 = Arm9::with_two_tcms(arm9, itcm, dtcm, header.version(), arm9_build_config.offsets)?;
+        let mut arm9 = Arm9::with_two_tcms(
+            arm9,
+            itcm,
+            dtcm,
+            header.version(),
+            arm9_build_config.offsets,
+            Arm9WithTcmsOptions {
+                originally_compressed: arm9_build_config.compressed,
+                originally_encrypted: arm9_build_config.encrypted,
+            },
+        )?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         if arm9_build_config.compressed && options.compress {
             log::info!("Compressing ARM9 program");
@@ -255,59 +261,65 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Load ARM9 overlays ---------------------
-        let arm9_overlays = Self::load_overlays(path, &header, "arm9", &options)?;
+        let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
+            Self::load_overlays(&path.join(arm9_overlays_config), &header, "arm9", &options)?
+        } else {
+            vec![]
+        };
 
         // --------------------- Load ARM7 program ---------------------
-        let arm7_path = path.join("arm7");
-        let arm7 = read_file(arm7_path.join("arm7.bin"))?;
-        let arm7_config = serde_yml::from_reader(open_file(arm7_path.join("arm7.yaml"))?)?;
+        let arm7 = read_file(path.join(&config.arm7_bin))?;
+        let arm7_config = serde_yml::from_reader(open_file(path.join(&config.arm7_config))?)?;
         let arm7 = Arm7::new(arm7, arm7_config);
 
         // --------------------- Load ARM7 overlays ---------------------
-        let arm7_overlays = Self::load_overlays(path, &header, "arm7", &options)?;
+        let arm7_overlays = if let Some(arm7_overlays_config) = &config.arm7_overlays {
+            Self::load_overlays(&path.join(arm7_overlays_config), &header, "arm7", &options)?
+        } else {
+            vec![]
+        };
 
         // --------------------- Load banner ---------------------
-        let banner_path = path.join("banner");
-        let mut banner: Banner = serde_yml::from_reader(open_file(banner_path.join("banner.yaml"))?)?;
-        banner.images.load_bitmap_file(banner_path.join("bitmap.png"), banner_path.join("palette.png"))?;
+        let banner_path = path.join(&config.banner);
+        let banner_dir = banner_path.parent().unwrap();
+        let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
+        banner.images.load(banner_dir)?;
 
         // --------------------- Load files ---------------------
-        log::info!("Loading ROM assets");
         let num_overlays = arm9_overlays.len() + arm7_overlays.len();
         let (files, path_order) = if options.load_files {
-            let files = FileSystem::load(path.join("files"), num_overlays)?;
+            log::info!("Loading ROM assets");
+            let files = FileSystem::load(path.join(&config.files_dir), num_overlays)?;
             let path_order =
-                read_to_string(path.join("path_order.txt"))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
+                read_to_string(path.join(&config.path_order))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
             (files, path_order)
         } else {
             (FileSystem::new(num_overlays), vec![])
         };
 
-        Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order })
+        Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order, config })
     }
 
     fn load_overlays(
-        path: &Path,
+        config_path: &Path,
         header: &Header,
         processor: &str,
         options: &RomLoadOptions,
     ) -> Result<Vec<Overlay<'a>>, RomSaveError> {
+        let path = config_path.parent().unwrap();
         let mut overlays = vec![];
-        let overlays_path = path.join(format!("{processor}_overlays"));
-        if overlays_path.exists() && overlays_path.is_dir() {
-            let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(open_file(overlays_path.join("overlays.yaml"))?)?;
-            let num_overlays = overlay_configs.len();
-            for mut config in overlay_configs.into_iter() {
-                let data = read_file(overlays_path.join(config.file_name))?;
-                let compressed = config.info.compressed;
-                config.info.compressed = false;
-                let mut overlay = Overlay::new(data, header.version(), config.info);
-                if compressed && options.compress {
-                    log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
-                    overlay.compress()?;
-                }
-                overlays.push(overlay);
+        let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(open_file(config_path)?)?;
+        let num_overlays = overlay_configs.len();
+        for mut config in overlay_configs.into_iter() {
+            let data = read_file(path.join(config.file_name))?;
+            let compressed = config.info.compressed;
+            config.info.compressed = false;
+            let mut overlay = Overlay::new(data, header.version(), config.info, compressed);
+            if compressed && options.compress {
+                log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
+                overlay.compress()?;
             }
+            overlays.push(overlay);
         }
         Ok(overlays)
     }
@@ -321,22 +333,18 @@ impl<'a> Rom<'a> {
         let path = path.as_ref();
         create_dir_all(path)?;
 
-        log::info!("Saving ROM to path {}", path.display());
+        log::info!("Saving ROM to directory {}", path.display());
+
+        // --------------------- Save config ---------------------
+        serde_yml::to_writer(create_file_and_dirs(path.join("config.yaml"))?, &self.config)?;
 
         // --------------------- Save header ---------------------
-        serde_yml::to_writer(create_file(path.join("header.yaml"))?, &self.header)?;
-        self.header_logo.save_png(path.join("header_logo.png"))?;
+        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.header))?, &self.header)?;
+        self.header_logo.save_png(path.join(&self.config.header_logo))?;
 
         // --------------------- Save ARM9 program ---------------------
-        let arm9_build_config = Arm9BuildConfig {
-            offsets: *self.arm9.offsets(),
-            encrypted: self.arm9.is_encrypted(),
-            compressed: self.arm9.is_compressed()?,
-            build_info: self.arm9.build_info()?.clone().into(),
-        };
-        let arm9_path = path.join("arm9");
-        create_dir_all(&arm9_path)?;
-        serde_yml::to_writer(create_file(arm9_path.join("arm9.yaml"))?, &arm9_build_config)?;
+        let arm9_build_config = self.arm9_build_config()?;
+        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm9_config))?, &arm9_build_config)?;
         let mut plain_arm9 = self.arm9.clone();
         if plain_arm9.is_encrypted() {
             let Some(key) = key else {
@@ -349,44 +357,45 @@ impl<'a> Rom<'a> {
             log::info!("Decompressing ARM9 program");
             plain_arm9.decompress()?;
         }
-        create_file(path.join(ARM9_BIN_PATH))?.write(plain_arm9.code()?)?;
+        create_file_and_dirs(path.join(&self.config.arm9_bin))?.write(plain_arm9.code()?)?;
 
         // --------------------- Save ITCM, DTCM ---------------------
         for autoload in plain_arm9.autoloads()?.iter() {
-            let name = match autoload.kind() {
-                raw::AutoloadKind::Itcm => "itcm",
-                raw::AutoloadKind::Dtcm => "dtcm",
+            let (bin_path, config_path) = match autoload.kind() {
+                raw::AutoloadKind::Itcm => (path.join(&self.config.itcm_bin), path.join(&self.config.itcm_config)),
+                raw::AutoloadKind::Dtcm => (path.join(&self.config.dtcm_bin), path.join(&self.config.dtcm_config)),
                 raw::AutoloadKind::Unknown => panic!("unknown autoload block"),
             };
-            create_file(arm9_path.join(format!("{name}.bin")))?.write(autoload.code())?;
-            serde_yml::to_writer(create_file(arm9_path.join(format!("{name}.yaml")))?, autoload.info())?;
+            create_file_and_dirs(bin_path)?.write(autoload.code())?;
+            serde_yml::to_writer(create_file_and_dirs(config_path)?, autoload.info())?;
         }
 
         // --------------------- Save ARM9 overlays ---------------------
-        Self::save_overlays(path, &self.arm9_overlays, "arm9")?;
+        if let Some(arm9_overlays_config) = &self.config.arm9_overlays {
+            Self::save_overlays(&path.join(arm9_overlays_config), &self.arm9_overlays, "arm9")?;
+        }
 
         // --------------------- Save ARM7 program ---------------------
-        let arm7_path = path.join("arm7");
-        create_dir_all(&arm7_path)?;
-        create_file(arm7_path.join("arm7.bin"))?.write(self.arm7.full_data())?;
-        serde_yml::to_writer(create_file(arm7_path.join("arm7.yaml"))?, self.arm7.offsets())?;
+        create_file_and_dirs(path.join(&self.config.arm7_bin))?.write(self.arm7.full_data())?;
+        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm7_config))?, self.arm7.offsets())?;
 
         // --------------------- Save ARM7 overlays ---------------------
-        Self::save_overlays(path, &self.arm7_overlays, "arm7")?;
+        if let Some(arm7_overlays_config) = &self.config.arm7_overlays {
+            Self::save_overlays(&path.join(arm7_overlays_config), &self.arm7_overlays, "arm7")?;
+        }
 
         // --------------------- Save banner ---------------------
         {
-            let path = &path.join("banner");
-            create_dir_all(path)?;
-
-            serde_yml::to_writer(create_file(path.join("banner.yaml"))?, &self.banner)?;
-            self.banner.images.save_bitmap_file(path)?;
+            let banner_path = path.join(&self.config.banner);
+            let banner_dir = banner_path.parent().unwrap();
+            serde_yml::to_writer(create_file_and_dirs(&banner_path)?, &self.banner)?;
+            self.banner.images.save_bitmap_file(banner_dir)?;
         }
 
         // --------------------- Save files ---------------------
         {
             log::info!("Saving ROM assets");
-            let files_path = path.join("files");
+            let files_path = path.join(&self.config.files_dir);
             self.files.traverse_files(["/"], |file, path| {
                 let path = files_path.join(path);
                 // TODO: Rewrite traverse_files as an iterator so these errors can be returned
@@ -397,7 +406,7 @@ impl<'a> Rom<'a> {
                     .expect("failed to write file");
             });
         }
-        let mut path_order_file = create_file(path.join("path_order.txt"))?;
+        let mut path_order_file = create_file_and_dirs(path.join(&self.config.path_order))?;
         for path in &self.path_order {
             path_order_file.write(path.as_bytes())?;
             path_order_file.write("\n".as_bytes())?;
@@ -406,10 +415,20 @@ impl<'a> Rom<'a> {
         Ok(())
     }
 
-    fn save_overlays(path: &Path, overlays: &[Overlay], processor: &str) -> Result<(), RomSaveError> {
+    /// Generates a build config for ARM9, which normally goes into arm9.yaml.
+    pub fn arm9_build_config(&self) -> Result<Arm9BuildConfig, RomSaveError> {
+        Ok(Arm9BuildConfig {
+            offsets: *self.arm9.offsets(),
+            encrypted: self.arm9.is_encrypted(),
+            compressed: self.arm9.is_compressed()?,
+            build_info: self.arm9.build_info()?.clone().into(),
+        })
+    }
+
+    fn save_overlays(config_path: &Path, overlays: &[Overlay], processor: &str) -> Result<(), RomSaveError> {
         if !overlays.is_empty() {
-            let path = &path.join(format!("{processor}_overlays"));
-            create_dir_all(path)?;
+            let overlays_path = config_path.parent().unwrap();
+            create_dir_all(overlays_path)?;
 
             let mut configs = vec![];
             for overlay in overlays {
@@ -422,9 +441,9 @@ impl<'a> Rom<'a> {
                     log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
                     plain_overlay.decompress();
                 }
-                create_file(path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
+                create_file(overlays_path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
             }
-            serde_yml::to_writer(create_file(path.join("overlays.yaml"))?, &configs)?;
+            serde_yml::to_writer(create_file(config_path)?, &configs)?;
         }
         Ok(())
     }
@@ -441,24 +460,42 @@ impl<'a> Rom<'a> {
         let banner = rom.banner()?;
         let file_root = FileSystem::parse(&fnt, fat, rom)?;
         let path_order = file_root.compute_path_order();
+
+        let arm9_overlays =
+            rom.arm9_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Result<Vec<_>, _>>()?;
+        let arm7_overlays =
+            rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Result<Vec<_>, _>>()?;
+
+        let config = RomConfig {
+            padding_value: rom.padding_value()?,
+            header: "header.yaml".into(),
+            header_logo: "header_logo.png".into(),
+            arm9_bin: "arm9/arm9.bin".into(),
+            arm9_config: "arm9/arm9.yaml".into(),
+            arm7_bin: "arm7/arm7.bin".into(),
+            arm7_config: "arm7/arm7.yaml".into(),
+            itcm_bin: "arm9/itcm.bin".into(),
+            itcm_config: "arm9/itcm.yaml".into(),
+            dtcm_bin: "arm9/dtcm.bin".into(),
+            dtcm_config: "arm9/dtcm.yaml".into(),
+            arm9_overlays: if arm9_overlays.is_empty() { None } else { Some("arm9_overlays/overlays.yaml".into()) },
+            arm7_overlays: if arm7_overlays.is_empty() { None } else { Some("arm7_overlays/overlays.yaml".into()) },
+            banner: "banner/banner.yaml".into(),
+            files_dir: "files/".into(),
+            path_order: "path_order.txt".into(),
+        };
+
         Ok(Self {
-            header: Header::load_raw(&header, Some(rom.padding_value()?)),
+            header: Header::load_raw(&header),
             header_logo: Logo::decompress(&header.logo)?,
             arm9: rom.arm9()?,
-            arm9_overlays: rom
-                .arm9_overlay_table()?
-                .iter()
-                .map(|ov| Overlay::parse(ov, fat, rom))
-                .collect::<Result<Vec<_>, _>>()?,
+            arm9_overlays,
             arm7: rom.arm7()?,
-            arm7_overlays: rom
-                .arm7_overlay_table()?
-                .iter()
-                .map(|ov| Overlay::parse(ov, fat, rom))
-                .collect::<Result<Vec<_>, _>>()?,
+            arm7_overlays,
             banner: Banner::load_raw(&banner),
             files: file_root,
             path_order,
+            config,
         })
     }
 
@@ -579,7 +616,7 @@ impl<'a> Rom<'a> {
         // --------------------- Write padding ---------------------
         context.rom_size = Some(cursor.position() as u32);
         while !cursor.position().is_power_of_two() && cursor.position() >= 128 * 1024 {
-            cursor.write(&[self.header.padding_value])?;
+            cursor.write(&[self.config.padding_value])?;
         }
 
         // --------------------- Update FAT ---------------------
@@ -597,7 +634,7 @@ impl<'a> Rom<'a> {
     fn align(&self, cursor: &mut Cursor<Vec<u8>>) -> Result<(), RomBuildError> {
         let padding = (!cursor.position() + 1) & 0x1ff;
         for _ in 0..padding {
-            cursor.write(&[self.header.padding_value])?;
+            cursor.write(&[self.config.padding_value])?;
         }
         Ok(())
     }
@@ -630,6 +667,11 @@ impl<'a> Rom<'a> {
     /// Returns a reference to the header of this [`Rom`].
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// Returns the [`RomConfig`] consisting of paths to extracted files.
+    pub fn config(&self) -> &RomConfig {
+        &self.config
     }
 }
 
