@@ -14,7 +14,7 @@ use super::{
     },
     Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BuildInfo,
     FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError,
-    Overlay, OverlayInfo,
+    Overlay, OverlayInfo, RomConfigAutoload,
 };
 use crate::{
     crypto::blowfish::BlowfishKey,
@@ -86,6 +86,24 @@ pub enum RomExtractError {
     RawArm9 {
         /// Source error.
         source: RawArm9Error,
+    },
+    /// See [`Arm9AutoloadError`]
+    #[snafu(transparent)]
+    Arm9Autoload {
+        /// Source error.
+        source: Arm9AutoloadError,
+    },
+    /// See [`RawBuildInfoError`].
+    #[snafu(transparent)]
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// See [`Arm9Error`].
+    #[snafu(transparent)]
+    Arm9 {
+        /// Source error.
+        source: Arm9Error,
     },
 }
 
@@ -226,20 +244,30 @@ impl<'a> Rom<'a> {
         let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(path.join(&config.arm9_config))?)?;
         let arm9 = read_file(path.join(&config.arm9_bin))?;
 
-        // --------------------- Load ITCM, DTCM ---------------------
-        let itcm = read_file(path.join(&config.itcm_bin))?;
-        let itcm_info = serde_yml::from_reader(open_file(path.join(&config.itcm_config))?)?;
-        let itcm = Autoload::new(itcm, itcm_info);
+        // --------------------- Load autoloads ---------------------
+        let mut autoloads = vec![];
 
-        let dtcm = read_file(path.join(&config.dtcm_bin))?;
-        let dtcm_info = serde_yml::from_reader(open_file(path.join(&config.dtcm_config))?)?;
+        let itcm = read_file(path.join(&config.itcm.bin))?;
+        let itcm_info = serde_yml::from_reader(open_file(path.join(&config.itcm.config))?)?;
+        let itcm = Autoload::new(itcm, itcm_info);
+        autoloads.push(itcm);
+
+        let dtcm = read_file(path.join(&config.dtcm.bin))?;
+        let dtcm_info = serde_yml::from_reader(open_file(path.join(&config.dtcm.config))?)?;
         let dtcm = Autoload::new(dtcm, dtcm_info);
+        autoloads.push(dtcm);
+
+        for unknown_autoload in &config.unknown_autoloads {
+            let autoload = read_file(path.join(&unknown_autoload.bin))?;
+            let autoload_info = serde_yml::from_reader(open_file(path.join(&unknown_autoload.config))?)?;
+            let autoload = Autoload::new(autoload, autoload_info);
+            autoloads.push(autoload);
+        }
 
         // --------------------- Build ARM9 program ---------------------
-        let mut arm9 = Arm9::with_two_tcms(
+        let mut arm9 = Arm9::with_autoloads(
             arm9,
-            itcm,
-            dtcm,
+            &autoloads,
             header.version(),
             arm9_build_config.offsets,
             Arm9WithTcmsOptions {
@@ -359,12 +387,16 @@ impl<'a> Rom<'a> {
         }
         create_file_and_dirs(path.join(&self.config.arm9_bin))?.write(plain_arm9.code()?)?;
 
-        // --------------------- Save ITCM, DTCM ---------------------
+        // --------------------- Save autoloads ---------------------
+        let mut unknown_autoloads = self.config.unknown_autoloads.iter();
         for autoload in plain_arm9.autoloads()?.iter() {
             let (bin_path, config_path) = match autoload.kind() {
-                raw::AutoloadKind::Itcm => (path.join(&self.config.itcm_bin), path.join(&self.config.itcm_config)),
-                raw::AutoloadKind::Dtcm => (path.join(&self.config.dtcm_bin), path.join(&self.config.dtcm_config)),
-                raw::AutoloadKind::Unknown => panic!("unknown autoload block"),
+                raw::AutoloadKind::Itcm => (path.join(&self.config.itcm.bin), path.join(&self.config.itcm.config)),
+                raw::AutoloadKind::Dtcm => (path.join(&self.config.dtcm.bin), path.join(&self.config.dtcm.config)),
+                raw::AutoloadKind::Unknown(_) => {
+                    let unknown_autoload = unknown_autoloads.next().expect("no more autoloads in config, was it removed?");
+                    (path.join(&unknown_autoload.bin), path.join(&unknown_autoload.config))
+                }
             };
             create_file_and_dirs(bin_path)?.write(autoload.code())?;
             serde_yml::to_writer(create_file_and_dirs(config_path)?, autoload.info())?;
@@ -466,6 +498,22 @@ impl<'a> Rom<'a> {
         let arm7_overlays =
             rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Result<Vec<_>, _>>()?;
 
+        let arm9 = rom.arm9()?;
+
+        let num_unknown_autoloads = if arm9.is_compressed()? {
+            let mut decompressed_arm9 = arm9.clone();
+            decompressed_arm9.decompress()?;
+            decompressed_arm9.num_unknown_autoloads()?
+        } else {
+            arm9.num_unknown_autoloads()?
+        };
+        let unknown_autoloads = (0..num_unknown_autoloads)
+            .map(|index| RomConfigAutoload {
+                bin: format!("arm9/unk_autoload_{index}.bin").into(),
+                config: format!("arm9/unk_autoload_{index}.yaml").into(),
+            })
+            .collect();
+
         let config = RomConfig {
             padding_value: rom.padding_value()?,
             header: "header.yaml".into(),
@@ -474,10 +522,9 @@ impl<'a> Rom<'a> {
             arm9_config: "arm9/arm9.yaml".into(),
             arm7_bin: "arm7/arm7.bin".into(),
             arm7_config: "arm7/arm7.yaml".into(),
-            itcm_bin: "arm9/itcm.bin".into(),
-            itcm_config: "arm9/itcm.yaml".into(),
-            dtcm_bin: "arm9/dtcm.bin".into(),
-            dtcm_config: "arm9/dtcm.yaml".into(),
+            itcm: RomConfigAutoload { bin: "arm9/itcm.bin".into(), config: "arm9/itcm.yaml".into() },
+            unknown_autoloads,
+            dtcm: RomConfigAutoload { bin: "arm9/dtcm.bin".into(), config: "arm9/dtcm.yaml".into() },
             arm9_overlays: if arm9_overlays.is_empty() { None } else { Some("arm9_overlays/overlays.yaml".into()) },
             arm7_overlays: if arm7_overlays.is_empty() { None } else { Some("arm7_overlays/overlays.yaml".into()) },
             banner: "banner/banner.yaml".into(),
@@ -488,7 +535,7 @@ impl<'a> Rom<'a> {
         Ok(Self {
             header: Header::load_raw(&header),
             header_logo: Logo::decompress(&header.logo)?,
-            arm9: rom.arm9()?,
+            arm9,
             arm9_overlays,
             arm7: rom.arm7()?,
             arm7_overlays,

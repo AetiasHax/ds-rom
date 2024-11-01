@@ -23,14 +23,13 @@ pub struct RomConfig {
     /// Path to ARM7 YAML
     pub arm7_config: PathBuf,
 
-    /// Path to ITCM binary
-    pub itcm_bin: PathBuf,
-    /// Path to ITCM YAML
-    pub itcm_config: PathBuf,
-    /// Path to DTCM binary
-    pub dtcm_bin: PathBuf,
-    /// Path to DTCM YAML
-    pub dtcm_config: PathBuf,
+    /// Path to ITCM files
+    pub itcm: RomConfigAutoload,
+    /// Path to DTCM files
+    pub dtcm: RomConfigAutoload,
+    /// Path to unknown autoloads
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unknown_autoloads: Vec<RomConfigAutoload>,
 
     /// Path to ARM9 overlays YAML
     pub arm9_overlays: Option<PathBuf>,
@@ -44,4 +43,13 @@ pub struct RomConfig {
     pub files_dir: PathBuf,
     /// Path to path order file
     pub path_order: PathBuf,
+}
+
+/// Path to autoload files
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RomConfigAutoload {
+    /// Path to binary
+    pub bin: PathBuf,
+    /// Path to YAML
+    pub config: PathBuf,
 }

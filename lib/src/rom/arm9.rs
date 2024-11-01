@@ -168,6 +168,41 @@ impl<'a> Arm9<'a> {
         Ok(arm9)
     }
 
+    /// Creates a new ARM9 program with raw data and a list of autoloads.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::build_info_mut`].
+    pub fn with_autoloads(
+        mut data: Vec<u8>,
+        autoloads: &[Autoload],
+        header_version: HeaderVersion,
+        offsets: Arm9Offsets,
+        options: Arm9WithTcmsOptions,
+    ) -> Result<Self, RawBuildInfoError> {
+        let autoload_blocks = data.len() as u32 + offsets.base_address;
+
+        for autoload in autoloads {
+            data.extend(autoload.full_data());
+        }
+
+        let autoload_infos_start = data.len() as u32 + offsets.base_address;
+        for autoload in autoloads {
+            data.extend(bytemuck::bytes_of(autoload.info()));
+        }
+        let autoload_infos_end = data.len() as u32 + offsets.base_address;
+
+        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted } = options;
+        let mut arm9 = Self { data: data.into(), header_version, offsets, originally_compressed, originally_encrypted };
+
+        let build_info = arm9.build_info_mut()?;
+        build_info.autoload_blocks = autoload_blocks;
+        build_info.autoload_infos_start = autoload_infos_start;
+        build_info.autoload_infos_end = autoload_infos_end;
+
+        Ok(arm9)
+    }
+
     /// Returns whether the secure area is encrypted. See [`Self::originally_encrypted`] for whether the secure area was
     /// encrypted originally.
     pub fn is_encrypted(&self) -> bool {
@@ -378,6 +413,15 @@ impl<'a> Arm9<'a> {
         }
 
         Ok(autoloads.into_boxed_slice())
+    }
+
+    /// Returns the number of unknown autoloads of this [`Arm9`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::autoloads`].
+    pub fn num_unknown_autoloads(&self) -> Result<usize, Arm9AutoloadError> {
+        Ok(self.autoloads()?.iter().filter(|a| matches!(a.kind(), AutoloadKind::Unknown(_))).count())
     }
 
     /// Returns the code of this ARM9 program.

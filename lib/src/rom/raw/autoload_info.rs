@@ -11,7 +11,7 @@ use super::RawBuildInfoError;
 
 /// Info about an autoload block.
 #[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Zeroable, Pod, Deserialize, Serialize)]
 pub struct AutoloadInfo {
     /// Base address of the autoload module.
     pub base_address: u32,
@@ -28,8 +28,8 @@ pub enum AutoloadKind {
     Itcm,
     /// Data TCM (Tightly Coupled Memory). Mainly used to make data have fast and predictable access times.
     Dtcm,
-    /// Unknown autoload kind.
-    Unknown,
+    /// Other autoload block of unknown purpose.
+    Unknown(AutoloadInfo),
 }
 
 /// Errors related to [`AutoloadInfo`].
@@ -97,7 +97,7 @@ impl AutoloadInfo {
         match self.base_address {
             0x1ff8000 => AutoloadKind::Itcm,
             0x27e0000 | 0x27c0000 => AutoloadKind::Dtcm,
-            _ => AutoloadKind::Unknown,
+            _ => AutoloadKind::Unknown(*self),
         }
     }
 
@@ -130,7 +130,7 @@ impl Display for AutoloadKind {
         match self {
             AutoloadKind::Itcm => write!(f, "ITCM"),
             AutoloadKind::Dtcm => write!(f, "DTCM"),
-            AutoloadKind::Unknown => write!(f, "Unknown"),
+            AutoloadKind::Unknown(_) => write!(f, "Unknown"),
         }
     }
 }
