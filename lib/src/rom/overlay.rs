@@ -3,7 +3,7 @@ use std::{borrow::Cow, io};
 use serde::{Deserialize, Serialize};
 
 use super::raw::{self, FileAlloc, HeaderVersion, OverlayCompressedSize, RawHeaderError};
-use crate::compress::lz77::Lz77;
+use crate::compress::lz77::{Lz77, Lz77DecompressError};
 
 /// An overlay module for ARM9/ARM7.
 #[derive(Clone)]
@@ -104,12 +104,13 @@ impl<'a> Overlay<'a> {
     }
 
     /// Decompresses this [`Overlay`], but does nothing if already decompressed.
-    pub fn decompress(&mut self) {
+    pub fn decompress(&mut self) -> Result<(), Lz77DecompressError> {
         if !self.is_compressed() {
-            return;
+            return Ok(());
         }
-        self.data = LZ77.decompress(&self.data).into_vec().into();
+        self.data = LZ77.decompress(&self.data)?.into_vec().into();
         self.info.compressed = false;
+        Ok(())
     }
 
     /// Compresses this [`Overlay`], but does nothing if already compressed.

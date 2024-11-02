@@ -8,7 +8,7 @@ use super::{
     Autoload,
 };
 use crate::{
-    compress::lz77::Lz77,
+    compress::lz77::{Lz77, Lz77DecompressError},
     crc::CRC_16_MODBUS,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
 };
@@ -73,6 +73,12 @@ pub enum Arm9Error {
     RawBuildInfo {
         /// Source error.
         source: RawBuildInfoError,
+    },
+    /// See [`Lz77DecompressError`].
+    #[snafu(transparent)]
+    Lz77Decompress {
+        /// Source error.
+        source: Lz77DecompressError,
     },
     /// See [`io::Error`].
     #[snafu(transparent)]
@@ -330,7 +336,7 @@ impl<'a> Arm9<'a> {
             return Ok(());
         }
 
-        let data: Cow<[u8]> = LZ77.decompress(&self.data).into_vec().into();
+        let data: Cow<[u8]> = LZ77.decompress(&self.data)?.into_vec().into();
         let old_data = replace(&mut self.data, data);
         let build_info = match self.build_info_mut() {
             Ok(build_info) => build_info,
