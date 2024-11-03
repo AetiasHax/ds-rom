@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Result};
 use argp::FromArgs;
 use ds_rom::{
+    compress::lz77::Lz77,
     crypto::blowfish::BlowfishKey,
     rom::{self, raw, Logo, Overlay},
 };
@@ -60,6 +61,14 @@ pub struct Dump {
     /// Decompresses code modules.
     #[argp(switch, short = 'd')]
     decompress: bool,
+
+    /// Compare LZ77 compression algorithm output to the ROM. Use in combination with "print" switches.
+    #[argp(switch, short = 'L')]
+    compare_lz77: bool,
+
+    /// Shows the LZ77 tokens of a compressed module. Use in combination with "print" switches.
+    #[argp(switch, short = 'z')]
+    show_lz77_tokens: bool,
 
     /// Prints contents as raw bytes.
     #[argp(switch, short = 'R')]
@@ -132,7 +141,22 @@ impl Dump {
         }
 
         if self.print_arm9 {
-            print_hex(arm9.as_ref(), self.raw, arm9.base_address())?;
+            if self.compare_lz77 {
+                let mut recompressed = arm9.clone();
+                recompressed.decompress()?;
+                recompressed.compress()?;
+
+                Self::compare_lz77(arm9.full_data(), recompressed.full_data(), 0x4000, arm9.base_address() as usize);
+            }
+
+            if self.show_lz77_tokens {
+                let tokens = Lz77 {}.parse_tokens(arm9.full_data())?;
+                println!("{tokens}");
+            }
+
+            if !self.compare_lz77 && !self.show_lz77_tokens {
+                print_hex(arm9.as_ref(), self.raw, arm9.base_address())?;
+            }
         }
 
         if self.show_build_info {
@@ -172,13 +196,28 @@ impl Dump {
             let mut overlay = Overlay::parse(&arm9_ovt[index], fat, &rom)?;
 
             if self.decompress && overlay.is_compressed() {
-                overlay.decompress();
+                overlay.decompress()?;
             }
             if self.compress && !overlay.is_compressed() {
                 overlay.compress()?;
             }
 
-            print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
+            if self.compare_lz77 {
+                let mut recompressed = overlay.clone();
+                recompressed.decompress()?;
+                recompressed.compress()?;
+
+                Self::compare_lz77(overlay.full_data(), recompressed.full_data(), 0, overlay.base_address() as usize);
+            }
+
+            if self.show_lz77_tokens {
+                let tokens = Lz77 {}.parse_tokens(overlay.full_data())?;
+                println!("{tokens}");
+            }
+
+            if !self.compare_lz77 && !self.show_lz77_tokens {
+                print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
+            }
         }
 
         if self.print_arm7 {
@@ -210,5 +249,32 @@ impl Dump {
             println!("Files:\n{}", root.display(2));
         }
         Ok(())
+    }
+
+    fn compare_lz77(data_before: &[u8], data_after: &[u8], start: usize, base_address: usize) {
+        let before = data_before.len();
+        let after = data_after.len();
+
+        let mut equal = true;
+        if before != after {
+            println!("Wrong size: before = {before:#x}, after = {after:#x}");
+            equal = false;
+        }
+
+        let before = data_before.iter().enumerate().skip(start).rev();
+        let after = data_after.iter().enumerate().skip(start).rev();
+
+        for ((addr_before, value_before), (addr_after, value_after)) in before.zip(after) {
+            let addr_before = addr_before + base_address;
+            let addr_after = addr_after + base_address;
+            if value_before != value_after {
+                println!("{addr_before:08x}: {value_before:02x}  =>  {addr_after:08x}: {value_after:02x}");
+                equal = false;
+            }
+        }
+
+        if equal {
+            println!("Compression matched");
+        }
     }
 }

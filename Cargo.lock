@@ -225,13 +225,15 @@ dependencies = [
 
 [[package]]
 name = "ds-rom"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "anyhow",
  "bitfield-struct",
  "bitreader",
  "bytemuck",
  "crc",
  "encoding_rs",
+ "env_logger",
  "image",
  "log",
  "rust-bitwriter",
@@ -242,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "ds-rom-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argp",
