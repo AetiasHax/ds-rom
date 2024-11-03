@@ -25,9 +25,12 @@ fn test_extract_build() -> Result<()> {
         if path.extension() != Some(OsStr::new("nds")) {
             continue;
         }
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        if file_name.starts_with("build_") {
+            continue;
+        }
 
         // Extract
-        let file_name = path.file_name().unwrap().to_string_lossy();
         let extension = path.extension().unwrap().to_string_lossy();
         let base_name = file_name.strip_suffix(extension.as_ref()).unwrap().strip_suffix(".").unwrap();
         let extract_path = roms_dir.join(base_name);
