@@ -196,7 +196,7 @@ impl Dump {
             let mut overlay = Overlay::parse(&arm9_ovt[index], fat, &rom)?;
 
             if self.decompress && overlay.is_compressed() {
-                overlay.decompress();
+                overlay.decompress()?;
             }
             if self.compress && !overlay.is_compressed() {
                 overlay.compress()?;
@@ -204,7 +204,7 @@ impl Dump {
 
             if self.compare_lz77 {
                 let mut recompressed = overlay.clone();
-                recompressed.decompress();
+                recompressed.decompress()?;
                 recompressed.compress()?;
 
                 Self::compare_lz77(overlay.full_data(), recompressed.full_data(), 0, overlay.base_address() as usize);

@@ -17,6 +17,7 @@ use super::{
     Overlay, OverlayInfo, RomConfigAutoload,
 };
 use crate::{
+    compress::lz77::Lz77DecompressError,
     crypto::blowfish::BlowfishKey,
     io::{create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string, FileError},
     rom::{raw::FileAlloc, Arm9WithTcmsOptions, RomConfig},
@@ -195,6 +196,12 @@ pub enum RomSaveError {
     BannerImage {
         /// Source error.
         source: BannerImageError,
+    },
+    /// See [`Lz77DecompressError`].
+    #[snafu(transparent)]
+    Lz77Decompress {
+        /// Source error.
+        source: Lz77DecompressError,
     },
 }
 
@@ -471,7 +478,7 @@ impl<'a> Rom<'a> {
 
                 if plain_overlay.is_compressed() {
                     log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
-                    plain_overlay.decompress();
+                    plain_overlay.decompress()?;
                 }
                 create_file(overlays_path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
             }
