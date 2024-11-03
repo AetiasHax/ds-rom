@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::{
-    raw::{AutoloadInfo, AutoloadKind, BuildInfo, HeaderVersion, RawAutoloadInfoError, RawBuildInfoError},
+    raw::{AutoloadInfo, AutoloadKind, BuildInfo, RawAutoloadInfoError, RawBuildInfoError},
     Autoload,
 };
 use crate::{
@@ -17,7 +17,6 @@ use crate::{
 #[derive(Clone)]
 pub struct Arm9<'a> {
     data: Cow<'a, [u8]>,
-    header_version: HeaderVersion,
     offsets: Arm9Offsets,
     originally_compressed: bool,
     originally_encrypted: bool,
@@ -129,13 +128,8 @@ pub struct Arm9WithTcmsOptions {
 
 impl<'a> Arm9<'a> {
     /// Creates a new ARM9 program from raw data.
-    pub fn new<T: Into<Cow<'a, [u8]>>>(
-        data: T,
-        header_version: HeaderVersion,
-        offsets: Arm9Offsets,
-    ) -> Result<Self, RawBuildInfoError> {
-        let mut arm9 =
-            Arm9 { data: data.into(), header_version, offsets, originally_compressed: false, originally_encrypted: false };
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, offsets: Arm9Offsets) -> Result<Self, RawBuildInfoError> {
+        let mut arm9 = Arm9 { data: data.into(), offsets, originally_compressed: false, originally_encrypted: false };
         arm9.originally_compressed = arm9.is_compressed()?;
         arm9.originally_encrypted = arm9.is_encrypted();
         Ok(arm9)
@@ -150,7 +144,6 @@ impl<'a> Arm9<'a> {
         mut data: Vec<u8>,
         itcm: Autoload,
         dtcm: Autoload,
-        header_version: HeaderVersion,
         offsets: Arm9Offsets,
         options: Arm9WithTcmsOptions,
     ) -> Result<Self, RawBuildInfoError> {
@@ -164,7 +157,7 @@ impl<'a> Arm9<'a> {
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
         let Arm9WithTcmsOptions { originally_compressed, originally_encrypted } = options;
-        let mut arm9 = Self { data: data.into(), header_version, offsets, originally_compressed, originally_encrypted };
+        let mut arm9 = Self { data: data.into(), offsets, originally_compressed, originally_encrypted };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -182,7 +175,6 @@ impl<'a> Arm9<'a> {
     pub fn with_autoloads(
         mut data: Vec<u8>,
         autoloads: &[Autoload],
-        header_version: HeaderVersion,
         offsets: Arm9Offsets,
         options: Arm9WithTcmsOptions,
     ) -> Result<Self, RawBuildInfoError> {
@@ -199,7 +191,7 @@ impl<'a> Arm9<'a> {
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
         let Arm9WithTcmsOptions { originally_compressed, originally_encrypted } = options;
-        let mut arm9 = Self { data: data.into(), header_version, offsets, originally_compressed, originally_encrypted };
+        let mut arm9 = Self { data: data.into(), offsets, originally_compressed, originally_encrypted };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -359,7 +351,7 @@ impl<'a> Arm9<'a> {
             return Ok(());
         }
 
-        let data: Cow<[u8]> = LZ77.compress(self.header_version, &self.data, COMPRESSION_START)?.into_vec().into();
+        let data: Cow<[u8]> = LZ77.compress(&self.data, COMPRESSION_START)?.into_vec().into();
         let length = data.len();
         let old_data = replace(&mut self.data, data);
         let base_address = self.base_address();

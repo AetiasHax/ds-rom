@@ -28,7 +28,7 @@ pub struct RomConfig {
     /// Path to DTCM files
     pub dtcm: RomConfigAutoload,
     /// Path to unknown autoloads
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default = "Vec::new")]
     pub unknown_autoloads: Vec<RomConfigAutoload>,
 
     /// Path to ARM9 overlays YAML

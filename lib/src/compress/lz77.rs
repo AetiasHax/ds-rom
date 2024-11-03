@@ -7,8 +7,6 @@ use std::{
 
 use snafu::Snafu;
 
-use crate::rom::raw::HeaderVersion;
-
 /// De/compresses data using a backwards [LZ77])(https://en.wikipedia.org/wiki/LZ77_and_LZ78#LZ77) algorithm. "Backwards"
 /// refers to starting the de/compression from the end of the file and moving towards the beginning.
 pub struct Lz77 {}
@@ -86,7 +84,7 @@ pub enum Lz77DecompressError {
 }
 
 impl Lz77 {
-    fn compress_bytes2(&self, version: HeaderVersion, bytes: &[u8], compressed: &mut Vec<u8>) -> Result<usize, io::Error> {
+    fn compress_bytes(&self, bytes: &[u8], compressed: &mut Vec<u8>) -> Result<usize, io::Error> {
         let mut tokens = Tokens::compress(bytes);
         tokens.drop_wasteful_tokens()?;
         tokens.write(compressed)
@@ -120,10 +118,9 @@ impl Lz77 {
     /// # Errors
     ///
     /// This function will return an error if an I/O operation fails.
-    pub fn compress(&self, version: HeaderVersion, bytes: &[u8], start: usize) -> Result<Box<[u8]>, io::Error> {
+    pub fn compress(&self, bytes: &[u8], start: usize) -> Result<Box<[u8]>, io::Error> {
         let mut compressed = Vec::with_capacity(bytes.len());
-        // let num_identical = self.compress_bytes(version, &bytes[start..], &mut compressed)?;
-        let num_identical = self.compress_bytes2(version, &bytes[start..], &mut compressed)?;
+        let num_identical = self.compress_bytes(&bytes[start..], &mut compressed)?;
         for i in (0..start).rev() {
             compressed.push(bytes[i]);
         }
@@ -321,7 +318,9 @@ impl<'a> Tokens<'a> {
             }
         }
 
-        let Some(best_token_index) = best_token_index else { return Ok(()) };
+        let Some(best_token_index) = best_token_index else {
+            return Ok(());
+        };
         self.dropped_tokens = self.tokens.len() - best_token_index - 1;
 
         Ok(())

@@ -272,16 +272,10 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Build ARM9 program ---------------------
-        let mut arm9 = Arm9::with_autoloads(
-            arm9,
-            &autoloads,
-            header.version(),
-            arm9_build_config.offsets,
-            Arm9WithTcmsOptions {
-                originally_compressed: arm9_build_config.compressed,
-                originally_encrypted: arm9_build_config.encrypted,
-            },
-        )?;
+        let mut arm9 = Arm9::with_autoloads(arm9, &autoloads, arm9_build_config.offsets, Arm9WithTcmsOptions {
+            originally_compressed: arm9_build_config.compressed,
+            originally_encrypted: arm9_build_config.encrypted,
+        })?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         if arm9_build_config.compressed && options.compress {
             log::info!("Compressing ARM9 program");
@@ -297,7 +291,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Load ARM9 overlays ---------------------
         let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
-            Self::load_overlays(&path.join(arm9_overlays_config), &header, "arm9", &options)?
+            Self::load_overlays(&path.join(arm9_overlays_config), "arm9", &options)?
         } else {
             vec![]
         };
@@ -309,7 +303,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Load ARM7 overlays ---------------------
         let arm7_overlays = if let Some(arm7_overlays_config) = &config.arm7_overlays {
-            Self::load_overlays(&path.join(arm7_overlays_config), &header, "arm7", &options)?
+            Self::load_overlays(&path.join(arm7_overlays_config), "arm7", &options)?
         } else {
             vec![]
         };
@@ -335,12 +329,7 @@ impl<'a> Rom<'a> {
         Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order, config })
     }
 
-    fn load_overlays(
-        config_path: &Path,
-        header: &Header,
-        processor: &str,
-        options: &RomLoadOptions,
-    ) -> Result<Vec<Overlay<'a>>, RomSaveError> {
+    fn load_overlays(config_path: &Path, processor: &str, options: &RomLoadOptions) -> Result<Vec<Overlay<'a>>, RomSaveError> {
         let path = config_path.parent().unwrap();
         let mut overlays = vec![];
         let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(open_file(config_path)?)?;
@@ -349,7 +338,7 @@ impl<'a> Rom<'a> {
             let data = read_file(path.join(config.file_name))?;
             let compressed = config.info.compressed;
             config.info.compressed = false;
-            let mut overlay = Overlay::new(data, header.version(), config.info, compressed);
+            let mut overlay = Overlay::new(data, config.info, compressed);
             if compressed && options.compress {
                 log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
                 overlay.compress()?;
