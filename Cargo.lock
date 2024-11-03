@@ -227,11 +227,13 @@ dependencies = [
 name = "ds-rom"
 version = "0.3.0"
 dependencies = [
+ "anyhow",
  "bitfield-struct",
  "bitreader",
  "bytemuck",
  "crc",
  "encoding_rs",
+ "env_logger",
  "image",
  "log",
  "rust-bitwriter",
