@@ -301,13 +301,19 @@ impl<'a> FileSystem<'a> {
             return files_first;
         }
 
-        let a_lower = a.to_lowercase();
-        let b_lower = b.to_lowercase();
-        let (a_bytes, _, _) = SHIFT_JIS.encode(&a_lower);
-        let (b_bytes, _, _) = SHIFT_JIS.encode(&b_lower);
+        // Convert to Shift-JIS first, *then* convert to lowercase byte-by-byte
+        // without accounting for multibyte characters like コ (83 52, but sorted
+        // as if it was actually ビ / 83 72). This strcasecmp-like behavior was
+        // observed in 999's Japanese file names.
+        let (mut a_bytes, _, _) = SHIFT_JIS.encode(&a);
+        let (mut b_bytes, _, _) = SHIFT_JIS.encode(&b);
+        let a_vec = a_bytes.to_mut();
+        let b_vec = b_bytes.to_mut();
+        a_vec.make_ascii_lowercase();
+        b_vec.make_ascii_lowercase();
 
         // Lexicographic, case-insensitive Shift-JIS order
-        a_bytes.cmp(&b_bytes)
+        a_vec.cmp(&b_vec)
     }
 
     fn sort_for_fnt_in(&mut self, parent_id: u16) {
@@ -398,14 +404,21 @@ impl<'a> FileSystem<'a> {
             return;
         }
         for child in &subdir.children {
+            if visited.contains(child) {
+                continue;
+            }
+
             if Self::is_dir(*child) {
                 let path = path.join(self.name(*child));
                 self.traverse_nonvisited_files(visited, callback, self.dir(*child), &path);
             } else {
                 callback(self.file(*child), path);
+                let first_time_visiting_file = visited.insert(*child);
+                assert!(first_time_visiting_file);
             }
         }
-        visited.insert(subdir.id);
+        let first_time_visiting_file = visited.insert(subdir.id);
+        assert!(first_time_visiting_file);
     }
 
     /// Traverses the [`FileSystem`] and calls `callback` for each file found. The directories will be prioritized according to
@@ -424,11 +437,17 @@ impl<'a> FileSystem<'a> {
                 self.dir(ROOT_DIR_ID)
             } else {
                 let Some(child) = self.find_path(path) else { continue };
+                if visited.contains(&child) {
+                    continue;
+                }
+
                 if Self::is_dir(child) {
                     self.dir(child)
                 } else {
                     let file = self.file(child);
                     callback(file, path_buf);
+                    let first_time_visiting_file = visited.insert(file.id);
+                    assert!(first_time_visiting_file);
                     continue;
                 }
             };
