@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use argp::FromArgs;
+use clap::{Parser, Subcommand};
 use ds_rom::{
     compress::lz77::Lz77,
     crypto::blowfish::BlowfishKey,
@@ -11,30 +11,29 @@ use ds_rom::{
 use crate::print_hex;
 
 /// Prints information about a ROM
-#[derive(FromArgs)]
-#[argp(subcommand, name = "dump")]
+#[derive(Parser, Clone)]
 pub struct Dump {
     /// Nintendo DS game ROM
-    #[argp(option, short = 'r')]
+    #[arg(long, short = 'r')]
     rom: PathBuf,
 
     /// Nintendo DS ARM7 BIOS file
-    #[argp(option, short = '7')]
+    #[arg(long, short = '7')]
     arm7_bios: Option<PathBuf>,
 
     /// Encrypts the secure area.
-    #[argp(switch, short = 'e')]
+    #[arg(long, short = 'e')]
     encrypt: bool,
 
     /// Compresses code modules.
-    #[argp(switch, short = 'c')]
+    #[arg(long, short = 'c')]
     compress: bool,
 
     /// Decompresses code modules.
-    #[argp(switch, short = 'd')]
+    #[arg(long, short = 'd')]
     decompress: bool,
 
-    #[argp(subcommand)]
+    #[command(subcommand)]
     command: DumpCommand,
 }
 
@@ -78,29 +77,33 @@ impl Dump {
     }
 }
 
-#[derive(FromArgs)]
-#[argp(subcommand)]
+#[derive(Subcommand, Clone)]
 enum DumpCommand {
     Header(DumpHeader),
     Arm9(DumpArm9),
+    #[command(name = "build-info")]
     BuildInfo(DumpBuildInfo),
     Arm7(DumpArm7),
+    #[command(name = "arm9-ovt")]
     Arm9OverlayTable(DumpArm9OverlayTable),
+    #[command(name = "arm7-ovt")]
     Arm7OverlayTable(DumpArm7OverlayTable),
+    #[command(name = "autoload-info")]
     AutoloadInfo(DumpAutoloadInfo),
     Autoload(DumpAutoload),
     Fnt(DumpFnt),
     Banner(DumpBanner),
+    #[command(name = "arm9-ov")]
     Arm9Overlay(DumpArm9Overlay),
+    #[command(name = "arm7-ov")]
     Arm7Overlay(DumpArm7Overlay),
 }
 
 /// Shows the contents of the ROM header.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "header")]
+#[derive(Parser, Clone)]
 struct DumpHeader {
     /// Changes the header logo to this PNG.
-    #[argp(option, short = 'l')]
+    #[arg(long, short = 'l')]
     header_logo: Option<PathBuf>,
 }
 
@@ -120,19 +123,18 @@ impl DumpHeader {
 }
 
 /// Prints the contents of the ARM9 program.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "arm9")]
+#[derive(Parser, Clone)]
 struct DumpArm9 {
     /// Compare LZ77 compression algorithm output to the ROM.
-    #[argp(switch, short = 'L')]
+    #[arg(long, short = 'L')]
     compare_lz77: bool,
 
     /// Shows the LZ77 tokens of a compressed module.
-    #[argp(switch, short = 'z')]
+    #[arg(long, short = 'z')]
     show_lz77_tokens: bool,
 
     /// Prints contents as raw bytes.
-    #[argp(switch, short = 'R')]
+    #[arg(long, short = 'R')]
     raw: bool,
 }
 
@@ -160,8 +162,7 @@ impl DumpArm9 {
 }
 
 /// Shows the contents of the ARM9 build info.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "build-info")]
+#[derive(Parser, Clone)]
 struct DumpBuildInfo {}
 
 impl DumpBuildInfo {
@@ -174,11 +175,10 @@ impl DumpBuildInfo {
 }
 
 /// Prints the contents of the ARM7 program.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "arm7")]
+#[derive(Parser, Clone)]
 struct DumpArm7 {
     /// Prints contents as raw bytes.
-    #[argp(switch, short = 'R')]
+    #[arg(long, short = 'R')]
     raw: bool,
 }
 
@@ -192,8 +192,7 @@ impl DumpArm7 {
 }
 
 /// Prints the contents of the ARM9 overlay table.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "arm9-ovt")]
+#[derive(Parser, Clone)]
 struct DumpArm9OverlayTable {}
 
 impl DumpArm9OverlayTable {
@@ -211,8 +210,7 @@ impl DumpArm9OverlayTable {
 }
 
 /// Prints the contents of the ARM7 overlay table.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "arm7-ovt")]
+#[derive(Parser, Clone)]
 struct DumpArm7OverlayTable {}
 
 impl DumpArm7OverlayTable {
@@ -230,8 +228,7 @@ impl DumpArm7OverlayTable {
 }
 
 /// Prints information about autoload blocks.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "autoload-info")]
+#[derive(Parser, Clone)]
 struct DumpAutoloadInfo {}
 
 impl DumpAutoloadInfo {
@@ -247,15 +244,13 @@ impl DumpAutoloadInfo {
 }
 
 /// Prints the contents of an autoload block.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "autoload")]
+#[derive(Parser, Clone)]
 struct DumpAutoload {
     /// The autoload block's index.
-    #[argp(positional)]
     index: usize,
 
     /// Prints contents as raw bytes.
-    #[argp(switch, short = 'R')]
+    #[arg(long, short = 'R')]
     raw: bool,
 }
 
@@ -274,8 +269,7 @@ impl DumpAutoload {
 }
 
 /// Shows the contents of the file name table.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "fnt")]
+#[derive(Parser, Clone)]
 struct DumpFnt {}
 
 impl DumpFnt {
@@ -290,8 +284,7 @@ impl DumpFnt {
 }
 
 /// Shows the contents of the banner.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "banner")]
+#[derive(Parser, Clone)]
 struct DumpBanner {}
 
 impl DumpBanner {
@@ -304,23 +297,21 @@ impl DumpBanner {
 }
 
 /// Prints the contents of an ARM9 overlay.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "arm9-ov")]
+#[derive(Parser, Clone)]
 struct DumpArm9Overlay {
     /// The overlay index.
-    #[argp(positional)]
     index: usize,
 
     /// Compare LZ77 compression algorithm output to the ROM.
-    #[argp(switch, short = 'L')]
+    #[arg(long, short = 'L')]
     compare_lz77: bool,
 
     /// Shows the LZ77 tokens of a compressed module.
-    #[argp(switch, short = 'z')]
+    #[arg(long, short = 'z')]
     show_lz77_tokens: bool,
 
     /// Prints contents as raw bytes.
-    #[argp(switch, short = 'R')]
+    #[arg(long, short = 'R')]
     raw: bool,
 }
 
@@ -359,15 +350,13 @@ impl DumpArm9Overlay {
 }
 
 /// Prints the contents of an ARM7 overlay.
-#[derive(FromArgs)]
-#[argp(subcommand, name = "arm7-ov")]
+#[derive(Parser, Clone)]
 struct DumpArm7Overlay {
     /// The overlay index.
-    #[argp(positional)]
     index: usize,
 
     /// Prints contents as raw bytes.
-    #[argp(switch, short = 'R')]
+    #[arg(long, short = 'R')]
     raw: bool,
 }
 
