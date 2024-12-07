@@ -13,7 +13,7 @@ use log::LevelFilter;
 
 /// Command-line interface for extracting/building Nintendo DS ROMs.
 #[derive(Parser)]
-struct Args {
+struct Cli {
     #[command(subcommand)]
     command: Command,
 }
@@ -38,7 +38,7 @@ impl Command {
 fn main() -> Result<()> {
     env_logger::builder().filter_level(LevelFilter::Info).init();
 
-    let args: Args = Args::parse();
+    let args: Cli = Cli::parse();
     args.command.run()
 }
 
