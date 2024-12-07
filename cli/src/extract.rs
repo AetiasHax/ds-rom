@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use clap::Parser;
+use clap::Args;
 use ds_rom::{
     crypto::blowfish::BlowfishKey,
     rom::{raw, Rom, RomSaveError},
 };
 
 /// Extracts a ROM to a given path
-#[derive(Parser, Clone)]
+#[derive(Args)]
 pub struct Extract {
     /// Nintendo DS game ROM
     #[arg(long, short = 'r')]
