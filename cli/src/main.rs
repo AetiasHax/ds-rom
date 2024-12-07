@@ -18,7 +18,7 @@ struct Args {
     command: Command,
 }
 
-#[derive(Subcommand, Clone)]
+#[derive(Subcommand)]
 enum Command {
     Dump(Dump),
     Extract(Extract),
