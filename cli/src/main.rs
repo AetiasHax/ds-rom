@@ -5,21 +5,20 @@ mod extract;
 use std::io::Write;
 
 use anyhow::Result;
-use argp::FromArgs;
+use clap::{Parser, Subcommand};
 use build::Build;
 use dump::Dump;
 use extract::Extract;
 use log::LevelFilter;
 
 /// Command-line interface for extracting/building Nintendo DS ROMs.
-#[derive(FromArgs)]
+#[derive(Parser)]
 struct Args {
-    #[argp(subcommand)]
+    #[command(subcommand)]
     command: Command,
 }
 
-#[derive(FromArgs)]
-#[argp(subcommand)]
+#[derive(Subcommand, Clone)]
 enum Command {
     Dump(Dump),
     Extract(Extract),
@@ -39,7 +38,7 @@ impl Command {
 fn main() -> Result<()> {
     env_logger::builder().filter_level(LevelFilter::Info).init();
 
-    let args: Args = argp::parse_args_or_exit(argp::DEFAULT);
+    let args: Args = Args::parse();
     args.command.run()
 }
 
