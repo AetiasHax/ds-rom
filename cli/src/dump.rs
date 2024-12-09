@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Subcommand};
 use ds_rom::{
     compress::lz77::Lz77,
     crypto::blowfish::BlowfishKey,
@@ -11,7 +11,7 @@ use ds_rom::{
 use crate::print_hex;
 
 /// Prints information about a ROM
-#[derive(Parser, Clone)]
+#[derive(Args)]
 pub struct Dump {
     /// Nintendo DS game ROM
     #[arg(long, short = 'r')]
@@ -77,7 +77,7 @@ impl Dump {
     }
 }
 
-#[derive(Subcommand, Clone)]
+#[derive(Subcommand)]
 enum DumpCommand {
     Header(DumpHeader),
     Arm9(DumpArm9),
@@ -100,7 +100,7 @@ enum DumpCommand {
 }
 
 /// Shows the contents of the ROM header.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpHeader {
     /// Changes the header logo to this PNG.
     #[arg(long, short = 'l')]
@@ -123,7 +123,7 @@ impl DumpHeader {
 }
 
 /// Prints the contents of the ARM9 program.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpArm9 {
     /// Compare LZ77 compression algorithm output to the ROM.
     #[arg(long, short = 'L')]
@@ -162,7 +162,7 @@ impl DumpArm9 {
 }
 
 /// Shows the contents of the ARM9 build info.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpBuildInfo {}
 
 impl DumpBuildInfo {
@@ -175,7 +175,7 @@ impl DumpBuildInfo {
 }
 
 /// Prints the contents of the ARM7 program.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpArm7 {
     /// Prints contents as raw bytes.
     #[arg(long, short = 'R')]
@@ -192,7 +192,7 @@ impl DumpArm7 {
 }
 
 /// Prints the contents of the ARM9 overlay table.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpArm9OverlayTable {}
 
 impl DumpArm9OverlayTable {
@@ -210,7 +210,7 @@ impl DumpArm9OverlayTable {
 }
 
 /// Prints the contents of the ARM7 overlay table.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpArm7OverlayTable {}
 
 impl DumpArm7OverlayTable {
@@ -228,7 +228,7 @@ impl DumpArm7OverlayTable {
 }
 
 /// Prints information about autoload blocks.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpAutoloadInfo {}
 
 impl DumpAutoloadInfo {
@@ -244,7 +244,7 @@ impl DumpAutoloadInfo {
 }
 
 /// Prints the contents of an autoload block.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpAutoload {
     /// The autoload block's index.
     index: usize,
@@ -269,7 +269,7 @@ impl DumpAutoload {
 }
 
 /// Shows the contents of the file name table.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpFnt {}
 
 impl DumpFnt {
@@ -284,7 +284,7 @@ impl DumpFnt {
 }
 
 /// Shows the contents of the banner.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpBanner {}
 
 impl DumpBanner {
@@ -297,7 +297,7 @@ impl DumpBanner {
 }
 
 /// Prints the contents of an ARM9 overlay.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpArm9Overlay {
     /// The overlay index.
     index: usize,
@@ -350,7 +350,7 @@ impl DumpArm9Overlay {
 }
 
 /// Prints the contents of an ARM7 overlay.
-#[derive(Parser, Clone)]
+#[derive(Args)]
 struct DumpArm7Overlay {
     /// The overlay index.
     index: usize,
