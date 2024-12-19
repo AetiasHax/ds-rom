@@ -226,11 +226,11 @@ impl Logo {
         }
 
         let len = bytes.len();
-        let mut diff = &mut bytes[4..len - 4];
+        let diff = &mut bytes[4..len - 4];
         if diff.len() != SIZE {
             WrongSizeSnafu { expected: SIZE, actual: diff.len() }.fail()?;
         }
-        HUFFMAN.diff16_to_data(&mut diff);
+        HUFFMAN.diff16_to_data(diff);
 
         let mut logo = Logo::default();
         logo.load_tiles(diff);

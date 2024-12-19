@@ -1,4 +1,7 @@
-use std::mem::{offset_of, size_of};
+use std::{
+    mem::{offset_of, size_of},
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;

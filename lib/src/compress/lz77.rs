@@ -106,9 +106,9 @@ impl Lz77 {
         let write_offset: u32 = (bytes.len() - total_size) as u32;
         let total_size = total_size - num_identical - start;
         let total_size_bytes = total_size.to_le_bytes();
-        compressed.write(&[total_size_bytes[0], total_size_bytes[1], total_size_bytes[2]])?;
+        compressed.write_all(&[total_size_bytes[0], total_size_bytes[1], total_size_bytes[2]])?;
         compressed.push(read_offset);
-        compressed.write(&write_offset.to_le_bytes())?;
+        compressed.write_all(&write_offset.to_le_bytes())?;
         Ok(())
     }
 
@@ -296,7 +296,7 @@ impl<'a> Tokens<'a> {
             }
         }
 
-        return Self { tokens, bytes_saved, dropped_tokens: 0 };
+        Self { tokens, bytes_saved, dropped_tokens: 0 }
     }
 
     fn drop_wasteful_tokens(&mut self) -> Result<(), io::Error> {
@@ -349,7 +349,7 @@ impl<'a> Tokens<'a> {
                 match token {
                     Token::Literal(byte) => compressed.push(*byte),
                     Token::Pair((pair, _)) => {
-                        compressed.write(&pair.to_be_bytes())?;
+                        compressed.write_all(&pair.to_be_bytes())?;
                     }
                 }
             }

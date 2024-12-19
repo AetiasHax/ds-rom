@@ -229,14 +229,12 @@ impl<'a> FileSystem<'a> {
     }
 
     fn find_first_file_id(&self, parent: &Dir) -> u16 {
-        for child in &parent.children {
-            if Self::is_file(*child) {
-                return *child;
-            } else {
-                return self.find_first_file_id(self.dir(*child));
-            }
+        let child = *parent.children.first().expect("No first file ID found, directory is empty");
+        if Self::is_file(child) {
+            child
+        } else {
+            self.find_first_file_id(self.dir(child))
         }
-        panic!("No first file ID found, directory is empty");
     }
 
     fn build_subtable(&self, parent: &Dir) -> Result<FntSubtable, FileBuildError> {
@@ -259,7 +257,7 @@ impl<'a> FileSystem<'a> {
 
             data.extend(sjis_name.iter().take(0x7f));
             if is_dir {
-                data.write(&u16::to_le_bytes(child)).unwrap();
+                data.write_all(&u16::to_le_bytes(child)).unwrap();
             }
         }
 
@@ -305,8 +303,8 @@ impl<'a> FileSystem<'a> {
         // without accounting for multibyte characters like コ (83 52, but sorted
         // as if it was actually ビ / 83 72). This strcasecmp-like behavior was
         // observed in 999's Japanese file names.
-        let (mut a_bytes, _, _) = SHIFT_JIS.encode(&a);
-        let (mut b_bytes, _, _) = SHIFT_JIS.encode(&b);
+        let (mut a_bytes, _, _) = SHIFT_JIS.encode(a);
+        let (mut b_bytes, _, _) = SHIFT_JIS.encode(b);
         let a_vec = a_bytes.to_mut();
         let b_vec = b_bytes.to_mut();
         a_vec.make_ascii_lowercase();
@@ -398,7 +396,7 @@ impl<'a> FileSystem<'a> {
 
     fn traverse_nonvisited_files<Cb>(&self, visited: &mut HashSet<u16>, callback: &mut Cb, subdir: &Dir, path: &Path)
     where
-        Cb: FnMut(&File, &Path) -> (),
+        Cb: FnMut(&File, &Path),
     {
         if visited.contains(&subdir.id) {
             return;
@@ -426,7 +424,7 @@ impl<'a> FileSystem<'a> {
     pub fn traverse_files<I, Cb>(&self, path_order: I, mut callback: Cb)
     where
         I: IntoIterator<Item = &'a str>,
-        Cb: FnMut(&File, &Path) -> (),
+        Cb: FnMut(&File, &Path),
     {
         let mut visited = HashSet::<u16>::new();
 
@@ -587,7 +585,7 @@ struct PathOrder {
 
 impl PartialOrd for PathOrder {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.offset.partial_cmp(&other.offset)
+        Some(self.cmp(other))
     }
 }
 

@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 use bytemuck::{Pod, Zeroable};
 use serde::{de, Deserialize, Serialize};
@@ -21,17 +21,19 @@ pub enum AsciiArrayError {
     },
 }
 
-impl<const N: usize> AsciiArray<N> {
+impl<const N: usize> FromStr for AsciiArray<N> {
+    type Err = AsciiArrayError;
+
     /// Loads from a `&str`.
     ///
     /// # Errors
     ///
     /// This function will return an error if the string contains a non-ASCII character.
-    pub fn from_str(string: &str) -> Result<Self, AsciiArrayError> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut chars = [0u8; N];
-        for (i, ch) in string.chars().take(N).enumerate() {
+        for (i, ch) in s.chars().take(N).enumerate() {
             if !ch.is_ascii() {
-                return NotAsciiSnafu { string: string.to_string() }.fail();
+                return NotAsciiSnafu { string: s.to_string() }.fail();
             }
             chars[i] = ch as u8;
         }
@@ -73,7 +75,7 @@ impl<'de, const N: usize> Deserialize<'de> for AsciiArray<N> {
         D: serde::Deserializer<'de>,
     {
         let string: String = Deserialize::deserialize(deserializer)?;
-        Ok(Self::from_str(&string).map_err(de::Error::custom)?)
+        Self::from_str(&string).map_err(de::Error::custom)
     }
 }
 
@@ -84,9 +86,8 @@ pub struct Unicode16Array<const N: usize>(pub [u16; N]);
 unsafe impl<const N: usize> Zeroable for Unicode16Array<N> {}
 unsafe impl<const N: usize> Pod for Unicode16Array<N> {}
 
-impl<const N: usize> Unicode16Array<N> {
-    /// Loads from a `&str`.
-    pub fn from_str(string: &str) -> Self {
+impl<const N: usize> From<&str> for Unicode16Array<N> {
+    fn from(string: &str) -> Self {
         let mut chars = [0u16; N];
         let mut i = 0;
         for ch in string.chars() {

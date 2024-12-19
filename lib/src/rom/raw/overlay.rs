@@ -1,7 +1,6 @@
 use std::{
     fmt::Display,
     mem::{align_of, size_of},
-    usize,
 };
 
 use bitfield_struct::bitfield;
@@ -89,7 +88,7 @@ impl Overlay {
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawOverlayError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_cast_slice(&data), addr)
+        Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
     }
 
     /// Creates a [`DisplayOverlay`] which implements [`Display`].

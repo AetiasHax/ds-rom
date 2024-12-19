@@ -24,3 +24,7 @@ snafu = { version = "0.8.3", features = ["backtrace"] }
 [dev-dependencies]
 anyhow = "1.0.86"
 env_logger = "0.11.5"
+
+[lints.clippy]
+needless_range_loop = "allow"
+module_inception = "allow"

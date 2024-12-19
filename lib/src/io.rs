@@ -86,17 +86,16 @@ pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, FileError> {
 pub fn write_file<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<(), FileError> {
     let path = path.as_ref();
     let contents = contents.as_ref();
-    let bytes = match fs::write(path, contents) {
-        Ok(bytes) => bytes,
+    match fs::write(path, contents) {
+        Ok(()) => Ok(()),
         Err(err) => {
             let path = path.to_string_lossy();
             match err.kind() {
-                io::ErrorKind::AlreadyExists => return AlreadyExistsSnafu { path }.fail(),
+                io::ErrorKind::AlreadyExists => AlreadyExistsSnafu { path }.fail(),
                 _ => Err(err)?,
             }
         }
-    };
-    Ok(bytes)
+    }
 }
 
 /// Wrapper for [`fs::read_to_string`] with clearer errors.

@@ -47,11 +47,11 @@ impl Dump {
         let mut arm9 = rom.arm9()?;
         if arm9.is_encrypted() && key.is_some() {
             let Some(key) = &key else { unreachable!() };
-            arm9.decrypt(&key, header.gamecode.to_le_u32())?;
+            arm9.decrypt(key, header.gamecode.to_le_u32())?;
         }
         if self.encrypt && !arm9.is_encrypted() && key.is_some() {
             let Some(key) = &key else { unreachable!() };
-            arm9.encrypt(&key, header.gamecode.to_le_u32())?;
+            arm9.encrypt(key, header.gamecode.to_le_u32())?;
         }
         if self.decompress && arm9.build_info()?.is_compressed() {
             arm9.decompress()?;
@@ -109,7 +109,7 @@ struct DumpHeader {
 
 impl DumpHeader {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
-        let mut header = rom.header()?.clone();
+        let mut header = *rom.header()?;
 
         if let Some(header_logo) = &self.header_logo {
             let logo = Logo::from_png(header_logo)?;
@@ -276,7 +276,7 @@ impl DumpFnt {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let fnt = rom.fnt()?;
         let fat = rom.fat()?;
-        let root = rom::FileSystem::parse(&fnt, fat, &rom)?;
+        let root = rom::FileSystem::parse(&fnt, fat, rom)?;
         println!("Files:\n{}", root.display(2));
 
         Ok(())
@@ -319,7 +319,7 @@ impl DumpArm9Overlay {
     pub fn run(&self, rom: &raw::Rom, decompress: bool, compress: bool) -> Result<()> {
         let fat = rom.fat()?;
         let arm9_ovt = rom.arm9_overlay_table()?;
-        let mut overlay = Overlay::parse(&arm9_ovt[self.index], fat, &rom)?;
+        let mut overlay = Overlay::parse(&arm9_ovt[self.index], fat, rom)?;
 
         if decompress && overlay.is_compressed() {
             overlay.decompress()?;
@@ -364,7 +364,7 @@ impl DumpArm7Overlay {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let fat = rom.fat()?;
         let arm7_ovt = rom.arm7_overlay_table()?;
-        let overlay = Overlay::parse(&arm7_ovt[self.index], fat, &rom)?;
+        let overlay = Overlay::parse(&arm7_ovt[self.index], fat, rom)?;
         print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
 
         Ok(())
