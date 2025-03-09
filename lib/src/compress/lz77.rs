@@ -179,7 +179,7 @@ enum Token<'a> {
     Pair((Pair, Cow<'a, [u8]>)),
 }
 
-impl<'a> Token<'a> {
+impl Token<'_> {
     fn bytes_saved(&self) -> isize {
         match self {
             Token::Literal(_) => 0,
@@ -188,7 +188,7 @@ impl<'a> Token<'a> {
     }
 }
 
-impl<'a> Display for Token<'a> {
+impl Display for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Literal(byte) => write!(f, "{byte:02x}"),
@@ -419,7 +419,7 @@ impl<'a> Tokens<'a> {
     }
 }
 
-impl<'a> Display for Tokens<'a> {
+impl Display for Tokens<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut bytes_saved: isize = 0;
         for chunk in self.tokens.chunks(8) {

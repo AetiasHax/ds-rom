@@ -781,7 +781,7 @@ pub struct RomLoadOptions<'a> {
     pub load_banner: bool,
 }
 
-impl<'a> Default for RomLoadOptions<'a> {
+impl Default for RomLoadOptions<'_> {
     fn default() -> Self {
         Self { key: None, compress: true, encrypt: true, load_files: true, load_header: true, load_banner: true }
     }

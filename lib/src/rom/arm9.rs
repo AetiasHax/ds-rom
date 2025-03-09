@@ -488,7 +488,7 @@ impl<'a> Arm9<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for Arm9<'a> {
+impl AsRef<[u8]> for Arm9<'_> {
     fn as_ref(&self) -> &[u8] {
         &self.data
     }

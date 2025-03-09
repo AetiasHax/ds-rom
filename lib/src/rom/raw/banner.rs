@@ -221,7 +221,7 @@ macro_rules! write_title {
     };
 }
 
-impl<'a> Display for DisplayBanner<'a> {
+impl Display for DisplayBanner<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let banner = &self.banner;
@@ -470,7 +470,7 @@ pub struct DisplayBannerBitmap<'a> {
     palette: &'a BannerPalette,
 }
 
-impl<'a> Display for DisplayBannerBitmap<'a> {
+impl Display for DisplayBannerBitmap<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for y in (0..32).step_by(2) {
             for x in 0..32 {

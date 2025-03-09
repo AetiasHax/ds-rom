@@ -103,7 +103,7 @@ pub struct DisplayOverlay<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayOverlay<'a> {
+impl Display for DisplayOverlay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let overlay = &self.overlay;

@@ -144,7 +144,7 @@ impl<'a> Fnt<'a> {
     }
 }
 
-impl<'a> FntSubtable<'a> {
+impl FntSubtable<'_> {
     /// Returns an iterator over all immediate children (files and directories) in this subtable.
     pub fn iter(&self) -> IterFntSubtable {
         IterFntSubtable { data: &self.data, id: self.directory.first_file_id }

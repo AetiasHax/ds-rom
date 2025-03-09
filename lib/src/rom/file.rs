@@ -551,7 +551,7 @@ impl<'a> FileSystem<'a> {
     }
 }
 
-impl<'a> File<'a> {
+impl File<'_> {
     /// Returns a reference to the name of this [`File`].
     pub fn name(&self) -> &str {
         &self.name
@@ -602,7 +602,7 @@ pub struct DisplayFileSystem<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayFileSystem<'a> {
+impl Display for DisplayFileSystem<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let parent = self.files.dir(self.parent_id);

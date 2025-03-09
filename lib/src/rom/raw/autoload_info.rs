@@ -113,7 +113,7 @@ pub struct DisplayAutoloadInfo<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayAutoloadInfo<'a> {
+impl Display for DisplayAutoloadInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let info = &self.info;
