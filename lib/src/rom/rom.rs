@@ -244,8 +244,13 @@ impl<'a> Rom<'a> {
         let path = config_path.parent().unwrap();
 
         // --------------------- Load header ---------------------
-        let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
-        let header_logo = Logo::from_png(path.join(&config.header_logo))?;
+        let (header, header_logo) = if options.load_header {
+            let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
+            let header_logo = Logo::from_png(path.join(&config.header_logo))?;
+            (header, header_logo)
+        } else {
+            Default::default()
+        };
 
         // --------------------- Load ARM9 program ---------------------
         let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(path.join(&config.arm9_config))?)?;
@@ -314,10 +319,15 @@ impl<'a> Rom<'a> {
         };
 
         // --------------------- Load banner ---------------------
-        let banner_path = path.join(&config.banner);
-        let banner_dir = banner_path.parent().unwrap();
-        let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
-        banner.images.load(banner_dir)?;
+        let banner = if options.load_banner {
+            let banner_path = path.join(&config.banner);
+            let banner_dir = banner_path.parent().unwrap();
+            let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
+            banner.images.load(banner_dir)?;
+            banner
+        } else {
+            Default::default()
+        };
 
         // --------------------- Load files ---------------------
         let num_overlays = arm9_overlays.len() + arm7_overlays.len();
@@ -765,10 +775,14 @@ pub struct RomLoadOptions<'a> {
     pub encrypt: bool,
     /// If true (default), load asset files.
     pub load_files: bool,
+    /// If true (default), load header and header logo.
+    pub load_header: bool,
+    /// If true (default), load banner.
+    pub load_banner: bool,
 }
 
 impl<'a> Default for RomLoadOptions<'a> {
     fn default() -> Self {
-        Self { key: None, compress: true, encrypt: true, load_files: true }
+        Self { key: None, compress: true, encrypt: true, load_files: true, load_header: true, load_banner: true }
     }
 }

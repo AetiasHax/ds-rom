@@ -250,9 +250,10 @@ impl<'a> Display for DisplayBanner<'a> {
 }
 
 /// Known banner versions.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Default)]
 pub enum BannerVersion {
     /// Original version with titles in Japanese, English, French, German, Italian and Spanish.
+    #[default]
     Original = 1,
     /// Inherits from [`BannerVersion::Original`] and adds Chinese.
     China = 2,

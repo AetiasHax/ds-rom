@@ -14,7 +14,7 @@ use super::{
 use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
 
 /// ROM banner.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Banner {
     version: BannerVersion,
     /// Game title in different languages.
@@ -284,7 +284,7 @@ impl BannerImages {
 }
 
 /// Game title in different languages.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct BannerTitle {
     /// Japanese.
     pub japanese: String,

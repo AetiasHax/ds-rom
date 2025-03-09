@@ -536,7 +536,7 @@ impl<'a> Display for DisplayTableOffset<'a> {
 }
 
 /// Secure area delay.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Delay(pub u16);
 
 impl Display for Delay {

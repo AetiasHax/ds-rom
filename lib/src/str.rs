@@ -41,6 +41,12 @@ impl<const N: usize> FromStr for AsciiArray<N> {
     }
 }
 
+impl<const N: usize> Default for AsciiArray<N> {
+    fn default() -> Self {
+        Self([0; N])
+    }
+}
+
 impl AsciiArray<4> {
     /// Converts a four-character ASCII string to a `u32`.
     pub fn to_le_u32(&self) -> u32 {

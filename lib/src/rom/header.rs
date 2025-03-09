@@ -18,7 +18,7 @@ use crate::{
     str::{AsciiArray, AsciiArrayError},
 };
 /// ROM header.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Header {
     /// Values for the original header version, [`HeaderVersion::Original`].
     #[serde(flatten)]
@@ -29,7 +29,7 @@ pub struct Header {
 }
 
 /// Values for the original header version, [`HeaderVersion::Original`].
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct HeaderOriginal {
     /// Short game title, normally in uppercase letters.
     pub title: String,
