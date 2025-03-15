@@ -21,13 +21,19 @@ pub struct Build {
     /// Output ROM
     #[arg(long, short = 'o')]
     rom: PathBuf,
+
+    /// Skip compressing code modules
+    #[arg(long)]
+    no_compress: bool,
 }
 
 impl Build {
     pub fn run(&self) -> Result<()> {
         let key =
             if let Some(arm7_bios) = &self.arm7_bios { Some(BlowfishKey::from_arm7_bios_path(arm7_bios)?) } else { None };
-        let rom = match Rom::load(&self.config, RomLoadOptions { key: key.as_ref(), ..Default::default() }) {
+
+        let options = RomLoadOptions { key: key.as_ref(), compress: !self.no_compress, ..Default::default() };
+        let rom = match Rom::load(&self.config, options) {
             Err(RomSaveError::BlowfishKeyNeeded) => {
                 bail!("The ROM is encrypted, please provide ARM7 BIOS");
             }
