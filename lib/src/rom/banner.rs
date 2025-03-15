@@ -14,7 +14,7 @@ use super::{
 use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
 
 /// ROM banner.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Banner {
     version: BannerVersion,
     /// Game title in different languages.
@@ -60,11 +60,7 @@ pub enum BannerError {
 impl Banner {
     fn load_title(banner: &raw::Banner, version: BannerVersion, language: Language) -> Option<String> {
         if version.supports_language(language) {
-            if let Some(title) = banner.title(language) {
-                Some(title.to_string())
-            } else {
-                None
-            }
+            banner.title(language).map(|title| title.to_string())
         } else {
             None
         }
@@ -288,7 +284,7 @@ impl BannerImages {
 }
 
 /// Game title in different languages.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct BannerTitle {
     /// Japanese.
     pub japanese: String,
@@ -313,7 +309,7 @@ pub struct BannerTitle {
 macro_rules! copy_title {
     ($banner:ident, $language:expr, $title:expr) => {
         if let Some(title) = $banner.title_mut($language) {
-            *title = Unicode16Array::from_str($title);
+            *title = Unicode16Array::from($title.as_str());
         }
     };
 }

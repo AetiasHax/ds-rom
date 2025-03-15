@@ -148,7 +148,7 @@ pub struct DisplayBuildInfo<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayBuildInfo<'a> {
+impl Display for DisplayBuildInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let build_info = &self.build_info;

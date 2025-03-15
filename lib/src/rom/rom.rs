@@ -244,8 +244,13 @@ impl<'a> Rom<'a> {
         let path = config_path.parent().unwrap();
 
         // --------------------- Load header ---------------------
-        let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
-        let header_logo = Logo::from_png(path.join(&config.header_logo))?;
+        let (header, header_logo) = if options.load_header {
+            let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
+            let header_logo = Logo::from_png(path.join(&config.header_logo))?;
+            (header, header_logo)
+        } else {
+            Default::default()
+        };
 
         // --------------------- Load ARM9 program ---------------------
         let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(path.join(&config.arm9_config))?)?;
@@ -272,10 +277,15 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Build ARM9 program ---------------------
-        let mut arm9 = Arm9::with_autoloads(arm9, &autoloads, arm9_build_config.offsets, Arm9WithTcmsOptions {
-            originally_compressed: arm9_build_config.compressed,
-            originally_encrypted: arm9_build_config.encrypted,
-        })?;
+        let mut arm9 = Arm9::with_autoloads(
+            arm9,
+            &autoloads,
+            arm9_build_config.offsets,
+            Arm9WithTcmsOptions {
+                originally_compressed: arm9_build_config.compressed,
+                originally_encrypted: arm9_build_config.encrypted,
+            },
+        )?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         if arm9_build_config.compressed && options.compress {
             log::info!("Compressing ARM9 program");
@@ -309,10 +319,15 @@ impl<'a> Rom<'a> {
         };
 
         // --------------------- Load banner ---------------------
-        let banner_path = path.join(&config.banner);
-        let banner_dir = banner_path.parent().unwrap();
-        let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
-        banner.images.load(banner_dir)?;
+        let banner = if options.load_banner {
+            let banner_path = path.join(&config.banner);
+            let banner_dir = banner_path.parent().unwrap();
+            let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
+            banner.images.load(banner_dir)?;
+            banner
+        } else {
+            Default::default()
+        };
 
         // --------------------- Load files ---------------------
         let num_overlays = arm9_overlays.len() + arm7_overlays.len();
@@ -381,7 +396,7 @@ impl<'a> Rom<'a> {
             log::info!("Decompressing ARM9 program");
             plain_arm9.decompress()?;
         }
-        create_file_and_dirs(path.join(&self.config.arm9_bin))?.write(plain_arm9.code()?)?;
+        create_file_and_dirs(path.join(&self.config.arm9_bin))?.write_all(plain_arm9.code()?)?;
 
         // --------------------- Save autoloads ---------------------
         let mut unknown_autoloads = self.config.unknown_autoloads.iter();
@@ -394,7 +409,7 @@ impl<'a> Rom<'a> {
                     (path.join(&unknown_autoload.bin), path.join(&unknown_autoload.config))
                 }
             };
-            create_file_and_dirs(bin_path)?.write(autoload.code())?;
+            create_file_and_dirs(bin_path)?.write_all(autoload.code())?;
             serde_yml::to_writer(create_file_and_dirs(config_path)?, autoload.info())?;
         }
 
@@ -404,7 +419,7 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Save ARM7 program ---------------------
-        create_file_and_dirs(path.join(&self.config.arm7_bin))?.write(self.arm7.full_data())?;
+        create_file_and_dirs(path.join(&self.config.arm7_bin))?.write_all(self.arm7.full_data())?;
         serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm7_config))?, self.arm7.offsets())?;
 
         // --------------------- Save ARM7 overlays ---------------------
@@ -428,16 +443,16 @@ impl<'a> Rom<'a> {
                 let path = files_path.join(path);
                 // TODO: Rewrite traverse_files as an iterator so these errors can be returned
                 create_dir_all(&path).expect("failed to create file directory");
-                create_file(&path.join(file.name()))
+                create_file(path.join(file.name()))
                     .expect("failed to create file")
-                    .write(file.contents())
+                    .write_all(file.contents())
                     .expect("failed to write file");
             });
         }
         let mut path_order_file = create_file_and_dirs(path.join(&self.config.path_order))?;
         for path in &self.path_order {
-            path_order_file.write(path.as_bytes())?;
-            path_order_file.write("\n".as_bytes())?;
+            path_order_file.write_all(path.as_bytes())?;
+            path_order_file.write_all("\n".as_bytes())?;
         }
 
         Ok(())
@@ -449,7 +464,7 @@ impl<'a> Rom<'a> {
             offsets: *self.arm9.offsets(),
             encrypted: self.arm9.is_encrypted(),
             compressed: self.arm9.is_compressed()?,
-            build_info: self.arm9.build_info()?.clone().into(),
+            build_info: (*self.arm9.build_info()?).into(),
         })
     }
 
@@ -469,7 +484,7 @@ impl<'a> Rom<'a> {
                     log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
                     plain_overlay.decompress()?;
                 }
-                create_file(overlays_path.join(format!("{name}.bin")))?.write(plain_overlay.code())?;
+                create_file(overlays_path.join(format!("{name}.bin")))?.write_all(plain_overlay.code())?;
             }
             serde_yml::to_writer(create_file(config_path)?, &configs)?;
         }
@@ -529,7 +544,7 @@ impl<'a> Rom<'a> {
         };
 
         Ok(Self {
-            header: Header::load_raw(&header),
+            header: Header::load_raw(header),
             header_logo: Logo::decompress(&header.logo)?,
             arm9,
             arm9_overlays,
@@ -548,23 +563,22 @@ impl<'a> Rom<'a> {
     ///
     /// This function will return an error if an I/O operation fails or a component fails to build.
     pub fn build(mut self, key: Option<&BlowfishKey>) -> Result<raw::Rom<'a>, RomBuildError> {
-        let mut context = BuildContext::default();
-        context.blowfish_key = key;
+        let mut context = BuildContext { blowfish_key: key, ..Default::default() };
 
         let mut cursor = Cursor::new(Vec::with_capacity(128 * 1024)); // smallest possible ROM
 
         // --------------------- Write header placeholder ---------------------
         context.header_offset = Some(cursor.position() as u32);
-        cursor.write(&[0u8; size_of::<raw::Header>()])?;
+        cursor.write_all(&[0u8; size_of::<raw::Header>()])?;
         self.align(&mut cursor)?;
 
         // --------------------- Write ARM9 program ---------------------
         context.arm9_offset = Some(cursor.position() as u32);
         context.arm9_autoload_callback = Some(self.arm9.autoload_callback());
         context.arm9_build_info_offset = Some(self.arm9.build_info_offset());
-        cursor.write(self.arm9.full_data())?;
+        cursor.write_all(self.arm9.full_data())?;
         let footer = Arm9Footer::new(self.arm9.build_info_offset());
-        cursor.write(bytemuck::bytes_of(&footer))?;
+        cursor.write_all(bytemuck::bytes_of(&footer))?;
         self.align(&mut cursor)?;
 
         let max_file_id = self.files.max_file_id();
@@ -578,7 +592,7 @@ impl<'a> Rom<'a> {
             });
             for overlay in &self.arm9_overlays {
                 let raw = overlay.build();
-                cursor.write(bytemuck::bytes_of(&raw))?;
+                cursor.write_all(bytemuck::bytes_of(&raw))?;
             }
             self.align(&mut cursor)?;
 
@@ -588,7 +602,7 @@ impl<'a> Rom<'a> {
                 let end = start + overlay.full_data().len() as u32;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
 
-                cursor.write(overlay.full_data())?;
+                cursor.write_all(overlay.full_data())?;
                 self.align(&mut cursor)?;
             }
         }
@@ -597,7 +611,7 @@ impl<'a> Rom<'a> {
         context.arm7_offset = Some(cursor.position() as u32);
         context.arm7_autoload_callback = Some(self.arm7.autoload_callback());
         context.arm7_build_info_offset = None;
-        cursor.write(self.arm7.full_data())?;
+        cursor.write_all(self.arm7.full_data())?;
         self.align(&mut cursor)?;
 
         if !self.arm7_overlays.is_empty() {
@@ -608,7 +622,7 @@ impl<'a> Rom<'a> {
             });
             for overlay in &self.arm7_overlays {
                 let raw = overlay.build();
-                cursor.write(bytemuck::bytes_of(&raw))?;
+                cursor.write_all(bytemuck::bytes_of(&raw))?;
             }
             self.align(&mut cursor)?;
 
@@ -618,7 +632,7 @@ impl<'a> Rom<'a> {
                 let end = start + overlay.full_data().len() as u32;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
 
-                cursor.write(overlay.full_data())?;
+                cursor.write_all(overlay.full_data())?;
                 self.align(&mut cursor)?;
             }
         }
@@ -627,19 +641,19 @@ impl<'a> Rom<'a> {
         self.files.sort_for_fnt();
         let fnt = self.files.build_fnt()?.build()?;
         context.fnt_offset = Some(TableOffset { offset: cursor.position() as u32, size: fnt.len() as u32 });
-        cursor.write(&fnt)?;
+        cursor.write_all(&fnt)?;
         self.align(&mut cursor)?;
 
         // --------------------- Write file allocation table (FAT) placeholder ---------------------
         context.fat_offset =
             Some(TableOffset { offset: cursor.position() as u32, size: (file_allocs.len() * size_of::<FileAlloc>()) as u32 });
-        cursor.write(bytemuck::cast_slice(&file_allocs))?;
+        cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
         self.align(&mut cursor)?;
 
         // --------------------- Write banner ---------------------
         let banner = self.banner.build()?;
         context.banner_offset = Some(TableOffset { offset: cursor.position() as u32, size: banner.full_data().len() as u32 });
-        cursor.write(banner.full_data())?;
+        cursor.write_all(banner.full_data())?;
         self.align(&mut cursor)?;
 
         // --------------------- Write files ---------------------
@@ -653,23 +667,23 @@ impl<'a> Rom<'a> {
             let end = start + contents.len() as u32;
             file_allocs[file.id() as usize] = FileAlloc { start, end };
 
-            cursor.write(contents).expect("failed to write file contents");
+            cursor.write_all(contents).expect("failed to write file contents");
         });
 
         // --------------------- Write padding ---------------------
         context.rom_size = Some(cursor.position() as u32);
         while !cursor.position().is_power_of_two() && cursor.position() >= 128 * 1024 {
-            cursor.write(&[self.config.padding_value])?;
+            cursor.write_all(&[self.config.padding_value])?;
         }
 
         // --------------------- Update FAT ---------------------
         cursor.set_position(context.fat_offset.unwrap().offset as u64);
-        cursor.write(&bytemuck::cast_slice(&file_allocs))?;
+        cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
 
         // --------------------- Update header ---------------------
         cursor.set_position(context.header_offset.unwrap() as u64);
         let header = self.header.build(&context, &self)?;
-        cursor.write(bytemuck::bytes_of(&header))?;
+        cursor.write_all(bytemuck::bytes_of(&header))?;
 
         Ok(raw::Rom::new(cursor.into_inner()))
     }
@@ -677,7 +691,7 @@ impl<'a> Rom<'a> {
     fn align(&self, cursor: &mut Cursor<Vec<u8>>) -> Result<(), RomBuildError> {
         let padding = (!cursor.position() + 1) & 0x1ff;
         for _ in 0..padding {
-            cursor.write(&[self.config.padding_value])?;
+            cursor.write_all(&[self.config.padding_value])?;
         }
         Ok(())
     }
@@ -761,10 +775,14 @@ pub struct RomLoadOptions<'a> {
     pub encrypt: bool,
     /// If true (default), load asset files.
     pub load_files: bool,
+    /// If true (default), load header and header logo.
+    pub load_header: bool,
+    /// If true (default), load banner.
+    pub load_banner: bool,
 }
 
-impl<'a> Default for RomLoadOptions<'a> {
+impl Default for RomLoadOptions<'_> {
     fn default() -> Self {
-        Self { key: None, compress: true, encrypt: true, load_files: true }
+        Self { key: None, compress: true, encrypt: true, load_files: true, load_header: true, load_banner: true }
     }
 }

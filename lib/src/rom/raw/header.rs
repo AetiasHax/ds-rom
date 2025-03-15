@@ -299,7 +299,7 @@ pub struct DisplayHeader<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayHeader<'a> {
+impl Display for DisplayHeader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let header = &self.header;
@@ -490,7 +490,7 @@ pub struct DisplayProgramOffset<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayProgramOffset<'a> {
+impl Display for DisplayProgramOffset<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let offset = &self.offset;
@@ -525,7 +525,7 @@ pub struct DisplayTableOffset<'a> {
     indent: usize,
 }
 
-impl<'a> Display for DisplayTableOffset<'a> {
+impl Display for DisplayTableOffset<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let offset = &self.offset;
@@ -536,7 +536,7 @@ impl<'a> Display for DisplayTableOffset<'a> {
 }
 
 /// Secure area delay.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Delay(pub u16);
 
 impl Display for Delay {

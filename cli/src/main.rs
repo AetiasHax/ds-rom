@@ -5,8 +5,8 @@ mod extract;
 use std::io::Write;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
 use build::Build;
+use clap::{Parser, Subcommand};
 use dump::Dump;
 use extract::Extract;
 use log::LevelFilter;
@@ -44,7 +44,7 @@ fn main() -> Result<()> {
 
 pub fn print_hex(data: &[u8], raw: bool, base: u32) -> Result<()> {
     if raw {
-        std::io::stdout().write(data)?;
+        std::io::stdout().write_all(data)?;
     } else {
         for (offset, chunk) in data.chunks(16).enumerate() {
             print!("{:08x} ", base as usize + offset * 16);

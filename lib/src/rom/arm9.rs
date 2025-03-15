@@ -147,7 +147,7 @@ impl<'a> Arm9<'a> {
         offsets: Arm9Offsets,
         options: Arm9WithTcmsOptions,
     ) -> Result<Self, RawBuildInfoError> {
-        let autoload_infos = [itcm.info().clone(), dtcm.info().clone()];
+        let autoload_infos = [*itcm.info(), *dtcm.info()];
 
         let autoload_blocks = data.len() as u32 + offsets.base_address;
         data.extend(itcm.into_data().iter());
@@ -286,8 +286,7 @@ impl<'a> Arm9<'a> {
     /// Returns a CRC checksum of the encrypted secure area.
     pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> u16 {
         let secure_area = self.encrypted_secure_area(key, gamecode);
-        let checksum = CRC_16_MODBUS.checksum(&secure_area);
-        checksum
+        CRC_16_MODBUS.checksum(&secure_area)
     }
 
     /// Returns a reference to the build info.
@@ -489,7 +488,7 @@ impl<'a> Arm9<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for Arm9<'a> {
+impl AsRef<[u8]> for Arm9<'_> {
     fn as_ref(&self) -> &[u8] {
         &self.data
     }

@@ -131,12 +131,12 @@ impl<'a> Fnt<'a> {
 
         for subtable in self.subtables.iter_mut() {
             subtable.directory.to_mut().subtable_offset = subtable_offset;
-            bytes.write(bytemuck::bytes_of(subtable.directory.as_ref()))?;
+            bytes.write_all(bytemuck::bytes_of(subtable.directory.as_ref()))?;
             subtable_offset += subtable.data.len() as u32 + 1; // +1 for 0-byte terminator, see loop below
         }
 
         for subtable in self.subtables.iter() {
-            bytes.write(&subtable.data)?;
+            bytes.write_all(&subtable.data)?;
             bytes.push(0);
         }
 
@@ -144,7 +144,7 @@ impl<'a> Fnt<'a> {
     }
 }
 
-impl<'a> FntSubtable<'a> {
+impl FntSubtable<'_> {
     /// Returns an iterator over all immediate children (files and directories) in this subtable.
     pub fn iter(&self) -> IterFntSubtable {
         IterFntSubtable { data: &self.data, id: self.directory.first_file_id }

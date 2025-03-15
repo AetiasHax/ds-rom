@@ -46,7 +46,7 @@ impl NibbleHuffman {
         for i in 0..out.len() {
             let low = self.decompress_nibble(&mut reader);
             let high = self.decompress_nibble(&mut reader);
-            out[i] = high << 4 | low;
+            out[i] = (high << 4) | low;
         }
     }
 
