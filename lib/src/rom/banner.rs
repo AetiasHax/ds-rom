@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use image::{io::Reader, GenericImageView, ImageError, Rgb, RgbImage};
+use image::{io::Reader, GenericImageView, ImageError, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
@@ -238,9 +238,14 @@ impl BannerImages {
 
         let mut bitmap = BannerBitmap([0u8; 0x200]);
         for (x, y, color) in bitmap_image.pixels() {
-            let index = palette_image.pixels().find_map(|(i, _, c)| (color == c).then_some(i));
-            let Some(index) = index else {
-                return InvalidPixelSnafu { bitmap: path.join(&self.bitmap_path), x, y }.fail();
+            let alpha = color.0[3];
+            let index = if alpha == 0 {
+                0
+            } else {
+                let Some(index) = palette_image.pixels().find_map(|(i, _, c)| (color == c).then_some(i)) else {
+                    return InvalidPixelSnafu { bitmap: path.join(&self.bitmap_path), x, y }.fail();
+                };
+                index
             };
             bitmap.set_pixel(x as usize, y as usize, index as u8);
         }
@@ -262,19 +267,19 @@ impl BannerImages {
     ///
     /// See [`RgbImage::save`].
     pub fn save_bitmap_file(&self, path: &Path) -> Result<(), BannerImageError> {
-        let mut bitmap_image = RgbImage::new(32, 32);
+        let mut bitmap_image = RgbaImage::new(32, 32);
         for y in 0..32 {
             for x in 0..32 {
                 let index = self.bitmap.get_pixel(x, y);
-                let (r, g, b) = self.palette.get_color(index);
-                bitmap_image.put_pixel(x as u32, y as u32, Rgb([r, g, b]));
+                let color = self.palette.get_color(index);
+                bitmap_image.put_pixel(x as u32, y as u32, Rgba(color));
             }
         }
 
-        let mut palette_image = RgbImage::new(16, 1);
+        let mut palette_image = RgbaImage::new(16, 1);
         for index in 0..16 {
-            let (r, g, b) = self.palette.get_color(index);
-            palette_image.put_pixel(index as u32, 0, Rgb([r, g, b]));
+            let color = self.palette.get_color(index);
+            palette_image.put_pixel(index as u32, 0, Rgba(color));
         }
 
         bitmap_image.save(path.join(&self.bitmap_path))?;

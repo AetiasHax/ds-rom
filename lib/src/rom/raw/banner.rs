@@ -244,6 +244,7 @@ impl Display for DisplayBanner<'_> {
         if banner.version >= BannerVersion::Animated {
             writeln!(f, "{i}Animation CRC ... : {:#x}", banner.crc(BannerVersion::Animated.crc_index()))?;
         }
+        writeln!(f, "{i}Palette ......... :\n{}", banner.palette())?;
         writeln!(f, "{i}Bitmap .......... :\n{}", banner.bitmap().display(banner.palette()))?;
         Ok(())
     }
@@ -387,16 +388,17 @@ impl Display for Language {
 pub struct BannerPalette(pub [u16; 16]);
 
 impl BannerPalette {
-    /// Returns the color from 24-bit `(r, g, b)` at the given index.
-    pub fn get_color(&self, index: usize) -> (u8, u8, u8) {
+    /// Returns the color from 32-bit `[r, g, b, a]` at the given index.
+    pub fn get_color(&self, index: usize) -> [u8; 4] {
         if index < self.0.len() {
             let color = self.0[index];
             let b = (((color >> 10) & 31) << 3) as u8;
             let g = (((color >> 5) & 31) << 3) as u8;
             let r = ((color & 31) << 3) as u8;
-            (r, g, b)
+            let a = if index > 0 { u8::MAX } else { 0 };
+            [r, g, b, a]
         } else {
-            (0, 0, 0)
+            [0, 0, 0, 0]
         }
     }
 
@@ -413,8 +415,12 @@ impl BannerPalette {
 impl Display for BannerPalette {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for i in 0..16 {
-            let (r, g, b) = self.get_color(i);
-            write!(f, "\x1b[38;2;{r};{g};{b}m█")?;
+            let [r, g, b, a] = self.get_color(i);
+            if a == 0 {
+                write!(f, " ")?;
+            } else {
+                write!(f, "\x1b[38;2;{r};{g};{b}m█")?;
+            }
         }
         write!(f, "\x1b[0m")
     }
@@ -474,10 +480,15 @@ impl Display for DisplayBannerBitmap<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for y in (0..32).step_by(2) {
             for x in 0..32 {
-                let (tr, tg, tb) = self.palette.get_color(self.bitmap.get_pixel(x, y));
-                let (br, bg, bb) = self.palette.get_color(self.bitmap.get_pixel(x, y + 1));
+                let [tr, tg, tb, ta] = self.palette.get_color(self.bitmap.get_pixel(x, y));
+                let [br, bg, bb, ba] = self.palette.get_color(self.bitmap.get_pixel(x, y + 1));
 
-                write!(f, "\x1b[38;2;{tr};{tg};{tb}m\x1b[48;2;{br};{bg};{bb}m▀")?;
+                match (ta, ba) {
+                    (0, 0) => write!(f, " ")?,
+                    (_, 0) => write!(f, "\x1b[38;2;{tr};{tg};{tb}m▀")?,
+                    (0, _) => write!(f, "\x1b[38;2;{tr};{tg};{tb}m▄")?,
+                    (_, _) => write!(f, "\x1b[38;2;{tr};{tg};{tb}m\x1b[48;2;{br};{bg};{bb}m▀")?,
+                }
             }
             writeln!(f, "\x1b[0m")?;
         }
