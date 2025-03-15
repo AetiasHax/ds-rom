@@ -22,9 +22,9 @@ pub struct Build {
     #[arg(long, short = 'o')]
     rom: PathBuf,
 
-    /// Compress default to true
+    /// Skip compressing code modules
     #[arg(long)]
-    compress: Option<bool>,
+    no_compress: bool,
 }
 
 impl Build {
@@ -32,11 +32,7 @@ impl Build {
         let key =
             if let Some(arm7_bios) = &self.arm7_bios { Some(BlowfishKey::from_arm7_bios_path(arm7_bios)?) } else { None };
 
-        // default options
-        let mut options = RomLoadOptions { key: key.as_ref(), ..Default::default() };
-        if self.compress.is_some() {
-            options.compress = self.compress.unwrap();
-        }
+        let options = RomLoadOptions { key: key.as_ref(), compress: !self.no_compress, ..Default::default() };
         let rom = match Rom::load(&self.config, options) {
             Err(RomSaveError::BlowfishKeyNeeded) => {
                 bail!("The ROM is encrypted, please provide ARM7 BIOS");
