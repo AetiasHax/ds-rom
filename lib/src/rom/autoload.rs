@@ -16,7 +16,7 @@ impl<'a> Autoload<'a> {
 
     /// Returns a reference to the code of this [`Autoload`].
     pub fn code(&self) -> &[u8] {
-        &self.data[..self.info.code_size as usize]
+        &self.data[..self.info.code_size() as usize]
     }
 
     /// Returns a reference to the full data of this [`Autoload`].
@@ -31,7 +31,7 @@ impl<'a> Autoload<'a> {
 
     /// Returns the base address of this [`Autoload`].
     pub fn base_address(&self) -> u32 {
-        self.info.base_address
+        self.info.base_address()
     }
 
     /// Returns the kind of this [`Autoload`].
@@ -41,7 +41,7 @@ impl<'a> Autoload<'a> {
 
     /// Returns the size of the uninitialized data of this [`Autoload`].
     pub fn bss_size(&self) -> u32 {
-        self.info.bss_size
+        self.info.bss_size()
     }
 
     /// Returns a reference to the info of this [`Autoload`].

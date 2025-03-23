@@ -9,10 +9,10 @@ use snafu::{Backtrace, Snafu};
 
 use super::RawBuildInfoError;
 
-/// Info about an autoload block.
+/// An entry in the autoload list.
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Zeroable, Pod, Deserialize, Serialize)]
-pub struct AutoloadInfo {
+pub struct AutoloadInfoEntry {
     /// Base address of the autoload module.
     pub base_address: u32,
     /// Size of the module's initialized area.
@@ -29,7 +29,19 @@ pub enum AutoloadKind {
     /// Data TCM (Tightly Coupled Memory). Mainly used to make data have fast and predictable access times.
     Dtcm,
     /// Other autoload block of unknown purpose.
-    Unknown(AutoloadInfo),
+    Unknown,
+}
+
+/// Info about an autoload block.
+#[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
+pub struct AutoloadInfo {
+    #[serde(flatten)]
+    /// Entry in the autoload list.
+    list_entry: AutoloadInfoEntry,
+    /// The kind of autoload block.
+    kind: AutoloadKind,
+    /// The index of the autoload block in the autoload list.
+    index: u32,
 }
 
 /// Errors related to [`AutoloadInfo`].
@@ -59,7 +71,7 @@ pub enum RawAutoloadInfoError {
     },
 }
 
-impl AutoloadInfo {
+impl AutoloadInfoEntry {
     fn check_size(data: &'_ [u8]) -> Result<(), RawAutoloadInfoError> {
         let size = size_of::<Self>();
         if data.len() % size != 0 {
@@ -91,14 +103,48 @@ impl AutoloadInfo {
         let addr = data as *const [u8] as *const () as usize;
         Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
     }
+}
+
+impl AutoloadInfo {
+    /// Creates a new [`AutoloadInfo`] from an [`AutoloadInfoEntry`].
+    pub fn new(list_entry: AutoloadInfoEntry, index: u32) -> Self {
+        let kind = match list_entry.base_address {
+            0x1ff8000 => AutoloadKind::Itcm,
+            0x27e0000 | 0x27c0000 | 0x23c0000 => AutoloadKind::Dtcm,
+            _ => AutoloadKind::Unknown,
+        };
+
+        Self { list_entry, kind, index }
+    }
+
+    /// Returns the index of this [`AutoloadInfo`].
+    pub fn base_address(&self) -> u32 {
+        self.list_entry.base_address
+    }
+
+    /// Returns the code size of this [`AutoloadInfo`].
+    pub fn code_size(&self) -> u32 {
+        self.list_entry.code_size
+    }
+
+    /// Returns the size of the uninitialized data of this [`AutoloadInfo`].
+    pub fn bss_size(&self) -> u32 {
+        self.list_entry.bss_size
+    }
 
     /// Returns the kind of this [`AutoloadInfo`].
     pub fn kind(&self) -> AutoloadKind {
-        match self.base_address {
-            0x1ff8000 => AutoloadKind::Itcm,
-            0x27e0000 | 0x27c0000 | 0x23c0000 => AutoloadKind::Dtcm,
-            _ => AutoloadKind::Unknown(*self),
-        }
+        self.kind
+    }
+
+    /// Returns the index of this [`AutoloadInfo`] in the autoload list.
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    /// Returns the entry of this [`AutoloadInfo`].
+    pub fn entry(&self) -> &AutoloadInfoEntry {
+        &self.list_entry
     }
 
     /// Creates a [`DisplayAutoloadInfo`] which implements [`Display`].
@@ -117,10 +163,11 @@ impl Display for DisplayAutoloadInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = format!("{:indent$}", "", indent = self.indent);
         let info = &self.info;
-        writeln!(f, "{i}Type .......... : {}", info.kind())?;
-        writeln!(f, "{i}Base address .. : {:#x}", info.base_address)?;
-        writeln!(f, "{i}Code size ..... : {:#x}", info.code_size)?;
-        writeln!(f, "{i}.bss size ..... : {:#x}", info.bss_size)?;
+        writeln!(f, "{i}Index ......... : {}", info.index)?;
+        writeln!(f, "{i}Type .......... : {}", info.kind)?;
+        writeln!(f, "{i}Base address .. : {:#x}", info.list_entry.base_address)?;
+        writeln!(f, "{i}Code size ..... : {:#x}", info.list_entry.code_size)?;
+        writeln!(f, "{i}.bss size ..... : {:#x}", info.list_entry.bss_size)?;
         Ok(())
     }
 }
@@ -130,7 +177,7 @@ impl Display for AutoloadKind {
         match self {
             AutoloadKind::Itcm => write!(f, "ITCM"),
             AutoloadKind::Dtcm => write!(f, "DTCM"),
-            AutoloadKind::Unknown(_) => write!(f, "Unknown"),
+            AutoloadKind::Unknown => write!(f, "Unknown"),
         }
     }
 }

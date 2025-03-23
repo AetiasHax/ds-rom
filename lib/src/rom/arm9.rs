@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::{
-    raw::{AutoloadInfo, AutoloadKind, BuildInfo, RawAutoloadInfoError, RawBuildInfoError},
+    raw::{AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, RawAutoloadInfoError, RawBuildInfoError},
     Autoload,
 };
 use crate::{
@@ -147,7 +147,7 @@ impl<'a> Arm9<'a> {
         offsets: Arm9Offsets,
         options: Arm9WithTcmsOptions,
     ) -> Result<Self, RawBuildInfoError> {
-        let autoload_infos = [*itcm.info(), *dtcm.info()];
+        let autoload_infos = [*itcm.info().entry(), *dtcm.info().entry()];
 
         let autoload_blocks = data.len() as u32 + offsets.base_address;
         data.extend(itcm.into_data().iter());
@@ -186,7 +186,7 @@ impl<'a> Arm9<'a> {
 
         let autoload_infos_start = data.len() as u32 + offsets.base_address;
         for autoload in autoloads {
-            data.extend(bytemuck::bytes_of(autoload.info()));
+            data.extend(bytemuck::bytes_of(autoload.info().entry()));
         }
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
@@ -365,10 +365,10 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    fn get_autoload_infos(&self, build_info: &BuildInfo) -> Result<&[AutoloadInfo], Arm9AutoloadError> {
+    fn get_autoload_info_entries(&self, build_info: &BuildInfo) -> Result<&[AutoloadInfoEntry], Arm9AutoloadError> {
         let start = (build_info.autoload_infos_start - self.base_address()) as usize;
         let end = (build_info.autoload_infos_end - self.base_address()) as usize;
-        let autoload_info = AutoloadInfo::borrow_from_slice(&self.data[start..end])?;
+        let autoload_info = AutoloadInfoEntry::borrow_from_slice(&self.data[start..end])?;
         Ok(autoload_info)
     }
 
@@ -378,12 +378,17 @@ impl<'a> Arm9<'a> {
     ///
     /// This function will return an error if [`Self::build_info`] or [`Self::get_autoload_infos`] fails or this ARM9 program
     /// is compressed.
-    pub fn autoload_infos(&self) -> Result<&[AutoloadInfo], Arm9AutoloadError> {
+    pub fn autoload_infos(&self) -> Result<Vec<AutoloadInfo>, Arm9AutoloadError> {
         let build_info: &BuildInfo = self.build_info()?;
         if build_info.is_compressed() {
             CompressedSnafu {}.fail()?;
         }
-        self.get_autoload_infos(build_info)
+        Ok(self
+            .get_autoload_info_entries(build_info)?
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| AutoloadInfo::new(*entry, index as u32))
+            .collect())
     }
 
     /// Returns the autoloads of this [`Arm9`].
@@ -397,16 +402,16 @@ impl<'a> Arm9<'a> {
         if build_info.is_compressed() {
             CompressedSnafu {}.fail()?;
         }
-        let autoload_infos = self.get_autoload_infos(build_info)?;
+        let autoload_infos = self.autoload_infos()?;
 
         let mut autoloads = vec![];
         let mut load_offset = build_info.autoload_blocks - self.base_address();
         for autoload_info in autoload_infos {
             let start = load_offset as usize;
-            let end = start + autoload_info.code_size as usize;
+            let end = start + autoload_info.code_size() as usize;
             let data = &self.data[start..end];
-            autoloads.push(Autoload::new(data, *autoload_info));
-            load_offset += autoload_info.code_size;
+            autoloads.push(Autoload::new(data, autoload_info));
+            load_offset += autoload_info.code_size();
         }
 
         Ok(autoloads.into_boxed_slice())
@@ -418,7 +423,7 @@ impl<'a> Arm9<'a> {
     ///
     /// See [`Self::autoloads`].
     pub fn num_unknown_autoloads(&self) -> Result<usize, Arm9AutoloadError> {
-        Ok(self.autoloads()?.iter().filter(|a| matches!(a.kind(), AutoloadKind::Unknown(_))).count())
+        Ok(self.autoloads()?.iter().filter(|a| a.kind() == AutoloadKind::Unknown).count())
     }
 
     /// Returns the code of this ARM9 program.

@@ -276,6 +276,8 @@ impl<'a> Rom<'a> {
             autoloads.push(autoload);
         }
 
+        autoloads.sort_by_key(|autoload| autoload.info().index());
+
         // --------------------- Build ARM9 program ---------------------
         let mut arm9 = Arm9::with_autoloads(
             arm9,
@@ -404,7 +406,7 @@ impl<'a> Rom<'a> {
             let (bin_path, config_path) = match autoload.kind() {
                 raw::AutoloadKind::Itcm => (path.join(&self.config.itcm.bin), path.join(&self.config.itcm.config)),
                 raw::AutoloadKind::Dtcm => (path.join(&self.config.dtcm.bin), path.join(&self.config.dtcm.config)),
-                raw::AutoloadKind::Unknown(_) => {
+                raw::AutoloadKind::Unknown => {
                     let unknown_autoload = unknown_autoloads.next().expect("no more autoloads in config, was it removed?");
                     (path.join(&unknown_autoload.bin), path.join(&unknown_autoload.config))
                 }
@@ -510,18 +512,24 @@ impl<'a> Rom<'a> {
             rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Result<Vec<_>, _>>()?;
 
         let arm9 = rom.arm9()?;
+        let mut decompressed_arm9;
 
-        let num_unknown_autoloads = if arm9.is_compressed()? {
-            let mut decompressed_arm9 = arm9.clone();
+        let autoloads = if arm9.is_compressed()? {
+            decompressed_arm9 = arm9.clone();
             decompressed_arm9.decompress()?;
-            decompressed_arm9.num_unknown_autoloads()?
+            decompressed_arm9.autoloads()?
         } else {
-            arm9.num_unknown_autoloads()?
+            arm9.autoloads()?
         };
-        let unknown_autoloads = (0..num_unknown_autoloads)
-            .map(|index| RomConfigAutoload {
-                bin: format!("arm9/unk_autoload_{index}.bin").into(),
-                config: format!("arm9/unk_autoload_{index}.yaml").into(),
+        let unknown_autoloads = autoloads
+            .iter()
+            .filter(|&autoload| autoload.kind() == raw::AutoloadKind::Unknown)
+            .map(|autoload| {
+                let index = autoload.info().index();
+                RomConfigAutoload {
+                    bin: format!("arm9/unk_autoload_{index}.bin").into(),
+                    config: format!("arm9/unk_autoload_{index}.yaml").into(),
+                }
             })
             .collect();
 
