@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     io::{open_file, write_file, FileError},
-    rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets},
+    rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets, RomConfigAlignment},
 };
 
 /// A raw DS ROM, see the plain struct [here](super::super::Rom).
@@ -89,12 +89,15 @@ impl<'a> Rom<'a> {
             header.arm9_build_info_offset
         };
 
-        Ok(Arm9::new(Cow::Borrowed(data), Arm9Offsets {
-            base_address: header.arm9.base_addr,
-            entry_function: header.arm9.entry,
-            build_info: build_info_offset,
-            autoload_callback: header.arm9_autoload_callback,
-        })?)
+        Ok(Arm9::new(
+            Cow::Borrowed(data),
+            Arm9Offsets {
+                base_address: header.arm9.base_addr,
+                entry_function: header.arm9.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm9_autoload_callback,
+            },
+        )?)
     }
 
     /// Returns a reference to the ARM9 footer of this [`Rom`].
@@ -166,12 +169,15 @@ impl<'a> Rom<'a> {
         let build_info_offset =
             if header.arm7_build_info_offset == 0 { 0 } else { header.arm7_build_info_offset - header.arm7.offset };
 
-        Ok(Arm7::new(Cow::Borrowed(data), Arm7Offsets {
-            base_address: header.arm7.base_addr,
-            entry_function: header.arm7.entry,
-            build_info: build_info_offset,
-            autoload_callback: header.arm7_autoload_callback,
-        }))
+        Ok(Arm7::new(
+            Cow::Borrowed(data),
+            Arm7Offsets {
+                base_address: header.arm7.base_addr,
+                entry_function: header.arm7.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm7_autoload_callback,
+            },
+        ))
     }
 
     /// Returns the ARM7 overlay table of this [`Rom`].
@@ -273,5 +279,21 @@ impl<'a> Rom<'a> {
     /// This function will return an error if an I/O operation fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), FileError> {
         write_file(path, self.data())
+    }
+
+    /// Returns the alignment of ROM sections.
+    pub fn alignments(&self) -> Result<RomConfigAlignment, RawHeaderError> {
+        let header = self.header()?;
+
+        let arm9 = 0x200;
+        let arm7 = 0x200;
+        let arm9_overlay_table = if header.arm9_overlays.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
+        let arm7_overlay_table = if header.arm7_overlays.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
+        let file_names = if header.file_names.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
+        let file_allocs = if header.file_allocs.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
+        let banner = 0x200;
+        let files = 0x200;
+
+        Ok(RomConfigAlignment { arm9, arm7, arm9_overlay_table, arm7_overlay_table, file_names, file_allocs, banner, files })
     }
 }

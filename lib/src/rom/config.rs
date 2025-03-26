@@ -43,6 +43,9 @@ pub struct RomConfig {
     pub files_dir: PathBuf,
     /// Path to path order file
     pub path_order: PathBuf,
+
+    /// Alignment of ROM sections
+    pub alignment: RomConfigAlignment,
 }
 
 /// Path to autoload files
@@ -52,4 +55,25 @@ pub struct RomConfigAutoload {
     pub bin: PathBuf,
     /// Path to YAML
     pub config: PathBuf,
+}
+
+/// Alignment of ROM sections
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RomConfigAlignment {
+    /// Alignment of the ARM9 program.
+    pub arm9: u32,
+    /// Alignment of the ARM7 program.
+    pub arm7: u32,
+    /// Alignment of the ARM9 overlay table.
+    pub arm9_overlay_table: u32,
+    /// Alignment of the ARM7 overlay table.
+    pub arm7_overlay_table: u32,
+    /// Alignment of the file name table.
+    pub file_names: u32,
+    /// Alignment of the file allocation table.
+    pub file_allocs: u32,
+    /// Alignment of the banner.
+    pub banner: u32,
+    /// Alignment of files, including overlays.
+    pub files: u32,
 }
