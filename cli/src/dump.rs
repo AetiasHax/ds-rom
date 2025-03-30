@@ -73,6 +73,7 @@ impl Dump {
             DumpCommand::Banner(dump_banner) => dump_banner.run(&rom),
             DumpCommand::Arm9Overlay(dump_arm9_overlay) => dump_arm9_overlay.run(&rom, self.decompress, self.compress),
             DumpCommand::Arm7Overlay(dump_arm7_overlay) => dump_arm7_overlay.run(&rom),
+            DumpCommand::Arm9Footer(dump_arm9_footer) => dump_arm9_footer.run(&rom),
         }
     }
 }
@@ -97,6 +98,8 @@ enum DumpCommand {
     Arm9Overlay(DumpArm9Overlay),
     #[command(name = "arm7-ov")]
     Arm7Overlay(DumpArm7Overlay),
+    #[command(name = "arm9-footer")]
+    Arm9Footer(DumpArm9Footer),
 }
 
 /// Shows the contents of the ROM header.
@@ -395,5 +398,18 @@ fn compare_lz77(data_before: &[u8], data_after: &[u8], start: usize, base_addres
 
     if equal {
         println!("Compression matched");
+    }
+}
+
+/// Prints the contents of the ARM9 footer.
+#[derive(Args)]
+struct DumpArm9Footer {}
+
+impl DumpArm9Footer {
+    pub fn run(&self, rom: &raw::Rom) -> Result<()> {
+        let arm9_footer = rom.arm9_footer()?;
+        println!("ARM9 footer:\n{}", arm9_footer.display(2));
+
+        Ok(())
     }
 }
