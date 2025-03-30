@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io::Read, mem::size_of, path::Path};
+use std::{borrow::Cow, collections::BTreeSet, io::Read, mem::size_of, path::Path};
 
 use snafu::Snafu;
 
@@ -36,6 +36,29 @@ pub enum RawArm9Error {
     RawBuildInfo {
         /// Source error.
         source: RawBuildInfoError,
+    },
+}
+
+/// Errors related to [`Rom::alignments`].
+#[derive(Debug, Snafu)]
+pub enum RomAlignmentsError {
+    /// See [`RawHeaderError`].
+    #[snafu(transparent)]
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// See [`RawFatError`].
+    #[snafu(transparent)]
+    RawFat {
+        /// Source error.
+        source: RawFatError,
+    },
+    /// See [`RawOverlayError`].
+    #[snafu(transparent)]
+    RawOverlay {
+        /// Source error.
+        source: RawOverlayError,
     },
 }
 
@@ -282,18 +305,73 @@ impl<'a> Rom<'a> {
     }
 
     /// Returns the alignment of ROM sections.
-    pub fn alignments(&self) -> Result<RomConfigAlignment, RawHeaderError> {
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`], [`Self::fat`], and [`Self::arm9_overlay_table`].
+    pub fn alignments(&self) -> Result<RomConfigAlignment, RomAlignmentsError> {
+        // Collect all overlay files into a set.
+        fn get_overlay_files(overlay_table: &[Overlay]) -> BTreeSet<u32> {
+            overlay_table.iter().map(|overlay| overlay.file_id).collect()
+        }
+
+        const DEFAULT_ALIGNMENT: u32 = 0x4;
+
+        // Get the alignment of the current section, by looking at the address of the next section.
+        fn get_alignment(next_section: u32) -> u32 {
+            if next_section.trailing_zeros() >= 9 {
+                0x200
+            } else {
+                DEFAULT_ALIGNMENT
+            }
+        }
+
+        let fat = self.fat()?;
+        let arm9_overlays = self.arm9_overlay_table()?;
+        let arm7_overlays = self.arm7_overlay_table()?;
+        let arm9_overlay_files = get_overlay_files(arm9_overlays);
+        let arm7_overlay_files = get_overlay_files(arm7_overlays);
         let header = self.header()?;
 
-        let arm9 = 0x200;
-        let arm7 = 0x200;
-        let arm9_overlay_table = if header.arm9_overlays.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
-        let arm7_overlay_table = if header.arm7_overlays.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
-        let file_names = if header.file_names.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
-        let file_allocs = if header.file_allocs.offset.trailing_zeros() >= 9 { 0x200 } else { 0x1 };
-        let banner = 0x200;
-        let files = 0x200;
+        let arm9 = get_alignment(header.arm9.offset);
+        let arm9_overlay_table = get_alignment(header.arm9_overlays.offset);
+        let arm9_overlay = arm9_overlays
+            .iter()
+            .map(|overlay| get_alignment(fat[overlay.file_id as usize].start))
+            .min()
+            .unwrap_or(DEFAULT_ALIGNMENT);
+        let arm7 = get_alignment(header.arm7.offset);
+        let arm7_overlay_table = get_alignment(header.arm7_overlays.offset);
+        let arm7_overlay = arm7_overlays
+            .iter()
+            .map(|overlay| get_alignment(fat[overlay.file_id as usize].start))
+            .min()
+            .unwrap_or(DEFAULT_ALIGNMENT);
+        let file_name_table = get_alignment(header.file_names.offset);
+        let file_allocation_table = get_alignment(header.file_allocs.offset);
+        let banner = get_alignment(header.banner_offset);
 
-        Ok(RomConfigAlignment { arm9, arm7, arm9_overlay_table, arm7_overlay_table, file_names, file_allocs, banner, files })
+        let file_iter = fat
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !arm9_overlay_files.contains(&(*i as u32)) && !arm7_overlay_files.contains(&(*i as u32)))
+            .map(|(_, file)| file);
+
+        let file_image_block = file_iter.clone().map(|file| file.start).min().map(get_alignment).unwrap_or(DEFAULT_ALIGNMENT);
+        let file = file_iter.clone().map(|file| get_alignment(file.start)).min().unwrap_or(DEFAULT_ALIGNMENT);
+
+        Ok(RomConfigAlignment {
+            arm9,
+            arm9_overlay_table,
+            arm9_overlay,
+            arm7,
+            arm7_overlay_table,
+            arm7_overlay,
+            file_name_table,
+            file_allocation_table,
+            banner,
+            file_image_block,
+            file,
+        })
     }
 }

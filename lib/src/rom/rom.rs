@@ -10,7 +10,7 @@ use snafu::Snafu;
 use super::{
     raw::{
         self, Arm9Footer, RawArm9Error, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError,
-        RawOverlayError, TableOffset,
+        RawOverlayError, RomAlignmentsError, TableOffset,
     },
     Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BuildInfo,
     FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError,
@@ -105,6 +105,12 @@ pub enum RomExtractError {
     Arm9 {
         /// Source error.
         source: Arm9Error,
+    },
+    /// See [`RomAlignmentsError`].
+    #[snafu(transparent)]
+    RomAlignments {
+        /// Source error.
+        source: RomAlignmentsError,
     },
 }
 
@@ -608,7 +614,7 @@ impl<'a> Rom<'a> {
 
             // --------------------- Write ARM9 overlays ---------------------
             for overlay in &self.arm9_overlays {
-                self.align(&mut cursor, self.config.alignment.files)?;
+                self.align(&mut cursor, self.config.alignment.arm9_overlay)?;
                 let start = cursor.position() as u32;
                 let end = start + overlay.full_data().len() as u32;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
@@ -638,7 +644,7 @@ impl<'a> Rom<'a> {
 
             // --------------------- Write ARM7 overlays ---------------------
             for overlay in &self.arm7_overlays {
-                self.align(&mut cursor, self.config.alignment.files)?;
+                self.align(&mut cursor, self.config.alignment.arm7_overlay)?;
                 let start = cursor.position() as u32;
                 let end = start + overlay.full_data().len() as u32;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
@@ -648,14 +654,14 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Write file name table (FNT) ---------------------
-        self.align(&mut cursor, self.config.alignment.file_names)?;
+        self.align(&mut cursor, self.config.alignment.file_name_table)?;
         self.files.sort_for_fnt();
         let fnt = self.files.build_fnt()?.build()?;
         context.fnt_offset = Some(TableOffset { offset: cursor.position() as u32, size: fnt.len() as u32 });
         cursor.write_all(&fnt)?;
 
         // --------------------- Write file allocation table (FAT) placeholder ---------------------
-        self.align(&mut cursor, self.config.alignment.file_allocs)?;
+        self.align(&mut cursor, self.config.alignment.file_allocation_table)?;
         context.fat_offset =
             Some(TableOffset { offset: cursor.position() as u32, size: (file_allocs.len() * size_of::<FileAlloc>()) as u32 });
         cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
@@ -667,10 +673,11 @@ impl<'a> Rom<'a> {
         cursor.write_all(banner.full_data())?;
 
         // --------------------- Write files ---------------------
+        self.align(&mut cursor, self.config.alignment.file_image_block)?;
         self.files.sort_for_rom();
         self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| {
             // TODO: Rewrite traverse_files as an iterator so these errors can be returned
-            self.align(&mut cursor, self.config.alignment.files).expect("failed to align before file");
+            self.align(&mut cursor, self.config.alignment.file).expect("failed to align after file");
 
             let contents = file.contents();
             let start = cursor.position() as u32;

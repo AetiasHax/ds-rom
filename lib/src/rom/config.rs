@@ -57,23 +57,29 @@ pub struct RomConfigAutoload {
     pub config: PathBuf,
 }
 
-/// Alignment of ROM sections
+/// Alignment of ROM sections.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RomConfigAlignment {
     /// Alignment of the ARM9 program.
     pub arm9: u32,
-    /// Alignment of the ARM7 program.
-    pub arm7: u32,
     /// Alignment of the ARM9 overlay table.
     pub arm9_overlay_table: u32,
+    /// Alignment of each ARM9 overlay file.
+    pub arm9_overlay: u32,
+    /// Alignment of the ARM7 program.
+    pub arm7: u32,
     /// Alignment of the ARM7 overlay table.
     pub arm7_overlay_table: u32,
+    /// Alignment of each ARM7 overlay file.
+    pub arm7_overlay: u32,
     /// Alignment of the file name table.
-    pub file_names: u32,
+    pub file_name_table: u32,
     /// Alignment of the file allocation table.
-    pub file_allocs: u32,
+    pub file_allocation_table: u32,
     /// Alignment of the banner.
     pub banner: u32,
-    /// Alignment of files, including overlays.
-    pub files: u32,
+    /// Alignment of the file image block.
+    pub file_image_block: u32,
+    /// Alignment of each file.
+    pub file: u32,
 }
