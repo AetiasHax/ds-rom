@@ -50,7 +50,7 @@ fn test_extract_build() -> Result<()> {
         // Compare
         let target = fs::read(&path)?;
         let build = fs::read(&build_path)?;
-        assert!(target == build);
+        assert!(target == build, "{} did not match", file_name);
 
         // Delete
         fs::remove_file(&build_path)?;
