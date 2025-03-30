@@ -33,6 +33,8 @@ pub struct Arm9Offsets {
     pub build_info: u32,
     /// Autoload callback address.
     pub autoload_callback: u32,
+    /// Offset to overlay HMAC-SHA1 signature table.
+    pub overlay_signatures: u32,
 }
 
 const SECURE_AREA_ID: [u8; 8] = [0xff, 0xde, 0xff, 0xe7, 0xff, 0xde, 0xff, 0xe7];
@@ -465,6 +467,11 @@ impl<'a> Arm9<'a> {
     /// Returns the autoload callback address.
     pub fn autoload_callback(&self) -> u32 {
         self.offsets.autoload_callback
+    }
+
+    /// Returns the offset to the overlay HMAC-SHA1 signature table.
+    pub fn overlay_signatures_offset(&self) -> u32 {
+        self.offsets.overlay_signatures
     }
 
     /// Returns the [`Range`] of uninitialized data in this ARM9 program.

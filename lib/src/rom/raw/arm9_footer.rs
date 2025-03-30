@@ -1,4 +1,7 @@
-use std::mem::{align_of, size_of};
+use std::{
+    fmt::Display,
+    mem::{align_of, size_of},
+};
 
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
@@ -12,7 +15,8 @@ pub struct Arm9Footer {
     nitrocode: u32,
     /// Offset to [super::BuildInfo].
     pub build_info_offset: u32,
-    reserved: u32,
+    /// Offset to the overlay HMAC-SHA1 signature table.
+    pub overlay_signatures_offset: u32,
 }
 
 /// Errors related to [`Arm9Footer`].
@@ -58,8 +62,8 @@ pub enum Arm9FooterError {
 
 impl Arm9Footer {
     /// Creates a new [`Arm9Footer`].
-    pub fn new(build_info_offset: u32) -> Self {
-        Self { nitrocode: NITROCODE, build_info_offset, reserved: 0 }
+    pub fn new(build_info_offset: u32, overlay_signatures_offset: u32) -> Self {
+        Self { nitrocode: NITROCODE, build_info_offset, overlay_signatures_offset }
     }
 
     fn check_size(data: &'_ [u8]) -> Result<(), Arm9FooterError> {
@@ -114,5 +118,24 @@ impl Arm9Footer {
         let footer: &mut Self = Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr)?;
         footer.check_nitrocode()?;
         Ok(footer)
+    }
+
+    /// Creates a [`DisplayArm9Footer`] which implements [`Display`].
+    pub fn display(&self, indent: usize) -> DisplayArm9Footer {
+        DisplayArm9Footer { footer: self, indent }
+    }
+}
+
+/// Can be used to display values in [`Arm9Footer`].
+pub struct DisplayArm9Footer<'a> {
+    footer: &'a Arm9Footer,
+    indent: usize,
+}
+
+impl Display for DisplayArm9Footer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let i = " ".repeat(self.indent);
+        writeln!(f, "{i} Build info offset .......... : {:#x}", self.footer.build_info_offset)?;
+        writeln!(f, "{i} Overlay signatures offset .. : {:#x}", self.footer.overlay_signatures_offset)
     }
 }

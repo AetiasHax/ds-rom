@@ -594,7 +594,7 @@ impl<'a> Rom<'a> {
         context.arm9_autoload_callback = Some(self.arm9.autoload_callback());
         context.arm9_build_info_offset = Some(self.arm9.build_info_offset());
         cursor.write_all(self.arm9.full_data())?;
-        let footer = Arm9Footer::new(self.arm9.build_info_offset());
+        let footer = Arm9Footer::new(self.arm9.build_info_offset(), self.arm9.overlay_signatures_offset());
         cursor.write_all(bytemuck::bytes_of(&footer))?;
 
         let max_file_id = self.files.max_file_id();
