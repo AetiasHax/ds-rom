@@ -2,7 +2,7 @@ use std::{borrow::Cow, io};
 
 use serde::{Deserialize, Serialize};
 
-use super::raw::{self, FileAlloc, OverlayCompressedSize, RawHeaderError};
+use super::raw::{self, FileAlloc, OverlayFlags, RawHeaderError};
 use crate::compress::lz77::{Lz77, Lz77DecompressError};
 
 /// An overlay module for ARM9/ARM7.
@@ -26,7 +26,7 @@ impl<'a> Overlay<'a> {
         let alloc = fat[overlay.file_id as usize];
         let data = &rom.data()[alloc.range()];
         Ok(Self {
-            originally_compressed: overlay.compressed.is_compressed() != 0,
+            originally_compressed: overlay.flags.is_compressed(),
             info: OverlayInfo::new(overlay),
             data: Cow::Borrowed(data),
         })
@@ -34,6 +34,13 @@ impl<'a> Overlay<'a> {
 
     /// Builds a raw overlay table entry.
     pub fn build(&self) -> raw::Overlay {
+        let mut flags = OverlayFlags::new();
+        flags.set_is_compressed(self.is_compressed());
+        flags.set_is_signed(self.is_signed());
+        if self.is_compressed() {
+            flags.set_size(self.data.len());
+        }
+
         raw::Overlay {
             id: self.id() as u32,
             base_addr: self.base_address(),
@@ -42,11 +49,7 @@ impl<'a> Overlay<'a> {
             ctor_start: self.ctor_start(),
             ctor_end: self.ctor_end(),
             file_id: self.file_id(),
-            compressed: if self.is_compressed() {
-                OverlayCompressedSize::new().with_size(self.data.len()).with_is_compressed(1)
-            } else {
-                OverlayCompressedSize::new().with_size(0).with_is_compressed(0)
-            },
+            flags,
         }
     }
 
@@ -94,6 +97,11 @@ impl<'a> Overlay<'a> {
     /// compressed originally.
     pub fn is_compressed(&self) -> bool {
         self.info.compressed
+    }
+
+    /// Returns whether this [`Overlay`] has a signature.
+    pub fn is_signed(&self) -> bool {
+        self.info.signed
     }
 
     /// Decompresses this [`Overlay`], but does nothing if already decompressed.
@@ -160,6 +168,8 @@ pub struct OverlayInfo {
     pub file_id: u32,
     /// Whether the overlay is compressed.
     pub compressed: bool,
+    /// Whehter the overlay has a signature.
+    pub signed: bool,
 }
 
 impl OverlayInfo {
@@ -173,7 +183,8 @@ impl OverlayInfo {
             ctor_start: overlay.ctor_start,
             ctor_end: overlay.ctor_end,
             file_id: overlay.file_id,
-            compressed: overlay.compressed.is_compressed() != 0,
+            compressed: overlay.flags.is_compressed(),
+            signed: overlay.flags.is_signed(),
         }
     }
 }

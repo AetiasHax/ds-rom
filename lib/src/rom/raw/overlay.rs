@@ -27,8 +27,8 @@ pub struct Overlay {
     pub ctor_end: u32,
     /// File ID for the FAT.
     pub file_id: u32,
-    /// Compressed size.
-    pub compressed: OverlayCompressedSize,
+    /// Flags and compressed size.
+    pub flags: OverlayFlags,
 }
 
 /// Errors related to [`Overlay`].
@@ -114,20 +114,25 @@ impl Display for DisplayOverlay<'_> {
         writeln!(f, "{i}.bss size ........ : {:#x}", overlay.bss_size)?;
         writeln!(f, "{i}.ctor start ...... : {:#x}", overlay.ctor_start)?;
         writeln!(f, "{i}.ctor end ........ : {:#x}", overlay.ctor_end)?;
-        writeln!(f, "{i}Compressed size .. : {:#x}", overlay.compressed.size())?;
-        writeln!(f, "{i}Is compressed .... : {}", overlay.compressed.is_compressed() != 0)?;
+        writeln!(f, "{i}Compressed size .. : {:#x}", overlay.flags.size())?;
+        writeln!(f, "{i}Is compressed .... : {}", overlay.flags.is_compressed())?;
+        writeln!(f, "{i}Is signed ........ : {}", overlay.flags.is_signed())?;
+        writeln!(f, "{i}Reserved flags ... : {:#x}", overlay.flags.reserved())?;
         Ok(())
     }
 }
 
-/// Overlay compressed size bitfield.
+/// Overlay flags and compressed size.
 #[bitfield(u32)]
-pub struct OverlayCompressedSize {
+pub struct OverlayFlags {
     /// Compressed size, zero if not compressed.
     #[bits(24)]
     pub size: usize,
-    pub is_compressed: u8,
+    pub is_compressed: bool,
+    pub is_signed: bool,
+    #[bits(6)]
+    pub reserved: u8,
 }
 
-unsafe impl Zeroable for OverlayCompressedSize {}
-unsafe impl Pod for OverlayCompressedSize {}
+unsafe impl Zeroable for OverlayFlags {}
+unsafe impl Pod for OverlayFlags {}
