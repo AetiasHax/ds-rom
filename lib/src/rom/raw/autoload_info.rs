@@ -161,7 +161,7 @@ pub struct DisplayAutoloadInfo<'a> {
 
 impl Display for DisplayAutoloadInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let info = &self.info;
         writeln!(f, "{i}Index ......... : {}", info.index)?;
         writeln!(f, "{i}Type .......... : {}", info.kind)?;

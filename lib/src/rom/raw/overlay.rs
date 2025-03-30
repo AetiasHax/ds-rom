@@ -105,7 +105,7 @@ pub struct DisplayOverlay<'a> {
 
 impl Display for DisplayOverlay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let overlay = &self.overlay;
         writeln!(f, "{i}ID ............... : {}", overlay.id)?;
         writeln!(f, "{i}File ID .......... : {}", overlay.file_id)?;

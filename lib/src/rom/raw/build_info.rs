@@ -150,7 +150,7 @@ pub struct DisplayBuildInfo<'a> {
 
 impl Display for DisplayBuildInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let build_info = &self.build_info;
         writeln!(f, "{i}Autoload infos start .. : {:#x}", build_info.autoload_infos_start)?;
         writeln!(f, "{i}Autoload infos end .... : {:#x}", build_info.autoload_infos_end)?;

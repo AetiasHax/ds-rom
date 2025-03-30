@@ -301,7 +301,7 @@ pub struct DisplayHeader<'a> {
 
 impl Display for DisplayHeader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let header = &self.header;
         writeln!(f, "{i}Header version .......... : {}", header.version())?;
         writeln!(f, "{i}Title ................... : {}", header.title)?;
@@ -492,7 +492,7 @@ pub struct DisplayProgramOffset<'a> {
 
 impl Display for DisplayProgramOffset<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let offset = &self.offset;
         writeln!(f, "{i}Offset ........ : {:#x}", offset.offset)?;
         writeln!(f, "{i}Entrypoint .... : {:#x}", offset.entry)?;
@@ -527,7 +527,7 @@ pub struct DisplayTableOffset<'a> {
 
 impl Display for DisplayTableOffset<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let offset = &self.offset;
         writeln!(f, "{i}Offset .. : {:#x}", offset.offset)?;
         writeln!(f, "{i}Size .... : {:#x}", offset.size)?;

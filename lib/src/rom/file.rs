@@ -604,7 +604,7 @@ pub struct DisplayFileSystem<'a> {
 
 impl Display for DisplayFileSystem<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let parent = self.files.dir(self.parent_id);
         let files = &self.files;
         for child in &parent.children {

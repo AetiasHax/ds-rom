@@ -223,7 +223,7 @@ macro_rules! write_title {
 
 impl Display for DisplayBanner<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let i = format!("{:indent$}", "", indent = self.indent);
+        let i = " ".repeat(self.indent);
         let banner = &self.banner;
         writeln!(f, "{i}Version ......... : {}", banner.version)?;
         writeln!(f, "{i}Original CRC .... : {:#x}", banner.crc(BannerVersion::Original.crc_index()))?;
