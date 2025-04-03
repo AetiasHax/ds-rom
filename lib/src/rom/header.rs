@@ -55,6 +55,8 @@ pub struct HeaderOriginal {
     pub rom_nand_end: u16,
     /// NAND end of RW area in multiples of 0x20000 (0x80000 on DSi).
     pub rw_nand_end: u16,
+    /// Whether the header has the ARM9 build info offset.
+    pub has_arm9_build_info_offset: bool,
 }
 
 /// Values for DS games after DSi release, [`HeaderVersion::DsPostDsi`].
@@ -101,6 +103,7 @@ impl Header {
                 secure_area_delay: header.secure_area_delay,
                 rom_nand_end: header.rom_nand_end,
                 rw_nand_end: header.rw_nand_end,
+                has_arm9_build_info_offset: header.arm9_build_info_offset != 0,
             },
             ds_post_dsi: (version >= HeaderVersion::DsPostDsi).then_some(HeaderDsPostDsi {
                 dsi_flags_2: header.dsi_flags_2,
@@ -169,7 +172,11 @@ impl Header {
             secure_area_disable: 0,
             rom_size_ds: context.rom_size.expect("ROM size must be known"),
             header_size: size_of::<raw::Header>() as u32,
-            arm9_build_info_offset: context.arm9_build_info_offset.map(|offset| offset + arm9_offset).unwrap_or(0),
+            arm9_build_info_offset: if self.original.has_arm9_build_info_offset {
+                context.arm9_build_info_offset.map(|offset| offset + arm9_offset).unwrap_or(0)
+            } else {
+                0
+            },
             arm7_build_info_offset: context.arm7_build_info_offset.map(|offset| offset + arm7_offset).unwrap_or(0),
             ds_rom_region_end: 0,
             dsi_rom_region_end: 0,
