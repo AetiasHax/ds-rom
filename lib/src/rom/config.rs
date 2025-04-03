@@ -44,6 +44,9 @@ pub struct RomConfig {
     /// Path to path order file
     pub path_order: PathBuf,
 
+    /// Path to HMAC SHA1 key file for ARM9
+    pub arm9_hmac_sha1_key: Option<PathBuf>,
+
     /// Alignment of ROM sections
     pub alignment: RomConfigAlignment,
 }

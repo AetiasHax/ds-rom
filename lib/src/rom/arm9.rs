@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::{
-    raw::{AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, RawAutoloadInfoError, RawBuildInfoError},
-    Autoload,
+    raw::{
+        AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, OverlaySignature, OverlaySignatureError,
+        RawAutoloadInfoError, RawBuildInfoError, NITROCODE_BYTES,
+    },
+    Autoload, Overlay,
 };
 use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
@@ -115,6 +118,46 @@ pub enum Arm9AutoloadError {
     NotFound {
         /// Kind of autoload.
         kind: AutoloadKind,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+}
+
+/// Errors related to [`Arm9::overlay_signatures`] and [`Arm9::overlay_signatures_mut`].
+#[derive(Debug, Snafu)]
+pub enum Arm9OverlaySignaturesError {
+    /// See [`OverlaySignatureError`].
+    #[snafu(transparent)]
+    OverlaySignature {
+        /// Source error.
+        source: OverlaySignatureError,
+    },
+    /// See [`RawBuildInfoError`].
+    #[snafu(transparent)]
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// Occurs when trying to access overlay signatures while the ARM9 program is compressed.
+    #[snafu(display("ARM9 program must be decompressed before accessing overlay signatures:\n{backtrace}"))]
+    OverlaySignaturesCompressed {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+}
+
+/// Errors related to [`Arm9::hmac_sha1_key`].
+#[derive(Debug, Snafu)]
+pub enum Arm9HmacSha1KeyError {
+    /// See [`RawBuildInfoError`].
+    #[snafu(transparent)]
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// Occurs when trying to access the HMAC-SHA1 key while the ARM9 program is compressed.
+    #[snafu(display("ARM9 program must be decompressed before accessing HMAC-SHA1 key:\n{backtrace}"))]
+    HmacSha1KeyCompressed {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
@@ -428,6 +471,71 @@ impl<'a> Arm9<'a> {
         Ok(self.autoloads()?.iter().filter(|a| a.kind() == AutoloadKind::Unknown).count())
     }
 
+    /// Returns the HMAC-SHA1 key in this ARM9 program.
+    pub fn hmac_sha1_key(&self) -> Result<Option<[u8; 64]>, Arm9HmacSha1KeyError> {
+        if self.is_compressed()? {
+            HmacSha1KeyCompressedSnafu {}.fail()?
+        }
+
+        // Credits to pleonex: https://scenegate.github.io/Ekona/docs/specs/cartridge/security.html#overlays
+        let Some((i, _)) = self.data.chunks(4).enumerate().filter(|(_, chunk)| *chunk == NITROCODE_BYTES).nth(1) else {
+            return Ok(None);
+        };
+        let start = i * 4;
+        let end = start + 64;
+        if end > self.data.len() {
+            return Ok(None);
+        }
+        let mut key = [0u8; 64];
+        key.copy_from_slice(&self.data[start..end]);
+        Ok(Some(key))
+    }
+
+    /// Returns the ARM9 overlay signature table.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the ARM9 program is compressed or if [`OverlaySignature::borrow_from_slice`]
+    /// fails.
+    pub fn overlay_signatures(&self, num_overlays: usize) -> Result<Option<&[OverlaySignature]>, Arm9OverlaySignaturesError> {
+        let start = self.overlay_signatures_offset() as usize;
+        if start == 0 {
+            return Ok(None);
+        }
+
+        if self.is_compressed()? {
+            OverlaySignaturesCompressedSnafu {}.fail()?;
+        }
+
+        let end = start + size_of::<OverlaySignature>() * num_overlays;
+        let data = &self.data[start..end];
+        Ok(Some(OverlaySignature::borrow_from_slice(data)?))
+    }
+
+    /// Returns a mutable reference to the ARM9 overlay signature table.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the ARM9 program is compressed or if [`OverlaySignature::borrow_from_slice_mut`]
+    /// fails.
+    pub fn overlay_signatures_mut(
+        &mut self,
+        num_overlays: usize,
+    ) -> Result<Option<&mut [OverlaySignature]>, Arm9OverlaySignaturesError> {
+        let start = self.overlay_signatures_offset() as usize;
+        if start == 0 {
+            return Ok(None);
+        }
+
+        if self.is_compressed()? {
+            OverlaySignaturesCompressedSnafu {}.fail()?;
+        }
+
+        let end = start + size_of::<OverlaySignature>() * num_overlays;
+        let data = &mut self.data.to_mut()[start..end];
+        Ok(Some(OverlaySignature::borrow_from_slice_mut(data)?))
+    }
+
     /// Returns the code of this ARM9 program.
     ///
     /// # Errors
@@ -497,6 +605,21 @@ impl<'a> Arm9<'a> {
     /// Returns whether the ARM9 program was encrypted originally. See [`Self::is_encrypted`] for the current state.
     pub fn originally_encrypted(&self) -> bool {
         self.originally_encrypted
+    }
+
+    pub(crate) fn update_overlay_signatures(
+        &mut self,
+        arm9_overlays: &[Overlay<'a>],
+    ) -> Result<(), Arm9OverlaySignaturesError> {
+        let Some(signatures) = self.overlay_signatures_mut(arm9_overlays.len())? else {
+            return Ok(());
+        };
+        for overlay in arm9_overlays {
+            if let Some(signature) = overlay.signature() {
+                signatures[overlay.id() as usize] = signature;
+            }
+        }
+        Ok(())
     }
 }
 

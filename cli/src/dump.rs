@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use ds_rom::{
     compress::lz77::Lz77,
-    crypto::blowfish::BlowfishKey,
-    rom::{self, raw, Arm9, Logo, Overlay},
+    crypto::{blowfish::BlowfishKey, hmac_sha1::HmacSha1},
+    rom::{self, raw, Arm9, Logo, Overlay, Rom},
 };
 
 use crate::print_hex;
@@ -74,6 +74,7 @@ impl Dump {
             DumpCommand::Arm9Overlay(dump_arm9_overlay) => dump_arm9_overlay.run(&rom, self.decompress, self.compress),
             DumpCommand::Arm7Overlay(dump_arm7_overlay) => dump_arm7_overlay.run(&rom),
             DumpCommand::Arm9Footer(dump_arm9_footer) => dump_arm9_footer.run(&rom),
+            DumpCommand::Arm9OverlaySignatures(dump_arm9_overlay_signatures) => dump_arm9_overlay_signatures.run(&rom),
         }
     }
 }
@@ -100,6 +101,8 @@ enum DumpCommand {
     Arm7Overlay(DumpArm7Overlay),
     #[command(name = "arm9-footer")]
     Arm9Footer(DumpArm9Footer),
+    #[command(name = "arm9-ov-sigs")]
+    Arm9OverlaySignatures(DumpArm9OverlaySignatures),
 }
 
 /// Shows the contents of the ROM header.
@@ -320,9 +323,10 @@ struct DumpArm9Overlay {
 
 impl DumpArm9Overlay {
     pub fn run(&self, rom: &raw::Rom, decompress: bool, compress: bool) -> Result<()> {
-        let fat = rom.fat()?;
         let arm9_ovt = rom.arm9_overlay_table()?;
-        let mut overlay = Overlay::parse(&arm9_ovt[self.index], fat, rom)?;
+        let mut arm9 = rom.arm9()?;
+        arm9.decompress()?;
+        let mut overlay = Overlay::parse_arm9(&arm9_ovt[self.index], rom, &arm9)?;
 
         if decompress && overlay.is_compressed() {
             overlay.decompress()?;
@@ -365,9 +369,8 @@ struct DumpArm7Overlay {
 
 impl DumpArm7Overlay {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
-        let fat = rom.fat()?;
         let arm7_ovt = rom.arm7_overlay_table()?;
-        let overlay = Overlay::parse(&arm7_ovt[self.index], fat, rom)?;
+        let overlay = Overlay::parse_arm7(&arm7_ovt[self.index], rom)?;
         print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
 
         Ok(())
@@ -409,6 +412,61 @@ impl DumpArm9Footer {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let arm9_footer = rom.arm9_footer()?;
         println!("ARM9 footer:\n{}", arm9_footer.display(2));
+
+        Ok(())
+    }
+}
+
+/// Prints the ARM9 overlay signatures.
+#[derive(Args)]
+struct DumpArm9OverlaySignatures {
+    #[arg(long, short = 'c')]
+    compute: bool,
+    #[arg(long, short = 'v')]
+    verify: bool,
+}
+
+impl DumpArm9OverlaySignatures {
+    pub fn run(&self, raw_rom: &raw::Rom) -> Result<()> {
+        let rom = Rom::extract(raw_rom)?;
+
+        if self.verify {
+            let mut arm9 = rom.arm9().clone();
+            arm9.decompress()?;
+            let hmac_sha1_key = arm9.hmac_sha1_key()?.context("Failed to get HMAC-SHA1 key")?;
+            let hmac_sha1 = HmacSha1::new(hmac_sha1_key);
+            for overlay in rom.arm9_overlays() {
+                if overlay.is_signed() {
+                    if overlay.verify_signature(&hmac_sha1)? {
+                        println!("ARM9 overlay {} signature is valid", overlay.id());
+                    } else {
+                        println!("ARM9 overlay {} signature is invalid", overlay.id());
+                    }
+                } else {
+                    println!("ARM9 overlay {} has no signature", overlay.id());
+                }
+            }
+            return Ok(());
+        }
+
+        if self.compute {
+            let mut arm9 = rom.arm9().clone();
+            arm9.decompress()?;
+            let hmac_sha1_key = arm9.hmac_sha1_key()?.context("Failed to get HMAC-SHA1 key")?;
+            let hmac_sha1 = HmacSha1::new(hmac_sha1_key);
+            for overlay in rom.arm9_overlays() {
+                let signature = overlay.compute_signature(&hmac_sha1)?;
+                println!("ARM9 overlay {} signature: {}", overlay.id(), signature);
+            }
+        } else {
+            for overlay in rom.arm9_overlays() {
+                if let Some(signature) = overlay.signature() {
+                    println!("ARM9 overlay {} signature: {}", overlay.id(), signature);
+                } else {
+                    println!("ARM9 overlay {} has no signature", overlay.id());
+                }
+            }
+        }
 
         Ok(())
     }

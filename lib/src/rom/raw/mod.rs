@@ -6,6 +6,7 @@ mod fat;
 mod fnt;
 mod header;
 mod overlay;
+mod overlay_signature;
 mod rom;
 
 pub use arm9_footer::*;
@@ -16,7 +17,11 @@ pub use fat::*;
 pub use fnt::*;
 pub use header::*;
 pub use overlay::*;
+pub use overlay_signature::*;
 pub use rom::*;
 
 /// Nitrocode, interpreted as `2` (ni), `10` (tō), `6` (roku), `c0de`.
 pub const NITROCODE: u32 = 0x2106c0de_u32.swap_bytes();
+
+/// Nitrocode as a byte array.
+pub const NITROCODE_BYTES: [u8; 4] = NITROCODE.to_le_bytes();

@@ -1,4 +1,5 @@
 use std::{
+    backtrace::Backtrace,
     io::{self, Cursor, Write},
     mem::size_of,
     path::Path,
@@ -12,13 +13,16 @@ use super::{
         self, Arm9Footer, RawArm9Error, RawBannerError, RawBuildInfoError, RawFatError, RawFntError, RawHeaderError,
         RawOverlayError, RomAlignmentsError, TableOffset,
     },
-    Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9Offsets, Autoload, Banner, BannerError, BannerImageError, BuildInfo,
-    FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError,
-    Overlay, OverlayInfo, RomConfigAutoload,
+    Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9HmacSha1KeyError, Arm9Offsets, Arm9OverlaySignaturesError, Autoload, Banner,
+    BannerError, BannerImageError, BuildInfo, FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo,
+    LogoError, LogoLoadError, LogoSaveError, Overlay, OverlayError, OverlayInfo, OverlayOptions, RomConfigAutoload,
 };
 use crate::{
     compress::lz77::Lz77DecompressError,
-    crypto::blowfish::BlowfishKey,
+    crypto::{
+        blowfish::BlowfishKey,
+        hmac_sha1::{HmacSha1, HmacSha1FromBytesError},
+    },
     io::{create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string, FileError},
     rom::{raw::FileAlloc, Arm9WithTcmsOptions, RomConfig},
 };
@@ -111,6 +115,18 @@ pub enum RomExtractError {
     RomAlignments {
         /// Source error.
         source: RomAlignmentsError,
+    },
+    /// See [`OverlayError`].
+    #[snafu(transparent)]
+    Overlay {
+        /// Source error.
+        source: OverlayError,
+    },
+    /// See [`Arm9HmacSha1KeyError`].
+    #[snafu(transparent)]
+    Arm9HmacSha1Key {
+        /// Source error.
+        source: Arm9HmacSha1KeyError,
     },
 }
 
@@ -209,6 +225,36 @@ pub enum RomSaveError {
         /// Source error.
         source: Lz77DecompressError,
     },
+    /// See [`OverlayError`].
+    #[snafu(transparent)]
+    Overlay {
+        /// Source error.
+        source: OverlayError,
+    },
+    /// See [`Arm9OverlaySignaturesError`].
+    #[snafu(transparent)]
+    HmacSha1FromBytes {
+        /// Source error.
+        source: HmacSha1FromBytesError,
+    },
+    /// See [`Arm9HmacSha1KeyError`].
+    #[snafu(transparent)]
+    Arm9HmacSha1Key {
+        /// Source error.
+        source: Arm9HmacSha1KeyError,
+    },
+    /// See [`Arm9OverlaySignaturesError`].
+    #[snafu(transparent)]
+    Arm9OverlaySignatures {
+        /// Source error.
+        source: Arm9OverlaySignaturesError,
+    },
+    /// Occurs when the HMAC-SHA1 key was not provided for a signed overlay.
+    #[snafu(display("HMAC-SHA1 key was not provided for a signed overlay:\n{backtrace}"))]
+    NoHmacSha1Key {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 /// Config file for the ARM9 main module.
@@ -232,6 +278,8 @@ pub struct OverlayConfig {
     /// See [`OverlayInfo`].
     #[serde(flatten)]
     pub info: OverlayInfo,
+    /// Whether this overlay is signed.
+    pub signed: bool,
     /// Name of binary file.
     pub file_name: String,
 }
@@ -284,6 +332,21 @@ impl<'a> Rom<'a> {
 
         autoloads.sort_by_key(|autoload| autoload.info().index());
 
+        // --------------------- Load HMAC SHA1 key ---------------------
+        let arm9_hmac_sha1 = if let Some(hmac_sha1_key_file) = &config.arm9_hmac_sha1_key {
+            let hmac_sha1_key = read_file(path.join(hmac_sha1_key_file))?;
+            Some(HmacSha1::try_from(hmac_sha1_key.as_ref())?)
+        } else {
+            None
+        };
+
+        // --------------------- Load ARM9 overlays ---------------------
+        let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
+            Self::load_overlays(&path.join(arm9_overlays_config), "arm9", arm9_hmac_sha1, &options)?
+        } else {
+            vec![]
+        };
+
         // --------------------- Build ARM9 program ---------------------
         let mut arm9 = Arm9::with_autoloads(
             arm9,
@@ -295,6 +358,7 @@ impl<'a> Rom<'a> {
             },
         )?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
+        arm9.update_overlay_signatures(&arm9_overlays)?;
         if arm9_build_config.compressed && options.compress {
             log::info!("Compressing ARM9 program");
             arm9.compress()?;
@@ -307,9 +371,9 @@ impl<'a> Rom<'a> {
             arm9.encrypt(key, header.original.gamecode.to_le_u32())?;
         }
 
-        // --------------------- Load ARM9 overlays ---------------------
-        let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
-            Self::load_overlays(&path.join(arm9_overlays_config), "arm9", &options)?
+        // --------------------- Load ARM7 overlays ---------------------
+        let arm7_overlays = if let Some(arm7_overlays_config) = &config.arm7_overlays {
+            Self::load_overlays(&path.join(arm7_overlays_config), "arm7", None, &options)?
         } else {
             vec![]
         };
@@ -318,13 +382,6 @@ impl<'a> Rom<'a> {
         let arm7 = read_file(path.join(&config.arm7_bin))?;
         let arm7_config = serde_yml::from_reader(open_file(path.join(&config.arm7_config))?)?;
         let arm7 = Arm7::new(arm7, arm7_config);
-
-        // --------------------- Load ARM7 overlays ---------------------
-        let arm7_overlays = if let Some(arm7_overlays_config) = &config.arm7_overlays {
-            Self::load_overlays(&path.join(arm7_overlays_config), "arm7", &options)?
-        } else {
-            vec![]
-        };
 
         // --------------------- Load banner ---------------------
         let banner = if options.load_banner {
@@ -352,7 +409,12 @@ impl<'a> Rom<'a> {
         Ok(Self { header, header_logo, arm9, arm9_overlays, arm7, arm7_overlays, banner, files, path_order, config })
     }
 
-    fn load_overlays(config_path: &Path, processor: &str, options: &RomLoadOptions) -> Result<Vec<Overlay<'a>>, RomSaveError> {
+    fn load_overlays(
+        config_path: &Path,
+        processor: &str,
+        hmac_sha1: Option<HmacSha1>,
+        options: &RomLoadOptions,
+    ) -> Result<Vec<Overlay<'a>>, RomSaveError> {
         let path = config_path.parent().unwrap();
         let mut overlays = vec![];
         let overlay_configs: Vec<OverlayConfig> = serde_yml::from_reader(open_file(config_path)?)?;
@@ -361,11 +423,22 @@ impl<'a> Rom<'a> {
             let data = read_file(path.join(config.file_name))?;
             let compressed = config.info.compressed;
             config.info.compressed = false;
-            let mut overlay = Overlay::new(data, config.info, compressed);
-            if compressed && options.compress {
-                log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
-                overlay.compress()?;
+            let mut overlay = Overlay::new(data, OverlayOptions { info: config.info, originally_compressed: compressed })?;
+
+            if options.compress {
+                if compressed {
+                    log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
+                    overlay.compress()?;
+                }
+
+                if config.signed {
+                    let Some(ref hmac_sha1) = hmac_sha1 else {
+                        return NoHmacSha1KeySnafu {}.fail();
+                    };
+                    overlay.sign(hmac_sha1)?;
+                }
             }
+
             overlays.push(overlay);
         }
         Ok(overlays)
@@ -405,6 +478,15 @@ impl<'a> Rom<'a> {
             plain_arm9.decompress()?;
         }
         create_file_and_dirs(path.join(&self.config.arm9_bin))?.write_all(plain_arm9.code()?)?;
+
+        // --------------------- Save ARM9 HMAC-SHA1 key ---------------------
+        if let Some(arm9_hmac_sha1_key) = plain_arm9.hmac_sha1_key()? {
+            if let Some(key_file) = &self.config.arm9_hmac_sha1_key {
+                create_file_and_dirs(path.join(key_file))?.write_all(arm9_hmac_sha1_key.as_ref())?;
+            }
+        } else if self.config.arm9_hmac_sha1_key.is_some() {
+            log::warn!("ARM9 HMAC-SHA1 key not found, but config requested it to be saved");
+        }
 
         // --------------------- Save autoloads ---------------------
         let mut unknown_autoloads = self.config.unknown_autoloads.iter();
@@ -486,7 +568,11 @@ impl<'a> Rom<'a> {
                 let name = format!("ov{:03}", overlay.id());
 
                 let mut plain_overlay = overlay.clone();
-                configs.push(OverlayConfig { info: plain_overlay.info().clone(), file_name: format!("{name}.bin") });
+                configs.push(OverlayConfig {
+                    info: plain_overlay.info().clone(),
+                    file_name: format!("{name}.bin"),
+                    signed: overlay.is_signed(),
+                });
 
                 if plain_overlay.is_compressed() {
                     log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
@@ -512,21 +598,19 @@ impl<'a> Rom<'a> {
         let file_root = FileSystem::parse(&fnt, fat, rom)?;
         let path_order = file_root.compute_path_order();
 
-        let arm9_overlays =
-            rom.arm9_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Result<Vec<_>, _>>()?;
-        let arm7_overlays =
-            rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse(ov, fat, rom)).collect::<Result<Vec<_>, _>>()?;
-
         let arm9 = rom.arm9()?;
-        let mut decompressed_arm9;
+        let mut decompressed_arm9 = arm9.clone();
+        decompressed_arm9.decompress()?;
 
-        let autoloads = if arm9.is_compressed()? {
-            decompressed_arm9 = arm9.clone();
-            decompressed_arm9.decompress()?;
-            decompressed_arm9.autoloads()?
-        } else {
-            arm9.autoloads()?
-        };
+        let arm9_overlays = rom
+            .arm9_overlay_table()?
+            .iter()
+            .map(|ov| Overlay::parse_arm9(ov, rom, &decompressed_arm9))
+            .collect::<Result<Vec<_>, _>>()?;
+        let arm7_overlays =
+            rom.arm7_overlay_table()?.iter().map(|ov| Overlay::parse_arm7(ov, rom)).collect::<Result<Vec<_>, _>>()?;
+
+        let autoloads = decompressed_arm9.autoloads()?;
         let unknown_autoloads = autoloads
             .iter()
             .filter(|&autoload| autoload.kind() == raw::AutoloadKind::Unknown)
@@ -538,6 +622,8 @@ impl<'a> Rom<'a> {
                 }
             })
             .collect();
+
+        let has_arm9_hmac_sha1 = decompressed_arm9.hmac_sha1_key()?.is_some();
 
         let alignment = rom.alignments()?;
 
@@ -557,6 +643,7 @@ impl<'a> Rom<'a> {
             banner: "banner/banner.yaml".into(),
             files_dir: "files/".into(),
             path_order: "path_order.txt".into(),
+            arm9_hmac_sha1_key: has_arm9_hmac_sha1.then_some("arm9/hmac_sha1_key.bin".into()),
             alignment,
         };
 

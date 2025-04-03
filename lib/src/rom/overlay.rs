@@ -1,35 +1,129 @@
-use std::{borrow::Cow, io};
+use std::{backtrace::Backtrace, borrow::Cow, io};
 
 use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 
-use super::raw::{self, FileAlloc, OverlayFlags, RawHeaderError};
-use crate::compress::lz77::{Lz77, Lz77DecompressError};
+use super::{
+    raw::{self, OverlayFlags, OverlaySignature, RawFatError, RawHeaderError},
+    Arm9, Arm9OverlaySignaturesError,
+};
+use crate::{
+    compress::lz77::{Lz77, Lz77DecompressError},
+    crypto::hmac_sha1::HmacSha1,
+};
 
 /// An overlay module for ARM9/ARM7.
 #[derive(Clone)]
 pub struct Overlay<'a> {
     originally_compressed: bool,
     info: OverlayInfo,
+    signature: Option<OverlaySignature>,
     data: Cow<'a, [u8]>,
 }
 
 const LZ77: Lz77 = Lz77 {};
 
+/// Options for creating an [`Overlay`].
+pub struct OverlayOptions {
+    /// Whether the overlay was originally compressed.
+    pub originally_compressed: bool,
+    /// Overlay info.
+    pub info: OverlayInfo,
+}
+
+/// Errors related to [`Overlay`].
+#[derive(Debug, Snafu)]
+pub enum OverlayError {
+    /// See [`RawHeaderError`].
+    #[snafu(transparent)]
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
+    },
+    /// See [`RawFatError`].
+    #[snafu(transparent)]
+    RawFat {
+        /// Source error.
+        source: RawFatError,
+    },
+    /// See [`Arm9OverlaySignaturesError`].
+    #[snafu(transparent)]
+    Arm9OverlaySignatures {
+        /// Source error.
+        source: Arm9OverlaySignaturesError,
+    },
+    /// Occurs when there are no overlay signatures in the ARM9 program.
+    #[snafu(display("no overlay signatures found in ARM9 program:\n{backtrace}"))]
+    NoOverlaySignatures {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when trying to create a signed ARM7 overlay, but signing ARM7 overlays is not supported.
+    #[snafu(display("signing ARM7 overlays is not supported:\n{backtrace}"))]
+    SignedArm7Overlay {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when trying to compute the signature but the overlay is not in its originally compressed state.
+    #[snafu(display("cannot compute signature for overlay that is not in its originally compressed state:\n{backtrace}"))]
+    OverlayCompression {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+}
+
 impl<'a> Overlay<'a> {
     /// Creates a new [`Overlay`] from plain data.
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, info: OverlayInfo, originally_compressed: bool) -> Self {
-        Self { originally_compressed, info, data: data.into() }
+    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, options: OverlayOptions) -> Result<Self, OverlayError> {
+        let OverlayOptions { originally_compressed, info } = options;
+        let data = data.into();
+
+        Ok(Self { originally_compressed, info, signature: None, data })
     }
 
-    /// Parses an [`Overlay`] from a FAT and ROM.
-    pub fn parse(overlay: &raw::Overlay, fat: &[FileAlloc], rom: &'a raw::Rom) -> Result<Self, RawHeaderError> {
+    /// Parses an ARM9 [`Overlay`] from a ROM.
+    pub fn parse_arm9(overlay: &raw::Overlay, rom: &'a raw::Rom, arm9: &Arm9) -> Result<Self, OverlayError> {
+        let fat = rom.fat()?;
+
         let alloc = fat[overlay.file_id as usize];
         let data = &rom.data()[alloc.range()];
-        Ok(Self {
+
+        let mut signature = None;
+        if overlay.flags.is_signed() {
+            let num_overlays = rom.num_arm9_overlays()?;
+            let signatures = arm9.overlay_signatures(num_overlays)?;
+            signature = Some(signatures.map(|s| s[overlay.id as usize]).ok_or_else(|| NoOverlaySignaturesSnafu {}.build())?);
+        }
+
+        let overlay = Self {
             originally_compressed: overlay.flags.is_compressed(),
             info: OverlayInfo::new(overlay),
+            signature,
             data: Cow::Borrowed(data),
-        })
+        };
+
+        Ok(overlay)
+    }
+
+    /// Parses an ARM7 [`Overlay`] from a ROM.
+    pub fn parse_arm7(overlay: &raw::Overlay, rom: &'a raw::Rom) -> Result<Self, OverlayError> {
+        let fat = rom.fat()?;
+
+        let alloc = fat[overlay.file_id as usize];
+        let data = &rom.data()[alloc.range()];
+
+        if overlay.flags.is_signed() {
+            return SignedArm7OverlaySnafu {}.fail();
+        }
+
+        let overlay = Self {
+            originally_compressed: overlay.flags.is_compressed(),
+            info: OverlayInfo::new(overlay),
+            signature: None,
+            data: Cow::Borrowed(data),
+        };
+
+        Ok(overlay)
     }
 
     /// Builds a raw overlay table entry.
@@ -101,7 +195,7 @@ impl<'a> Overlay<'a> {
 
     /// Returns whether this [`Overlay`] has a signature.
     pub fn is_signed(&self) -> bool {
-        self.info.signed
+        self.signature.is_some()
     }
 
     /// Decompresses this [`Overlay`], but does nothing if already decompressed.
@@ -147,6 +241,36 @@ impl<'a> Overlay<'a> {
     pub fn originally_compressed(&self) -> bool {
         self.originally_compressed
     }
+
+    /// Computes the signature of this [`Overlay`] using the given HMAC-SHA1 key.
+    pub fn compute_signature(&self, hmac_sha1: &HmacSha1) -> Result<OverlaySignature, OverlayError> {
+        if self.is_compressed() != self.originally_compressed {
+            OverlayCompressionSnafu {}.fail()?;
+        }
+
+        Ok(OverlaySignature::from_hmac_sha1(hmac_sha1, self.data.as_ref()))
+    }
+
+    /// Returns the signature of this [`Overlay`], if it exists.
+    pub fn signature(&self) -> Option<OverlaySignature> {
+        self.signature
+    }
+
+    /// Verifies the signature of this [`Overlay`] using the given HMAC-SHA1 key.
+    pub fn verify_signature(&self, hmac_sha1: &HmacSha1) -> Result<bool, OverlayError> {
+        let Some(signature) = self.signature() else {
+            return Ok(true);
+        };
+
+        let computed_signature = self.compute_signature(hmac_sha1)?;
+        Ok(computed_signature == signature)
+    }
+
+    /// Signs this [`Overlay`] using the given HMAC-SHA1 key.
+    pub fn sign(&mut self, hmac_sha1: &HmacSha1) -> Result<(), OverlayError> {
+        self.signature = Some(self.compute_signature(hmac_sha1)?);
+        Ok(())
+    }
 }
 
 /// Info of an [`Overlay`], similar to an entry in the overlay table.
@@ -168,8 +292,6 @@ pub struct OverlayInfo {
     pub file_id: u32,
     /// Whether the overlay is compressed.
     pub compressed: bool,
-    /// Whehter the overlay has a signature.
-    pub signed: bool,
 }
 
 impl OverlayInfo {
@@ -184,7 +306,6 @@ impl OverlayInfo {
             ctor_end: overlay.ctor_end,
             file_id: overlay.file_id,
             compressed: overlay.flags.is_compressed(),
-            signed: overlay.flags.is_signed(),
         }
     }
 }
