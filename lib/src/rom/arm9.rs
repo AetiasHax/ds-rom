@@ -468,7 +468,7 @@ impl<'a> Arm9<'a> {
     ///
     /// See [`Self::autoloads`].
     pub fn num_unknown_autoloads(&self) -> Result<usize, Arm9AutoloadError> {
-        Ok(self.autoloads()?.iter().filter(|a| a.kind() == AutoloadKind::Unknown).count())
+        Ok(self.autoloads()?.iter().filter(|a| matches!(a.kind(), AutoloadKind::Unknown(_))).count())
     }
 
     /// Returns the HMAC-SHA1 key in this ARM9 program.

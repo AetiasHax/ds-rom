@@ -16,6 +16,7 @@ use super::{
     Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9HmacSha1KeyError, Arm9Offsets, Arm9OverlaySignaturesError, Autoload, Banner,
     BannerError, BannerImageError, BuildInfo, FileBuildError, FileParseError, FileSystem, Header, HeaderBuildError, Logo,
     LogoError, LogoLoadError, LogoSaveError, Overlay, OverlayError, OverlayInfo, OverlayOptions, RomConfigAutoload,
+    RomConfigUnknownAutoload,
 };
 use crate::{
     compress::lz77::Lz77DecompressError,
@@ -255,6 +256,14 @@ pub enum RomSaveError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// Occurs when an autoload was not found in the config.
+    #[snafu(display("autoload index {index} not found in config:\n{backtrace}"))]
+    AutoloadNotFound {
+        /// The index of the autoload that was missing.
+        index: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 /// Config file for the ARM9 main module.
@@ -324,13 +333,13 @@ impl<'a> Rom<'a> {
         autoloads.push(dtcm);
 
         for unknown_autoload in &config.unknown_autoloads {
-            let autoload = read_file(path.join(&unknown_autoload.bin))?;
-            let autoload_info = serde_yml::from_reader(open_file(path.join(&unknown_autoload.config))?)?;
+            let autoload = read_file(path.join(&unknown_autoload.files.bin))?;
+            let autoload_info = serde_yml::from_reader(open_file(path.join(&unknown_autoload.files.config))?)?;
             let autoload = Autoload::new(autoload, autoload_info);
             autoloads.push(autoload);
         }
 
-        autoloads.sort_by_key(|autoload| autoload.info().index());
+        autoloads.sort_by_key(|autoload| autoload.kind());
 
         // --------------------- Load HMAC SHA1 key ---------------------
         let arm9_hmac_sha1 = if let Some(hmac_sha1_key_file) = &config.arm9_hmac_sha1_key {
@@ -489,14 +498,18 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Save autoloads ---------------------
-        let mut unknown_autoloads = self.config.unknown_autoloads.iter();
         for autoload in plain_arm9.autoloads()?.iter() {
             let (bin_path, config_path) = match autoload.kind() {
                 raw::AutoloadKind::Itcm => (path.join(&self.config.itcm.bin), path.join(&self.config.itcm.config)),
                 raw::AutoloadKind::Dtcm => (path.join(&self.config.dtcm.bin), path.join(&self.config.dtcm.config)),
-                raw::AutoloadKind::Unknown => {
-                    let unknown_autoload = unknown_autoloads.next().expect("no more autoloads in config, was it removed?");
-                    (path.join(&unknown_autoload.bin), path.join(&unknown_autoload.config))
+                raw::AutoloadKind::Unknown(index) => {
+                    let unknown_autoload = self
+                        .config
+                        .unknown_autoloads
+                        .iter()
+                        .find(|autoload| autoload.index == index)
+                        .ok_or_else(|| AutoloadNotFoundSnafu { index }.build())?;
+                    (path.join(&unknown_autoload.files.bin), path.join(&unknown_autoload.files.config))
                 }
             };
             create_file_and_dirs(bin_path)?.write_all(autoload.code())?;
@@ -613,13 +626,17 @@ impl<'a> Rom<'a> {
         let autoloads = decompressed_arm9.autoloads()?;
         let unknown_autoloads = autoloads
             .iter()
-            .filter(|&autoload| autoload.kind() == raw::AutoloadKind::Unknown)
-            .map(|autoload| {
-                let index = autoload.info().index();
-                RomConfigAutoload {
-                    bin: format!("arm9/unk_autoload_{index}.bin").into(),
-                    config: format!("arm9/unk_autoload_{index}.yaml").into(),
-                }
+            .filter_map(|autoload| {
+                let raw::AutoloadKind::Unknown(index) = autoload.kind() else {
+                    return None;
+                };
+                Some(RomConfigUnknownAutoload {
+                    index,
+                    files: RomConfigAutoload {
+                        bin: format!("arm9/unk_autoload_{index}.bin").into(),
+                        config: format!("arm9/unk_autoload_{index}.yaml").into(),
+                    },
+                })
             })
             .collect();
 

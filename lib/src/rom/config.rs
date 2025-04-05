@@ -29,7 +29,7 @@ pub struct RomConfig {
     pub dtcm: RomConfigAutoload,
     /// Path to unknown autoloads
     #[serde(skip_serializing_if = "Vec::is_empty", default = "Vec::new")]
-    pub unknown_autoloads: Vec<RomConfigAutoload>,
+    pub unknown_autoloads: Vec<RomConfigUnknownAutoload>,
 
     /// Path to ARM9 overlays YAML
     pub arm9_overlays: Option<PathBuf>,
@@ -58,6 +58,16 @@ pub struct RomConfigAutoload {
     pub bin: PathBuf,
     /// Path to YAML
     pub config: PathBuf,
+}
+
+/// Path to unknown autoload files
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RomConfigUnknownAutoload {
+    /// Index of the autoload in the autoload table
+    pub index: u32,
+    /// Path to extracted files
+    #[serde(flatten)]
+    pub files: RomConfigAutoload,
 }
 
 /// Alignment of ROM sections.

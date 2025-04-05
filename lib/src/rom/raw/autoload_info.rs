@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     fmt::Display,
     mem::{align_of, size_of},
 };
@@ -22,14 +23,34 @@ pub struct AutoloadInfoEntry {
 }
 
 /// Autoload kind.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub enum AutoloadKind {
     /// Instruction TCM (Tightly Coupled Memory). Mainly used to make functions have fast and predictable load times.
     Itcm,
     /// Data TCM (Tightly Coupled Memory). Mainly used to make data have fast and predictable access times.
     Dtcm,
     /// Other autoload block of unknown purpose.
-    Unknown,
+    Unknown(u32),
+}
+
+impl PartialOrd for AutoloadKind {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AutoloadKind {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // ITCM < DTCM < Unknown
+        match (self, other) {
+            (_, _) if self == other => Ordering::Equal,
+            (AutoloadKind::Itcm, _) => Ordering::Less,
+            (_, AutoloadKind::Itcm) => Ordering::Greater,
+            (AutoloadKind::Dtcm, _) => Ordering::Less,
+            (_, AutoloadKind::Dtcm) => Ordering::Greater,
+            (AutoloadKind::Unknown(a), AutoloadKind::Unknown(b)) => a.cmp(b),
+        }
+    }
 }
 
 /// Info about an autoload block.
@@ -40,8 +61,6 @@ pub struct AutoloadInfo {
     list_entry: AutoloadInfoEntry,
     /// The kind of autoload block.
     kind: AutoloadKind,
-    /// The index of the autoload block in the autoload list.
-    index: u32,
 }
 
 /// Errors related to [`AutoloadInfo`].
@@ -111,10 +130,10 @@ impl AutoloadInfo {
         let kind = match list_entry.base_address {
             0x1ff8000 => AutoloadKind::Itcm,
             0x27e0000 | 0x27c0000 | 0x23c0000 => AutoloadKind::Dtcm,
-            _ => AutoloadKind::Unknown,
+            _ => AutoloadKind::Unknown(index),
         };
 
-        Self { list_entry, kind, index }
+        Self { list_entry, kind }
     }
 
     /// Returns the index of this [`AutoloadInfo`].
@@ -135,11 +154,6 @@ impl AutoloadInfo {
     /// Returns the kind of this [`AutoloadInfo`].
     pub fn kind(&self) -> AutoloadKind {
         self.kind
-    }
-
-    /// Returns the index of this [`AutoloadInfo`] in the autoload list.
-    pub fn index(&self) -> u32 {
-        self.index
     }
 
     /// Returns the entry of this [`AutoloadInfo`].
@@ -163,7 +177,6 @@ impl Display for DisplayAutoloadInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let i = " ".repeat(self.indent);
         let info = &self.info;
-        writeln!(f, "{i}Index ......... : {}", info.index)?;
         writeln!(f, "{i}Type .......... : {}", info.kind)?;
         writeln!(f, "{i}Base address .. : {:#x}", info.list_entry.base_address)?;
         writeln!(f, "{i}Code size ..... : {:#x}", info.list_entry.code_size)?;
@@ -177,7 +190,7 @@ impl Display for AutoloadKind {
         match self {
             AutoloadKind::Itcm => write!(f, "ITCM"),
             AutoloadKind::Dtcm => write!(f, "DTCM"),
-            AutoloadKind::Unknown => write!(f, "Unknown"),
+            AutoloadKind::Unknown(index) => write!(f, "Unknown({index})"),
         }
     }
 }
