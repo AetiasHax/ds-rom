@@ -58,9 +58,9 @@ impl Ord for AutoloadKind {
 pub struct AutoloadInfo {
     #[serde(flatten)]
     /// Entry in the autoload list.
-    list_entry: AutoloadInfoEntry,
+    pub list_entry: AutoloadInfoEntry,
     /// The kind of autoload block.
-    kind: AutoloadKind,
+    pub kind: AutoloadKind,
 }
 
 /// Errors related to [`AutoloadInfo`].
