@@ -6,25 +6,25 @@ use snafu::Snafu;
 
 use crate::crypto::hmac_sha1::HmacSha1;
 
-/// Signature of an overlay file.
+/// HMAC-SHA1 signature, used for overlays and overlay tables.
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod, PartialEq, Eq)]
-pub struct OverlaySignature {
-    /// The HMAC-SHA1 hash of the overlay.
+pub struct HmacSha1Signature {
+    /// The HMAC-SHA1 hash.
     pub hash: [u8; 20],
 }
 
-/// Errors related to [`OverlaySignature`].
+/// Errors related to [`HmacSha1Signature`].
 #[derive(Debug, Snafu)]
-pub enum OverlaySignatureError {
-    /// Occurs when the input is not evenly divisible into a slice of [`OverlaySignature`].
-    #[snafu(display("the overlay signature table must be a multiple of {} bytes:\n{backtrace}", size_of::<OverlaySignature>()))]
+pub enum HmacSha1SignatureError {
+    /// Occurs when the input is not evenly divisible into a slice of [`HmacSha1Signature`].
+    #[snafu(display("the HMAC-SHA1 signature table must be a multiple of {} bytes:\n{backtrace}", size_of::<HmacSha1Signature>()))]
     InvalidSize {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`OverlaySignature`].
-    #[snafu(display("expected {expected}-alignment for overlay signature table but got {actual}-alignment:\n{backtrace}"))]
+    /// Occurs when the input is less aligned than [`HmacSha1Signature`].
+    #[snafu(display("expected {expected}-alignment for HMAC-SHA1 signature table but got {actual}-alignment:\n{backtrace}"))]
     Misaligned {
         /// Expected alignment.
         expected: usize,
@@ -35,8 +35,8 @@ pub enum OverlaySignatureError {
     },
 }
 
-impl OverlaySignature {
-    /// Creates a new [`OverlaySignature`] by hashing the given data.
+impl HmacSha1Signature {
+    /// Creates a new [`HmacSha1Signature`] by hashing the given data.
     pub fn from_hmac_sha1(hmac_sha1: &HmacSha1, data: &[u8]) -> Self {
         let hash = hmac_sha1.compute(data);
         Self { hash }
@@ -47,7 +47,7 @@ impl OverlaySignature {
         self.hash = hash;
     }
 
-    fn check_size(data: &[u8]) -> Result<(), OverlaySignatureError> {
+    fn check_size(data: &[u8]) -> Result<(), HmacSha1SignatureError> {
         let size = size_of::<Self>();
         if data.len() % size != 0 {
             InvalidSizeSnafu {}.fail()
@@ -56,7 +56,7 @@ impl OverlaySignature {
         }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, OverlaySignatureError> {
+    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, HmacSha1SignatureError> {
         match result {
             Ok(signatures) => Ok(signatures),
             Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
@@ -68,30 +68,30 @@ impl OverlaySignature {
         }
     }
 
-    /// Reinterprets a `&[u8]` as a slice of [`OverlaySignature`].
+    /// Reinterprets a `&[u8]` as a slice of [`HmacSha1Signature`].
     ///
     /// # Errors
     ///
     /// This function will return an error if the input is the wrong size, or not aligned enough.
-    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], OverlaySignatureError> {
+    pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], HmacSha1SignatureError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
         Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
     }
 
-    /// Reinterprets a `&mut [u8]` as a mutable slice of [`OverlaySignature`].
+    /// Reinterprets a `&mut [u8]` as a mutable slice of [`HmacSha1Signature`].
     ///
     /// # Errors
     ///
     /// This function will return an error if the input is the wrong size, or not aligned enough.
-    pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut [Self], OverlaySignatureError> {
+    pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut [Self], HmacSha1SignatureError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
         Self::handle_pod_cast(bytemuck::try_cast_slice_mut(data), addr)
     }
 }
 
-impl Display for OverlaySignature {
+impl Display for HmacSha1Signature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in &self.hash {
             write!(f, "{:02x}", byte)?;
@@ -100,9 +100,9 @@ impl Display for OverlaySignature {
     }
 }
 
-/// Errors related to parsing an overlay signature from a string.
+/// Errors related to parsing an HMAC-SHA1 signature from a string.
 #[derive(Debug, Snafu)]
-pub enum OverlaySignatureParseError {
+pub enum HmacSha1SignatureParseError {
     /// Occurs when the input is not a valid length.
     #[snafu(display("invalid length: {length}:\n{backtrace}"))]
     InvalidLength {
@@ -123,8 +123,8 @@ pub enum OverlaySignatureParseError {
     },
 }
 
-impl FromStr for OverlaySignature {
-    type Err = OverlaySignatureParseError;
+impl FromStr for HmacSha1Signature {
+    type Err = HmacSha1SignatureParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() != 40 {
@@ -142,7 +142,7 @@ impl FromStr for OverlaySignature {
     }
 }
 
-impl Serialize for OverlaySignature {
+impl Serialize for HmacSha1Signature {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -151,7 +151,7 @@ impl Serialize for OverlaySignature {
     }
 }
 
-impl<'de> Deserialize<'de> for OverlaySignature {
+impl<'de> Deserialize<'de> for HmacSha1Signature {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,

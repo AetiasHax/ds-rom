@@ -5,7 +5,7 @@ use snafu::{Backtrace, Snafu};
 
 use super::{
     raw::{
-        AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, OverlaySignature, OverlaySignatureError,
+        AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, HmacSha1Signature, HmacSha1SignatureError,
         RawAutoloadInfoError, RawBuildInfoError, NITROCODE_BYTES,
     },
     Autoload, Overlay,
@@ -130,7 +130,7 @@ pub enum Arm9OverlaySignaturesError {
     #[snafu(transparent)]
     OverlaySignature {
         /// Source error.
-        source: OverlaySignatureError,
+        source: HmacSha1SignatureError,
     },
     /// See [`RawBuildInfoError`].
     #[snafu(transparent)]
@@ -497,7 +497,7 @@ impl<'a> Arm9<'a> {
     ///
     /// This function will return an error if the ARM9 program is compressed or if [`OverlaySignature::borrow_from_slice`]
     /// fails.
-    pub fn overlay_signatures(&self, num_overlays: usize) -> Result<Option<&[OverlaySignature]>, Arm9OverlaySignaturesError> {
+    pub fn overlay_signatures(&self, num_overlays: usize) -> Result<Option<&[HmacSha1Signature]>, Arm9OverlaySignaturesError> {
         let start = self.overlay_signatures_offset() as usize;
         if start == 0 {
             return Ok(None);
@@ -507,9 +507,9 @@ impl<'a> Arm9<'a> {
             OverlaySignaturesCompressedSnafu {}.fail()?;
         }
 
-        let end = start + size_of::<OverlaySignature>() * num_overlays;
+        let end = start + size_of::<HmacSha1Signature>() * num_overlays;
         let data = &self.data[start..end];
-        Ok(Some(OverlaySignature::borrow_from_slice(data)?))
+        Ok(Some(HmacSha1Signature::borrow_from_slice(data)?))
     }
 
     /// Returns a mutable reference to the ARM9 overlay signature table.
@@ -521,7 +521,7 @@ impl<'a> Arm9<'a> {
     pub fn overlay_signatures_mut(
         &mut self,
         num_overlays: usize,
-    ) -> Result<Option<&mut [OverlaySignature]>, Arm9OverlaySignaturesError> {
+    ) -> Result<Option<&mut [HmacSha1Signature]>, Arm9OverlaySignaturesError> {
         let start = self.overlay_signatures_offset() as usize;
         if start == 0 {
             return Ok(None);
@@ -531,9 +531,9 @@ impl<'a> Arm9<'a> {
             OverlaySignaturesCompressedSnafu {}.fail()?;
         }
 
-        let end = start + size_of::<OverlaySignature>() * num_overlays;
+        let end = start + size_of::<HmacSha1Signature>() * num_overlays;
         let data = &mut self.data.to_mut()[start..end];
-        Ok(Some(OverlaySignature::borrow_from_slice_mut(data)?))
+        Ok(Some(HmacSha1Signature::borrow_from_slice_mut(data)?))
     }
 
     /// Returns the code of this ARM9 program.

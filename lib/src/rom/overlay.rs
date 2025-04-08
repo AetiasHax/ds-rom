@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use super::{
-    raw::{self, OverlayFlags, OverlaySignature, RawFatError, RawHeaderError},
+    raw::{self, HmacSha1Signature, OverlayFlags, RawFatError, RawHeaderError},
     Arm9, Arm9OverlaySignaturesError,
 };
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
 pub struct Overlay<'a> {
     originally_compressed: bool,
     info: OverlayInfo,
-    signature: Option<OverlaySignature>,
+    signature: Option<HmacSha1Signature>,
     data: Cow<'a, [u8]>,
 }
 
@@ -243,16 +243,16 @@ impl<'a> Overlay<'a> {
     }
 
     /// Computes the signature of this [`Overlay`] using the given HMAC-SHA1 key.
-    pub fn compute_signature(&self, hmac_sha1: &HmacSha1) -> Result<OverlaySignature, OverlayError> {
+    pub fn compute_signature(&self, hmac_sha1: &HmacSha1) -> Result<HmacSha1Signature, OverlayError> {
         if self.is_compressed() != self.originally_compressed {
             OverlayCompressionSnafu {}.fail()?;
         }
 
-        Ok(OverlaySignature::from_hmac_sha1(hmac_sha1, self.data.as_ref()))
+        Ok(HmacSha1Signature::from_hmac_sha1(hmac_sha1, self.data.as_ref()))
     }
 
     /// Returns the signature of this [`Overlay`], if it exists.
-    pub fn signature(&self) -> Option<OverlaySignature> {
+    pub fn signature(&self) -> Option<HmacSha1Signature> {
         self.signature
     }
 
