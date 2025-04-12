@@ -82,6 +82,10 @@ impl<'a> Overlay<'a> {
     }
 
     /// Parses an ARM9 [`Overlay`] from a ROM.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the overlay is signed and the ARM9 program does not contain overlay signatures.
     pub fn parse_arm9(overlay: &raw::Overlay, rom: &'a raw::Rom, arm9: &Arm9) -> Result<Self, OverlayError> {
         let fat = rom.fat()?;
 
@@ -106,6 +110,10 @@ impl<'a> Overlay<'a> {
     }
 
     /// Parses an ARM7 [`Overlay`] from a ROM.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the overlay is signed, as ARM7 overlay signatures are not supported.
     pub fn parse_arm7(overlay: &raw::Overlay, rom: &'a raw::Rom) -> Result<Self, OverlayError> {
         let fat = rom.fat()?;
 

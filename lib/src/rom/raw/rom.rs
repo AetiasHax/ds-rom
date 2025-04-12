@@ -3,8 +3,8 @@ use std::{borrow::Cow, collections::BTreeSet, io::Read, mem::size_of, path::Path
 use snafu::Snafu;
 
 use super::{
-    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, RawBannerError, RawBuildInfoError, RawFatError,
-    RawFntError, RawHeaderError, RawOverlayError,
+    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, OverlayTable, RawBannerError, RawBuildInfoError,
+    RawFatError, RawFntError, RawHeaderError, RawOverlayError,
 };
 use crate::{
     io::{open_file, write_file, FileError},
@@ -150,12 +150,12 @@ impl<'a> Rom<'a> {
         Arm9Footer::borrow_from_slice_mut(data)
     }
 
-    /// Returns the ARM9 overlay table of this [`Rom`].
+    /// Returns the ARM9 overlays of this [`Rom`].
     ///
     /// # Errors
     ///
     /// See [`Self::header`] and [`Overlay::borrow_from_slice`].
-    pub fn arm9_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
+    pub fn arm9_overlays(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
         let start = header.arm9_overlays.offset as usize;
         let end = start + header.arm9_overlays.size as usize;
@@ -163,8 +163,29 @@ impl<'a> Rom<'a> {
             Ok(&[])
         } else {
             let data = &self.data[start..end];
-            Overlay::borrow_from_slice(data)
+            Ok(Overlay::borrow_from_slice(data)?)
         }
+    }
+
+    /// Returns the ARM9 overlay table of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::arm9`] and [`Self::arm9_overlay_table_with`].
+    pub fn arm9_overlay_table(&self) -> Result<OverlayTable, RawOverlayError> {
+        let arm9 = self.arm9()?;
+        self.arm9_overlay_table_with(&arm9)
+    }
+
+    /// Returns the ARM9 overlay table of this [`Rom`], using the table signature from the provided ARM9 program.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::arm9_overlays`] and [`Arm9::overlay_table_signature`].
+    pub fn arm9_overlay_table_with(&self, arm9: &Arm9) -> Result<OverlayTable, RawOverlayError> {
+        let overlays = self.arm9_overlays()?;
+        let signature = arm9.overlay_table_signature()?.cloned();
+        Ok(OverlayTable::new(overlays, signature))
     }
 
     /// Returns the number of ARM9 overlays in this [`Rom`].
@@ -209,7 +230,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`] and [`Overlay::borrow_from_slice`].
-    pub fn arm7_overlay_table(&self) -> Result<&[Overlay], RawOverlayError> {
+    pub fn arm7_overlays(&self) -> Result<&[Overlay], RawOverlayError> {
         let header = self.header()?;
         let start = header.arm7_overlays.offset as usize;
         let end = start + header.arm7_overlays.size as usize;
@@ -217,8 +238,18 @@ impl<'a> Rom<'a> {
             Ok(&[])
         } else {
             let data = &self.data[start..end];
-            Overlay::borrow_from_slice(data)
+            Ok(Overlay::borrow_from_slice(data)?)
         }
+    }
+
+    /// Returns the ARM7 overlay table of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::arm7_overlays`].
+    pub fn arm7_overlay_table(&self) -> Result<OverlayTable, RawOverlayError> {
+        let overlays = self.arm7_overlays()?;
+        Ok(OverlayTable::new(overlays, None))
     }
 
     /// Returns the number of ARM7 overlays in this [`Rom`].
@@ -328,8 +359,8 @@ impl<'a> Rom<'a> {
         }
 
         let fat = self.fat()?;
-        let arm9_overlays = self.arm9_overlay_table()?;
-        let arm7_overlays = self.arm7_overlay_table()?;
+        let arm9_overlays = self.arm9_overlays()?;
+        let arm7_overlays = self.arm7_overlays()?;
         let arm9_overlay_files = get_overlay_files(arm9_overlays);
         let arm7_overlay_files = get_overlay_files(arm7_overlays);
         let header = self.header()?;

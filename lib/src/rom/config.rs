@@ -8,19 +8,19 @@ pub struct RomConfig {
     /// Byte value to append between ROM sections
     pub padding_value: u8,
 
-    /// Path to header YAML
+    /// Path to header YAML, deserializes into [`Header`](crate::rom::Header).
     pub header: PathBuf,
-    /// Path to header logo PNG
+    /// Path to header logo PNG, loaded by [`Logo::from_png`](crate::rom::Logo::from_png).
     pub header_logo: PathBuf,
 
     /// Path to ARM9 binary
     pub arm9_bin: PathBuf,
-    /// Path to ARM9 YAML
+    /// Path to ARM9 YAML, deserializes into [`Arm9BuildConfig`](crate::rom::Arm9BuildConfig).
     pub arm9_config: PathBuf,
 
     /// Path to ARM7 binary
     pub arm7_bin: PathBuf,
-    /// Path to ARM7 YAML
+    /// Path to ARM7 YAML, deserializes into [`Arm7Offsets`](crate::rom::Arm7Offsets).
     pub arm7_config: PathBuf,
 
     /// Path to ITCM files
@@ -31,12 +31,12 @@ pub struct RomConfig {
     #[serde(skip_serializing_if = "Vec::is_empty", default = "Vec::new")]
     pub unknown_autoloads: Vec<RomConfigUnknownAutoload>,
 
-    /// Path to ARM9 overlays YAML
+    /// Path to ARM9 overlays YAML, deserializes into [`Vec<OverlayConfig>`](crate::rom::OverlayConfig).
     pub arm9_overlays: Option<PathBuf>,
-    /// Path to ARM7 overlays YAML
+    /// Path to ARM7 overlays YAML, deserializes into [`Vec<OverlayConfig>`](crate::rom::OverlayConfig).
     pub arm7_overlays: Option<PathBuf>,
 
-    /// Path to banner YAML
+    /// Path to banner YAML, deserializes into [`Banner`](crate::rom::Banner).
     pub banner: PathBuf,
 
     /// Path to asset files directory
@@ -56,7 +56,7 @@ pub struct RomConfig {
 pub struct RomConfigAutoload {
     /// Path to binary
     pub bin: PathBuf,
-    /// Path to YAML
+    /// Path to YAML, deserializes into [`AutoloadInfo`](crate::rom::raw::AutoloadInfo).
     pub config: PathBuf,
 }
 

@@ -199,17 +199,46 @@ impl DumpArm7 {
 
 /// Prints the contents of the ARM9 overlay table.
 #[derive(Args)]
-struct DumpArm9OverlayTable {}
+struct DumpArm9OverlayTable {
+    #[arg(long, short = 'v')]
+    verify: bool,
+    /// Prints the byte contents of the overlay table.
+    #[arg(long, short = 'b')]
+    bytes: bool,
+    /// Prints the overlay table as raw bytes.
+    #[arg(long, short = 'R')]
+    raw: bool,
+}
 
 impl DumpArm9OverlayTable {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
-        let arm9_ovt = rom.arm9_overlay_table()?;
-        if arm9_ovt.is_empty() {
-            println!("The ROM has no ARM9 overlays");
+        let mut arm9 = rom.arm9()?.clone();
+        arm9.decompress()?;
+        let arm9_ovt = rom.arm9_overlay_table_with(&arm9)?;
+
+        if self.bytes {
+            let bytes = arm9_ovt.as_bytes();
+            print_hex(bytes, self.raw, rom.header()?.arm9_overlays.offset)?;
+            return Ok(());
         }
-        for overlay in arm9_ovt {
-            println!("ARM9 Overlay:\n{}", overlay.display(2));
+
+        if self.verify {
+            if arm9_ovt.is_signed() {
+                let hmac_sha1_key = arm9.hmac_sha1_key()?.context("Failed to get HMAC-SHA1 key")?;
+                let hmac_sha1 = HmacSha1::new(hmac_sha1_key);
+
+                if arm9_ovt.verify_signature(&hmac_sha1) {
+                    println!("ARM9 overlay table signature is valid");
+                } else {
+                    println!("ARM9 overlay table signature is invalid");
+                }
+            } else {
+                println!("ARM9 overlay table has no signature");
+            }
+            return Ok(());
         }
+
+        println!("ARM9 overlay table:\n{}", arm9_ovt.display(2));
 
         Ok(())
     }
@@ -222,12 +251,7 @@ struct DumpArm7OverlayTable {}
 impl DumpArm7OverlayTable {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let arm7_ovt = rom.arm7_overlay_table()?;
-        if arm7_ovt.is_empty() {
-            println!("The ROM has no ARM7 overlays");
-        }
-        for overlay in arm7_ovt {
-            println!("ARM7 Overlay:\n{}", overlay.display(2));
-        }
+        println!("ARM7 overlay table:\n{}", arm7_ovt.display(2));
 
         Ok(())
     }
@@ -323,7 +347,7 @@ struct DumpArm9Overlay {
 
 impl DumpArm9Overlay {
     pub fn run(&self, rom: &raw::Rom, decompress: bool, compress: bool) -> Result<()> {
-        let arm9_ovt = rom.arm9_overlay_table()?;
+        let arm9_ovt = rom.arm9_overlays()?;
         let mut arm9 = rom.arm9()?;
         arm9.decompress()?;
         let mut overlay = Overlay::parse_arm9(&arm9_ovt[self.index], rom, &arm9)?;
@@ -369,7 +393,7 @@ struct DumpArm7Overlay {
 
 impl DumpArm7Overlay {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
-        let arm7_ovt = rom.arm7_overlay_table()?;
+        let arm7_ovt = rom.arm7_overlays()?;
         let overlay = Overlay::parse_arm7(&arm7_ovt[self.index], rom)?;
         print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
 

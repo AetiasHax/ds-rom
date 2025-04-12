@@ -7,7 +7,9 @@ use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
-use super::RawHeaderError;
+use crate::rom::Arm9OverlaySignaturesError;
+
+use super::{RawArm9Error, RawHeaderError};
 
 /// An entry in an overlay table. This is the raw struct, see the plain one [here](super::super::Overlay).
 #[repr(C)]
@@ -39,6 +41,18 @@ pub enum RawOverlayError {
     RawHeader {
         /// Source error.
         source: RawHeaderError,
+    },
+    /// See [`RawHeaderError`].
+    #[snafu(transparent)]
+    RawArm9 {
+        /// Source error.
+        source: RawArm9Error,
+    },
+    /// See [`Arm9OverlaySignaturesError`].
+    #[snafu(transparent)]
+    Arm9OverlaySignatures {
+        /// Source error.
+        source: Arm9OverlaySignaturesError,
     },
     /// Occurs when the input is not evenly divisible into a slice of [`Overlay`].
     #[snafu(display("the overlay table must be a multiple of {} bytes:\n{backtrace}", size_of::<Overlay>()))]

@@ -8,6 +8,7 @@ mod file;
 mod header;
 mod logo;
 mod overlay;
+mod overlay_table;
 /// Raw ROM access.
 pub mod raw;
 mod rom;
@@ -22,4 +23,5 @@ pub use file::*;
 pub use header::*;
 pub use logo::*;
 pub use overlay::*;
+pub use overlay_table::*;
 pub use rom::*;

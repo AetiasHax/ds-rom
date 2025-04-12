@@ -8,7 +8,7 @@ use super::{
         AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, HmacSha1Signature, HmacSha1SignatureError,
         RawAutoloadInfoError, RawBuildInfoError, NITROCODE_BYTES,
     },
-    Autoload, Overlay,
+    Autoload, OverlayTable,
 };
 use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
@@ -128,7 +128,7 @@ pub enum Arm9AutoloadError {
 pub enum Arm9OverlaySignaturesError {
     /// See [`OverlaySignatureError`].
     #[snafu(transparent)]
-    OverlaySignature {
+    HmacSha1Signature {
         /// Source error.
         source: HmacSha1SignatureError,
     },
@@ -491,13 +491,57 @@ impl<'a> Arm9<'a> {
         Ok(Some(key))
     }
 
-    /// Returns the ARM9 overlay signature table.
+    fn overlay_table_signature_range(&self) -> Result<Option<Range<usize>>, Arm9OverlaySignaturesError> {
+        let overlay_signatures_offset = self.overlay_signatures_offset() as usize;
+        if overlay_signatures_offset == 0 {
+            return Ok(None);
+        }
+
+        if self.is_compressed()? {
+            OverlaySignaturesCompressedSnafu {}.fail()?;
+        }
+
+        // The overlay table signature is located right before the overlay signatures
+        let start = overlay_signatures_offset - size_of::<HmacSha1Signature>();
+        let end = overlay_signatures_offset;
+        if end > self.data.len() {
+            return Ok(None);
+        }
+        return Ok(Some(start..end));
+    }
+
+    /// Returns the ARM9 overlay table signature.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ARM9 program is compressed or if [`OverlaySignature::borrow_from_slice`]
+    /// This function will return an error if the ARM9 program is compressed or if [`HmacSha1Signature::borrow_from_slice`] fails.
+    pub fn overlay_table_signature(&self) -> Result<Option<&HmacSha1Signature>, Arm9OverlaySignaturesError> {
+        let Some(range) = self.overlay_table_signature_range()? else {
+            return Ok(None);
+        };
+        let data = &self.data[range];
+
+        let signature = HmacSha1Signature::borrow_from_slice(data)?;
+        Ok(Some(signature.first().unwrap()))
+    }
+
+    /// Returns a mutable reference to the ARM9 overlay table signature.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the ARM9 program is compressed or if [`HmacSha1Signature::borrow_from_slice_mut`]
     /// fails.
-    pub fn overlay_signatures(&self, num_overlays: usize) -> Result<Option<&[HmacSha1Signature]>, Arm9OverlaySignaturesError> {
+    pub fn overlay_table_signature_mut(&mut self) -> Result<Option<&mut HmacSha1Signature>, Arm9OverlaySignaturesError> {
+        let Some(range) = self.overlay_table_signature_range()? else {
+            return Ok(None);
+        };
+        let data = &mut self.data.to_mut()[range];
+
+        let signature = HmacSha1Signature::borrow_from_slice_mut(data)?;
+        Ok(Some(signature.first_mut().unwrap()))
+    }
+
+    fn overlay_signatures_range(&self, num_overlays: usize) -> Result<Option<Range<usize>>, Arm9OverlaySignaturesError> {
         let start = self.overlay_signatures_offset() as usize;
         if start == 0 {
             return Ok(None);
@@ -508,7 +552,23 @@ impl<'a> Arm9<'a> {
         }
 
         let end = start + size_of::<HmacSha1Signature>() * num_overlays;
-        let data = &self.data[start..end];
+        if end > self.data.len() {
+            return Ok(None);
+        }
+        return Ok(Some(start..end));
+    }
+
+    /// Returns the ARM9 overlay signature table.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the ARM9 program is compressed or if [`HmacSha1Signature::borrow_from_slice`]
+    /// fails.
+    pub fn overlay_signatures(&self, num_overlays: usize) -> Result<Option<&[HmacSha1Signature]>, Arm9OverlaySignaturesError> {
+        let Some(range) = self.overlay_signatures_range(num_overlays)? else {
+            return Ok(None);
+        };
+        let data = &self.data[range];
         Ok(Some(HmacSha1Signature::borrow_from_slice(data)?))
     }
 
@@ -516,23 +576,16 @@ impl<'a> Arm9<'a> {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ARM9 program is compressed or if [`OverlaySignature::borrow_from_slice_mut`]
+    /// This function will return an error if the ARM9 program is compressed or if [`HmacSha1Signature::borrow_from_slice_mut`]
     /// fails.
     pub fn overlay_signatures_mut(
         &mut self,
         num_overlays: usize,
     ) -> Result<Option<&mut [HmacSha1Signature]>, Arm9OverlaySignaturesError> {
-        let start = self.overlay_signatures_offset() as usize;
-        if start == 0 {
+        let Some(range) = self.overlay_signatures_range(num_overlays)? else {
             return Ok(None);
-        }
-
-        if self.is_compressed()? {
-            OverlaySignaturesCompressedSnafu {}.fail()?;
-        }
-
-        let end = start + size_of::<HmacSha1Signature>() * num_overlays;
-        let data = &mut self.data.to_mut()[start..end];
+        };
+        let data = &mut self.data.to_mut()[range];
         Ok(Some(HmacSha1Signature::borrow_from_slice_mut(data)?))
     }
 
@@ -609,8 +662,9 @@ impl<'a> Arm9<'a> {
 
     pub(crate) fn update_overlay_signatures(
         &mut self,
-        arm9_overlays: &[Overlay<'a>],
+        arm9_overlay_table: &OverlayTable,
     ) -> Result<(), Arm9OverlaySignaturesError> {
+        let arm9_overlays = arm9_overlay_table.overlays();
         let Some(signatures) = self.overlay_signatures_mut(arm9_overlays.len())? else {
             return Ok(());
         };
@@ -619,6 +673,14 @@ impl<'a> Arm9<'a> {
                 signatures[overlay.id() as usize] = signature;
             }
         }
+
+        if let Some(signature) = arm9_overlay_table.signature() {
+            let Some(table_signature) = self.overlay_table_signature_mut()? else {
+                return Ok(());
+            };
+            *table_signature = signature;
+        }
+
         Ok(())
     }
 }

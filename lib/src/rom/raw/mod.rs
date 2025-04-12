@@ -7,6 +7,7 @@ mod fnt;
 mod header;
 mod hmac_sha1_signature;
 mod overlay;
+mod overlay_table;
 mod rom;
 
 pub use arm9_footer::*;
@@ -18,6 +19,7 @@ pub use fnt::*;
 pub use header::*;
 pub use hmac_sha1_signature::*;
 pub use overlay::*;
+pub use overlay_table::*;
 pub use rom::*;
 
 /// Nitrocode, interpreted as `2` (ni), `10` (tō), `6` (roku), `c0de`.
