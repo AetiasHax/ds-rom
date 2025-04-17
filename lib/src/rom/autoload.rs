@@ -34,6 +34,11 @@ impl<'a> Autoload<'a> {
         self.info.base_address()
     }
 
+    /// Returns the end address of this [`Autoload`].
+    pub fn end_address(&self) -> u32 {
+        self.info.base_address() + self.info.code_size() + self.info.bss_size()
+    }
+
     /// Returns the kind of this [`Autoload`].
     pub fn kind(&self) -> AutoloadKind {
         self.info.kind()
