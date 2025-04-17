@@ -31,9 +31,9 @@ pub struct RomConfig {
     #[serde(skip_serializing_if = "Vec::is_empty", default = "Vec::new")]
     pub unknown_autoloads: Vec<RomConfigUnknownAutoload>,
 
-    /// Path to ARM9 overlays YAML, deserializes into [`Vec<OverlayConfig>`](crate::rom::OverlayConfig).
+    /// Path to ARM9 overlays YAML, deserializes into [`OverlayTableConfig`](crate::rom::OverlayTableConfig).
     pub arm9_overlays: Option<PathBuf>,
-    /// Path to ARM7 overlays YAML, deserializes into [`Vec<OverlayConfig>`](crate::rom::OverlayConfig).
+    /// Path to ARM7 overlays YAML, deserializes into [`OverlayTableConfig`](crate::rom::OverlayTableConfig).
     pub arm7_overlays: Option<PathBuf>,
 
     /// Path to banner YAML, deserializes into [`Banner`](crate::rom::Banner).
