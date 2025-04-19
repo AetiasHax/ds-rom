@@ -341,10 +341,13 @@ impl<'a> Rom<'a> {
     ///
     /// # Errors
     ///
-    /// See [`Self::header`], [`Self::banner`].
+    /// See [`Self::header`], [`Self::banner`], [`Self::fat`], [`Self::arm9_overlays`] and [`Self::arm7_overlays`].
     pub fn section_padding_value(&self) -> Result<u8, RomAlignmentsError> {
         let header = self.header()?;
         let banner = self.banner()?;
+        let fat = self.fat()?;
+        let arm9_overlays = self.arm9_overlays()?;
+        let arm7_overlays = self.arm7_overlays()?;
 
         // Get sorted list of adjacent sections in the ROM
         let mut sections = vec![
@@ -356,6 +359,14 @@ impl<'a> Rom<'a> {
             header.arm7_overlays.offset..header.arm7_overlays.offset + header.arm7_overlays.size,
         ];
         sections.push(header.banner_offset..header.banner_offset + banner.version().banner_size() as u32);
+        arm9_overlays.iter().for_each(|overlay| {
+            let file = &fat[overlay.file_id as usize];
+            sections.push(file.start..file.end);
+        });
+        arm7_overlays.iter().for_each(|overlay| {
+            let file = &fat[overlay.file_id as usize];
+            sections.push(file.start..file.end);
+        });
         sections.retain(|section| section.start != section.end);
         sections.sort_by_key(|section| section.start);
 
