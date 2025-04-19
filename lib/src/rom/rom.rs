@@ -832,7 +832,7 @@ impl<'a> Rom<'a> {
         // --------------------- Write padding ---------------------
         context.rom_size = Some(cursor.position() as u32);
         let padded_rom_size = cursor.position().next_power_of_two().max(128 * 1024) as u32;
-        self.align(&mut cursor, padded_rom_size, 0xff)?;
+        self.align_file_image(&mut cursor, padded_rom_size)?;
 
         // --------------------- Update FAT ---------------------
         cursor.set_position(context.fat_offset.unwrap().offset as u64);
