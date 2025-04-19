@@ -43,6 +43,8 @@ pub struct HeaderOriginal {
     pub seed_select: u8,
     /// Flags for both DS and DSi.
     pub ds_flags: DsFlags,
+    /// ROM version, usually zero.
+    pub rom_version: u8,
     /// Autostart, can skip "Health and Safety" screen.
     pub autostart: u8,
     /// Port 0x40001a4 setting for normal commands.
@@ -97,6 +99,7 @@ impl Header {
                 unitcode: header.unitcode,
                 seed_select: header.seed_select,
                 ds_flags: header.ds_flags,
+                rom_version: header.rom_version,
                 autostart: header.autostart,
                 normal_cmd_setting: header.normal_cmd_setting,
                 key1_cmd_setting: header.key1_cmd_setting,
@@ -140,7 +143,7 @@ impl Header {
             reserved0: [0; 7],
             dsi_flags: DsiFlags::new(),
             ds_flags: self.original.ds_flags,
-            rom_version: 0,
+            rom_version: self.original.rom_version,
             autostart: self.original.autostart,
             arm9: ProgramOffset {
                 offset: arm9_offset,
