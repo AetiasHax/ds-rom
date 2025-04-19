@@ -686,7 +686,8 @@ impl<'a> Rom<'a> {
         let alignment = rom.alignments()?;
 
         let config = RomConfig {
-            padding_value: rom.padding_value()?,
+            file_image_padding_value: rom.file_image_padding_value()?,
+            section_padding_value: rom.section_padding_value()?,
             header: "header.yaml".into(),
             header_logo: "header_logo.png".into(),
             arm9_bin: "arm9/arm9.bin".into(),
@@ -734,7 +735,7 @@ impl<'a> Rom<'a> {
         cursor.write_all(&[0u8; size_of::<raw::Header>()])?;
 
         // --------------------- Write ARM9 program ---------------------
-        self.align(&mut cursor, self.config.alignment.arm9)?;
+        self.align_section(&mut cursor, self.config.alignment.arm9)?;
         context.arm9_offset = Some(cursor.position() as u32);
         context.arm9_autoload_callback = Some(self.arm9.autoload_callback());
         context.arm9_build_info_offset = Some(self.arm9.build_info_offset());
@@ -747,7 +748,7 @@ impl<'a> Rom<'a> {
 
         if !self.arm9_overlay_table.is_empty() {
             // --------------------- Write ARM9 overlay table ---------------------
-            self.align(&mut cursor, self.config.alignment.arm9_overlay_table)?;
+            self.align_section(&mut cursor, self.config.alignment.arm9_overlay_table)?;
             context.arm9_ovt_offset = Some(TableOffset {
                 offset: cursor.position() as u32,
                 size: (self.arm9_overlay_table.len() * size_of::<raw::Overlay>()) as u32,
@@ -757,7 +758,7 @@ impl<'a> Rom<'a> {
 
             // --------------------- Write ARM9 overlays ---------------------
             for overlay in self.arm9_overlay_table.overlays() {
-                self.align(&mut cursor, self.config.alignment.arm9_overlay)?;
+                self.align_section(&mut cursor, self.config.alignment.arm9_overlay)?;
                 let start = cursor.position() as u32;
                 let end = start + overlay.full_data().len() as u32;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
@@ -767,7 +768,7 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Write ARM7 program ---------------------
-        self.align(&mut cursor, self.config.alignment.arm7)?;
+        self.align_section(&mut cursor, self.config.alignment.arm7)?;
         context.arm7_offset = Some(cursor.position() as u32);
         context.arm7_autoload_callback = Some(self.arm7.autoload_callback());
         context.arm7_build_info_offset = None;
@@ -775,7 +776,7 @@ impl<'a> Rom<'a> {
 
         if !self.arm7_overlay_table.is_empty() {
             // --------------------- Write ARM7 overlay table ---------------------
-            self.align(&mut cursor, self.config.alignment.arm7_overlay_table)?;
+            self.align_section(&mut cursor, self.config.alignment.arm7_overlay_table)?;
             context.arm7_ovt_offset = Some(TableOffset {
                 offset: cursor.position() as u32,
                 size: (self.arm7_overlay_table.len() * size_of::<raw::Overlay>()) as u32,
@@ -785,7 +786,7 @@ impl<'a> Rom<'a> {
 
             // --------------------- Write ARM7 overlays ---------------------
             for overlay in self.arm7_overlay_table.overlays() {
-                self.align(&mut cursor, self.config.alignment.arm7_overlay)?;
+                self.align_section(&mut cursor, self.config.alignment.arm7_overlay)?;
                 let start = cursor.position() as u32;
                 let end = start + overlay.full_data().len() as u32;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
@@ -795,30 +796,30 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Write file name table (FNT) ---------------------
-        self.align(&mut cursor, self.config.alignment.file_name_table)?;
+        self.align_section(&mut cursor, self.config.alignment.file_name_table)?;
         self.files.sort_for_fnt();
         let fnt = self.files.build_fnt()?.build()?;
         context.fnt_offset = Some(TableOffset { offset: cursor.position() as u32, size: fnt.len() as u32 });
         cursor.write_all(&fnt)?;
 
         // --------------------- Write file allocation table (FAT) placeholder ---------------------
-        self.align(&mut cursor, self.config.alignment.file_allocation_table)?;
+        self.align_section(&mut cursor, self.config.alignment.file_allocation_table)?;
         context.fat_offset =
             Some(TableOffset { offset: cursor.position() as u32, size: (file_allocs.len() * size_of::<FileAlloc>()) as u32 });
         cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
 
         // --------------------- Write banner ---------------------
-        self.align(&mut cursor, self.config.alignment.banner)?;
+        self.align_section(&mut cursor, self.config.alignment.banner)?;
         let banner = self.banner.build()?;
         context.banner_offset = Some(TableOffset { offset: cursor.position() as u32, size: banner.full_data().len() as u32 });
         cursor.write_all(banner.full_data())?;
 
         // --------------------- Write files ---------------------
-        self.align(&mut cursor, self.config.alignment.file_image_block)?;
+        self.align_file_image(&mut cursor, self.config.alignment.file_image_block)?;
         self.files.sort_for_rom();
         self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| {
             // TODO: Rewrite traverse_files as an iterator so these errors can be returned
-            self.align(&mut cursor, self.config.alignment.file).expect("failed to align after file");
+            self.align_file_image(&mut cursor, self.config.alignment.file).expect("failed to align after file");
 
             let contents = file.contents();
             let start = cursor.position() as u32;
@@ -831,7 +832,7 @@ impl<'a> Rom<'a> {
         // --------------------- Write padding ---------------------
         context.rom_size = Some(cursor.position() as u32);
         let padded_rom_size = cursor.position().next_power_of_two().max(128 * 1024) as u32;
-        self.align(&mut cursor, padded_rom_size)?;
+        self.align(&mut cursor, padded_rom_size, 0xff)?;
 
         // --------------------- Update FAT ---------------------
         cursor.set_position(context.fat_offset.unwrap().offset as u64);
@@ -845,14 +846,22 @@ impl<'a> Rom<'a> {
         Ok(raw::Rom::new(cursor.into_inner()))
     }
 
-    fn align(&self, cursor: &mut Cursor<Vec<u8>>, alignment: u32) -> Result<(), RomBuildError> {
+    fn align(&self, cursor: &mut Cursor<Vec<u8>>, alignment: u32, padding_value: u8) -> Result<(), RomBuildError> {
         assert!(alignment.is_power_of_two(), "alignment must be a power of two");
         let mask = alignment - 1;
         let padding = (!cursor.position() as u32 + 1) & mask;
         for _ in 0..padding {
-            cursor.write_all(&[self.config.padding_value])?;
+            cursor.write_all(&[padding_value])?;
         }
         Ok(())
+    }
+
+    fn align_section(&self, cursor: &mut Cursor<Vec<u8>>, alignment: u32) -> Result<(), RomBuildError> {
+        self.align(cursor, alignment, self.config.section_padding_value)
+    }
+
+    fn align_file_image(&self, cursor: &mut Cursor<Vec<u8>>, alignment: u32) -> Result<(), RomBuildError> {
+        self.align(cursor, alignment, self.config.file_image_padding_value)
     }
 
     /// Returns a reference to the header logo of this [`Rom`].

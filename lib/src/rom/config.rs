@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 /// Config file mainly consisting of paths to extracted files.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RomConfig {
-    /// Byte value to append between ROM sections
-    pub padding_value: u8,
+    /// Byte value to append between files in the file image block.
+    pub file_image_padding_value: u8,
+    /// Byte value to append between sections in the file image block.
+    pub section_padding_value: u8,
 
     /// Path to header YAML, deserializes into [`Header`](crate::rom::Header).
     pub header: PathBuf,

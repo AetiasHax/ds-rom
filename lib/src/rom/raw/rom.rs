@@ -60,6 +60,12 @@ pub enum RomAlignmentsError {
         /// Source error.
         source: RawOverlayError,
     },
+    /// See [`RawFntError`].
+    #[snafu(transparent)]
+    RawBanner {
+        /// Source error.
+        source: RawBannerError,
+    },
 }
 
 impl<'a> Rom<'a> {
@@ -303,23 +309,62 @@ impl<'a> Rom<'a> {
         Banner::borrow_from_slice(data)
     }
 
-    /// Returns the padding value between sections of this [`Rom`].
+    /// Returns the padding value in the file image block of this [`Rom`].
     ///
     /// # Errors
     ///
-    /// See [`Self::header`] and [`Self::banner`].
-    pub fn padding_value(&self) -> Result<u8, RawBannerError> {
+    /// See [`Self::fat`], [`Self::arm9_overlays`] and [`Self::arm7_overlays`].
+    pub fn file_image_padding_value(&self) -> Result<u8, RomAlignmentsError> {
+        let fat = self.fat()?;
+        let arm9_overlays = self.arm9_overlays()?;
+        let arm7_overlays = self.arm7_overlays()?;
+        let arm9_overlay_files = arm9_overlays.iter().map(|overlay| overlay.file_id).collect::<BTreeSet<u32>>();
+        let arm7_overlay_files = arm7_overlays.iter().map(|overlay| overlay.file_id).collect::<BTreeSet<u32>>();
+
+        // Get sorted list of adjacent files that are in the file image block (i.e. not overlays)
+        let mut files: Vec<&FileAlloc> = fat
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !arm9_overlay_files.contains(&(*i as u32)) && !arm7_overlay_files.contains(&(*i as u32)))
+            .map(|(_, file)| file)
+            .collect();
+        files.sort_by_key(|file| file.start);
+
+        // Find a gap between two adjacent files, and return the padding byte between them
+        let Some(gap) = files.windows(2).find(|pair| pair[0].end != pair[1].start) else {
+            return Ok(0xff);
+        };
+        Ok(self.data[gap[0].end as usize])
+    }
+
+    /// Returns the section padding value of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`], [`Self::banner`].
+    pub fn section_padding_value(&self) -> Result<u8, RomAlignmentsError> {
         let header = self.header()?;
         let banner = self.banner()?;
 
-        // The banner has a known size which is never a multiple of 512,
-        // so it can't coincide with the start of another section.
-        //
-        // Therefore, we can use the first byte after the banner to determine
-        // the padding value.
+        // Get sorted list of adjacent sections in the ROM
+        let mut sections = vec![
+            header.arm9.offset..header.arm9.offset + header.arm9.size + size_of::<Arm9Footer>() as u32,
+            header.arm7.offset..header.arm7.offset + header.arm7.size,
+            header.file_names.offset..header.file_names.offset + header.file_names.size,
+            header.file_allocs.offset..header.file_allocs.offset + header.file_allocs.size,
+            header.arm9_overlays.offset..header.arm9_overlays.offset + header.arm9_overlays.size,
+            header.arm7_overlays.offset..header.arm7_overlays.offset + header.arm7_overlays.size,
+        ];
+        sections.push(header.banner_offset..header.banner_offset + banner.version().banner_size() as u32);
+        sections.retain(|section| section.start != section.end);
+        sections.sort_by_key(|section| section.start);
 
-        let end = header.banner_offset as usize + banner.version().banner_size();
-        Ok(self.data[end])
+        // Find a gap between two adjacent sections, and return the padding byte between them
+        let Some(gap) = sections.windows(2).find(|pair| pair[0].end != pair[1].start) else {
+            return Ok(0xff);
+        };
+        log::debug!("Gap between sections: {:#010x} - {:#010x}", gap[0].end, gap[1].start);
+        Ok(self.data[gap[0].end as usize])
     }
 
     /// Returns a reference to the data of this [`Rom`].
