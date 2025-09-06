@@ -651,7 +651,9 @@ impl<'a> Rom<'a> {
         })
     }
 
-    fn save_overlays(config_path: &Path, overlay_table: &OverlayTable, processor: &str) -> Result<(), RomSaveError> {
+    fn save_overlays(config_path: &Path, overlay_table: &OverlayTable, processor: &str) -> Result<Vec<PathBuf>, RomSaveError> {
+        let mut written: Vec<PathBuf> = vec!();
+
         let overlays = overlay_table.overlays();
         if !overlays.is_empty() {
             let overlays_path = config_path.parent().unwrap();
@@ -672,7 +674,9 @@ impl<'a> Rom<'a> {
                     log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
                     plain_overlay.decompress()?;
                 }
-                create_file(overlays_path.join(format!("{name}.bin")))?.write_all(plain_overlay.code())?;
+                let p = overlays_path.join(format!("{name}.bin"));
+                create_file(&p)?.write_all(plain_overlay.code())?;
+                written.push(p);
             }
 
             let overlay_table_config = OverlayTableConfig {
@@ -681,8 +685,9 @@ impl<'a> Rom<'a> {
                 overlays: configs,
             };
             serde_yml::to_writer(create_file(config_path)?, &overlay_table_config)?;
+            written.push(config_path.to_owned());
         }
-        Ok(())
+        Ok(written)
     }
 
     /// Extracts from a raw ROM.
