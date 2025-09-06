@@ -266,7 +266,8 @@ impl BannerImages {
     /// # Errors
     ///
     /// See [`RgbImage::save`].
-    pub fn save_bitmap_file(&self, path: &Path) -> Result<(), BannerImageError> {
+    pub fn save_bitmap_file(&self, path: &Path) -> Result<Vec<PathBuf>, BannerImageError> {
+        let mut written: Vec<PathBuf> = vec!();
         let mut bitmap_image = RgbaImage::new(32, 32);
         for y in 0..32 {
             for x in 0..32 {
@@ -282,9 +283,15 @@ impl BannerImages {
             palette_image.put_pixel(index as u32, 0, Rgba(color));
         }
 
-        bitmap_image.save(path.join(&self.bitmap_path))?;
-        palette_image.save(path.join(&self.palette_path))?;
-        Ok(())
+        let p = path.join(&self.bitmap_path);
+        bitmap_image.save(&p)?;
+        written.push(p);
+
+        let p = path.join(&self.palette_path);
+        palette_image.save(&p)?;
+        written.push(p);
+
+        Ok(written)
     }
 }
 
