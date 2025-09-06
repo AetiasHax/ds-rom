@@ -2,7 +2,7 @@ use std::{
     backtrace::Backtrace,
     io::{self, Cursor, Write},
     mem::size_of,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -495,22 +495,37 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if a file could not be created or the a component of the ROM has an invalid format.
-    pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<(), RomSaveError> {
+    pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<Vec<PathBuf>, RomSaveError> {
         let path = path.as_ref();
-        create_dir_all(path)?;
 
-        log::info!("Saving ROM to directory {}", path.display());
+        let mut written: Vec<PathBuf> = vec!(); // return value
+
+        create_dir_all(path)?;
+        written.push(path.to_owned());
 
         // --------------------- Save config ---------------------
-        serde_yml::to_writer(create_file_and_dirs(path.join("config.yaml"))?, &self.config)?;
+        let p = path.join("config.yaml"); 
+        serde_yml::to_writer(create_file_and_dirs(&p)?, &self.config)?;
+        written.push(p);
+
 
         // --------------------- Save header ---------------------
-        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.header))?, &self.header)?;
-        self.header_logo.save_png(path.join(&self.config.header_logo))?;
+        let p = path.join(&self.config.header);
+        serde_yml::to_writer(create_file_and_dirs(&p)?, &self.header)?;
+        written.push(p);
+        
+        let p = path.join(&self.config.header_logo);
+        self.header_logo.save_png(&p)?;
+        written.push(p);
 
+        
         // --------------------- Save ARM9 program ---------------------
         let arm9_build_config = self.arm9_build_config()?;
-        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm9_config))?, &arm9_build_config)?;
+
+        let p = path.join(&self.config.arm9_config);
+        serde_yml::to_writer(create_file_and_dirs(&p)?, &arm9_build_config)?;
+        written.push(p);
+        
         let mut plain_arm9 = self.arm9.clone();
         if plain_arm9.is_encrypted() {
             let Some(key) = key else {
@@ -523,16 +538,23 @@ impl<'a> Rom<'a> {
             log::info!("Decompressing ARM9 program");
             plain_arm9.decompress()?;
         }
-        create_file_and_dirs(path.join(&self.config.arm9_bin))?.write_all(plain_arm9.code()?)?;
+
+        let p = path.join(&self.config.arm9_bin);
+        create_file_and_dirs(&p)?.write_all(plain_arm9.code()?)?;
+        written.push(p);
+
 
         // --------------------- Save ARM9 HMAC-SHA1 key ---------------------
         if let Some(arm9_hmac_sha1_key) = plain_arm9.hmac_sha1_key()? {
             if let Some(key_file) = &self.config.arm9_hmac_sha1_key {
-                create_file_and_dirs(path.join(key_file))?.write_all(arm9_hmac_sha1_key.as_ref())?;
+                let p = path.join(key_file);
+                create_file_and_dirs(&p)?.write_all(arm9_hmac_sha1_key.as_ref())?;
+                written.push(p);
             }
         } else if self.config.arm9_hmac_sha1_key.is_some() {
             log::warn!("ARM9 HMAC-SHA1 key not found, but config requested it to be saved");
         }
+
 
         // --------------------- Save autoloads ---------------------
         for autoload in plain_arm9.autoloads()?.iter() {
@@ -549,26 +571,44 @@ impl<'a> Rom<'a> {
                     (path.join(&unknown_autoload.files.bin), path.join(&unknown_autoload.files.config))
                 }
             };
-            create_file_and_dirs(bin_path)?.write_all(autoload.code())?;
-            serde_yml::to_writer(create_file_and_dirs(config_path)?, autoload.info())?;
+
+            let p = bin_path;
+            create_file_and_dirs(&p)?.write_all(autoload.code())?;
+            written.push(p);
+
+            let p = config_path;
+            serde_yml::to_writer(create_file_and_dirs(&p)?, autoload.info())?;
+            written.push(p);
         }
+
 
         // --------------------- Save ARM9 overlays ---------------------
         if let Some(arm9_overlays_config) = &self.config.arm9_overlays {
+            // TODO: concatenate `written` with all paths from `save_overlays()`
             Self::save_overlays(&path.join(arm9_overlays_config), &self.arm9_overlay_table, "arm9")?;
         }
 
+
         // --------------------- Save ARM7 program ---------------------
-        create_file_and_dirs(path.join(&self.config.arm7_bin))?.write_all(self.arm7.full_data())?;
-        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm7_config))?, self.arm7.offsets())?;
+        let p = path.join(&self.config.arm7_bin);
+        create_file_and_dirs(&p)?.write_all(self.arm7.full_data())?;
+        written.push(p);
+
+        let p = path.join(&self.config.arm7_config);
+        serde_yml::to_writer(create_file_and_dirs(&p)?, self.arm7.offsets())?;
+        written.push(p);
+
 
         // --------------------- Save ARM7 overlays ---------------------
         if let Some(arm7_overlays_config) = &self.config.arm7_overlays {
+            // TODO: concatenate `written` with all paths from `save_overlays()`
             Self::save_overlays(&path.join(arm7_overlays_config), &self.arm7_overlay_table, "arm7")?;
         }
 
+
         // --------------------- Save banner ---------------------
         {
+            // TODO: concatenate `written` with all paths from `save_bitmap_file()`
             let banner_path = path.join(&self.config.banner);
             let banner_dir = banner_path.parent().unwrap();
             serde_yml::to_writer(create_file_and_dirs(&banner_path)?, &self.banner)?;
@@ -577,25 +617,28 @@ impl<'a> Rom<'a> {
 
         // --------------------- Save files ---------------------
         {
-            log::info!("Saving ROM assets");
             let files_path = path.join(&self.config.files_dir);
             self.files.traverse_files(["/"], |file, path| {
                 let path = files_path.join(path);
                 // TODO: Rewrite traverse_files as an iterator so these errors can be returned
                 create_dir_all(&path).expect("failed to create file directory");
-                create_file(path.join(file.name()))
+                let p = path.join(file.name());
+                create_file(&p)
                     .expect("failed to create file")
                     .write_all(file.contents())
                     .expect("failed to write file");
+                written.push(p);
             });
         }
-        let mut path_order_file = create_file_and_dirs(path.join(&self.config.path_order))?;
+        let p = path.join(&self.config.path_order);
+        let mut path_order_file = create_file_and_dirs(&p)?;
         for path in &self.path_order {
             path_order_file.write_all(path.as_bytes())?;
             path_order_file.write_all("\n".as_bytes())?;
         }
+        written.push(p);
 
-        Ok(())
+        Ok(written)
     }
 
     /// Generates a build config for ARM9, which normally goes into arm9.yaml.
