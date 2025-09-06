@@ -34,7 +34,10 @@ impl Extract {
             Err(RomSaveError::BlowfishKeyNeeded) => {
                 bail!("The ROM is encrypted, please provide ARM7 BIOS");
             }
-            result => Ok(result?),
+            result => {
+                println!("Extracted {} files.", result?.len());
+                Ok(())
+            }
         }
     }
 }
