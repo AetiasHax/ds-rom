@@ -312,62 +312,106 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if there's a file missing or the file has an invalid format.
-    pub fn load<P: AsRef<Path>>(config_path: P, options: RomLoadOptions) -> Result<Self, RomSaveError> {
+    pub fn load<P: AsRef<Path>>(config_path: P, options: RomLoadOptions) -> Result<(Self, Vec<PathBuf>), RomSaveError> {
+
+        let mut read: Vec<PathBuf> = vec!(); // Second return value, a list of all files read from
+
         let config_path = config_path.as_ref();
-        log::info!("Loading ROM from {}", config_path.display());
+        read.push(config_path.to_path_buf());
 
         let config: RomConfig = serde_yml::from_reader(open_file(config_path)?)?;
         let path = config_path.parent().unwrap();
 
+
         // --------------------- Load header ---------------------
         let (header, header_logo) = if options.load_header {
-            let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
-            let header_logo = Logo::from_png(path.join(&config.header_logo))?;
+            let p = path.join(&config.header);
+            let header: Header = serde_yml::from_reader(open_file(&p)?)?;
+            read.push(p);
+
+            let p = path.join(&config.header_logo);
+            let header_logo = Logo::from_png(&p)?;
+            read.push(p);
+
             (header, header_logo)
         } else {
             Default::default()
         };
 
+
         // --------------------- Load ARM9 program ---------------------
-        let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(path.join(&config.arm9_config))?)?;
-        let arm9 = read_file(path.join(&config.arm9_bin))?;
+        let p = path.join(&config.arm9_config);
+        let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(&p)?)?;
+        read.push(p);
+
+        let p = path.join(&config.arm9_bin);
+        let arm9 = read_file(&p)?;
+        read.push(p);
+
 
         // --------------------- Load autoloads ---------------------
         let mut autoloads = vec![];
 
-        let itcm = read_file(path.join(&config.itcm.bin))?;
-        let itcm_info = serde_yml::from_reader(open_file(path.join(&config.itcm.config))?)?;
+        let p = path.join(&config.itcm.bin);
+        let itcm = read_file(&p)?;
+        read.push(p);
+
+        let p = path.join(&config.itcm.config);
+        let itcm_info = serde_yml::from_reader(open_file(&p)?)?;
+        read.push(p);
+
         let itcm = Autoload::new(itcm, itcm_info);
         autoloads.push(itcm);
 
-        let dtcm = read_file(path.join(&config.dtcm.bin))?;
-        let dtcm_info = serde_yml::from_reader(open_file(path.join(&config.dtcm.config))?)?;
+        let p = path.join(&config.dtcm.bin);
+        let dtcm = read_file(&p)?;
+        read.push(p);
+
+        let p = path.join(&config.dtcm.config);
+        let dtcm_info = serde_yml::from_reader(open_file(&p)?)?;
+        read.push(p);
+
         let dtcm = Autoload::new(dtcm, dtcm_info);
         autoloads.push(dtcm);
 
         for unknown_autoload in &config.unknown_autoloads {
-            let autoload = read_file(path.join(&unknown_autoload.files.bin))?;
-            let autoload_info = serde_yml::from_reader(open_file(path.join(&unknown_autoload.files.config))?)?;
+            let p = path.join(&unknown_autoload.files.bin);
+            let autoload = read_file(&p)?;
+            read.push(p);
+
+            let p = path.join(&unknown_autoload.files.config);
+            let autoload_info = serde_yml::from_reader(open_file(&p)?)?;
+            read.push(p);
+
             let autoload = Autoload::new(autoload, autoload_info);
             autoloads.push(autoload);
         }
 
         autoloads.sort_by_key(|autoload| autoload.kind());
 
+
         // --------------------- Load HMAC SHA1 key ---------------------
         let arm9_hmac_sha1 = if let Some(hmac_sha1_key_file) = &config.arm9_hmac_sha1_key {
-            let hmac_sha1_key = read_file(path.join(hmac_sha1_key_file))?;
+            let p = path.join(hmac_sha1_key_file);
+            let hmac_sha1_key = read_file(&p)?;
+            read.push(p);
+
             Some(HmacSha1::try_from(hmac_sha1_key.as_ref())?)
         } else {
             None
         };
 
+
         // --------------------- Load ARM9 overlays ---------------------
         let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
-            Self::load_overlays(&path.join(arm9_overlays_config), "arm9", arm9_hmac_sha1, &options)?
+            let p = path.join(arm9_overlays_config);
+            let ret = Self::load_overlays(&p, "arm9", arm9_hmac_sha1, &options)?;
+            read.push(p);
+            ret
         } else {
             Default::default()
         };
+
 
         // --------------------- Build ARM9 program ---------------------
         let mut arm9 = Arm9::with_autoloads(
@@ -393,23 +437,37 @@ impl<'a> Rom<'a> {
             arm9.encrypt(key, header.original.gamecode.to_le_u32())?;
         }
 
+
         // --------------------- Load ARM7 overlays ---------------------
         let arm7_overlays = if let Some(arm7_overlays_config) = &config.arm7_overlays {
-            Self::load_overlays(&path.join(arm7_overlays_config), "arm7", None, &options)?
+            let p = path.join(arm7_overlays_config);
+            let ret = Self::load_overlays(&p, "arm7", None, &options)?;
+            read.push(p);
+            ret
         } else {
             Default::default()
         };
 
+
         // --------------------- Load ARM7 program ---------------------
-        let arm7 = read_file(path.join(&config.arm7_bin))?;
-        let arm7_config = serde_yml::from_reader(open_file(path.join(&config.arm7_config))?)?;
+        let p = path.join(&config.arm7_bin);
+        let arm7 = read_file(&p)?;
+        read.push(p);
+
+        let p = path.join(&config.arm7_config);
+        let arm7_config = serde_yml::from_reader(open_file(&p)?)?;
+        read.push(p);
+
         let arm7 = Arm7::new(arm7, arm7_config);
+
 
         // --------------------- Load banner ---------------------
         let banner = if options.load_banner {
             let banner_path = path.join(&config.banner);
             let banner_dir = banner_path.parent().unwrap();
+
             let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
+            read.push(banner_path.to_owned());
             banner.images.load(banner_dir)?;
             banner
         } else {
@@ -419,16 +477,24 @@ impl<'a> Rom<'a> {
         // --------------------- Load files ---------------------
         let num_overlays = arm9_overlays.overlays().len() + arm7_overlays.overlays().len();
         let (files, path_order) = if options.load_files {
-            log::info!("Loading ROM assets");
-            let files = FileSystem::load(path.join(&config.files_dir), num_overlays)?;
-            let path_order =
-                read_to_string(path.join(&config.path_order))?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
+
+            let p = path.join(&config.files_dir);
+            let files = FileSystem::load(&p, num_overlays)?;
+            read.push(p);
+
+            let path_order = {
+                let p = path.join(&config.path_order);
+                let v = read_to_string(&p)?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
+                read.push(p);
+                v
+            };
             (files, path_order)
         } else {
             (FileSystem::new(num_overlays), vec![])
         };
 
-        Ok(Self {
+
+        let rom = Self {
             header,
             header_logo,
             arm9,
@@ -439,7 +505,9 @@ impl<'a> Rom<'a> {
             files,
             path_order,
             config,
-        })
+        };
+
+        Ok( (rom, read) )
     }
 
     fn load_overlays(
@@ -614,7 +682,7 @@ impl<'a> Rom<'a> {
             let banner_path = path.join(&self.config.banner);
             let banner_dir = banner_path.parent().unwrap();
             serde_yml::to_writer(create_file_and_dirs(&banner_path)?, &self.banner)?;
-            let mut w = self.banner.images.save_bitmap_file(banner_dir)?;;
+            let mut w = self.banner.images.save_bitmap_file(banner_dir)?;
             written.append(&mut w);
         }
 
