@@ -495,7 +495,8 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if a file could not be created or the a component of the ROM has an invalid format.
-    pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) -> Result<Vec<PathBuf>, RomSaveError> {
+    pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) 
+    -> Result<Vec<PathBuf>, RomSaveError> {
         let path = path.as_ref();
 
         let mut written: Vec<PathBuf> = vec!(); // return value
@@ -584,8 +585,9 @@ impl<'a> Rom<'a> {
 
         // --------------------- Save ARM9 overlays ---------------------
         if let Some(arm9_overlays_config) = &self.config.arm9_overlays {
-            // TODO: concatenate `written` with all paths from `save_overlays()`
-            Self::save_overlays(&path.join(arm9_overlays_config), &self.arm9_overlay_table, "arm9")?;
+            let p = path.join(arm9_overlays_config);
+            let mut w = Self::save_overlays(&p, &self.arm9_overlay_table, "arm9")?;
+            written.append(&mut w);
         }
 
 
@@ -601,18 +603,19 @@ impl<'a> Rom<'a> {
 
         // --------------------- Save ARM7 overlays ---------------------
         if let Some(arm7_overlays_config) = &self.config.arm7_overlays {
-            // TODO: concatenate `written` with all paths from `save_overlays()`
-            Self::save_overlays(&path.join(arm7_overlays_config), &self.arm7_overlay_table, "arm7")?;
+            let p = path.join(arm7_overlays_config);
+            let mut w = Self::save_overlays(&p, &self.arm7_overlay_table, "arm7")?;
+            written.append(&mut w);
         }
 
 
         // --------------------- Save banner ---------------------
         {
-            // TODO: concatenate `written` with all paths from `save_bitmap_file()`
             let banner_path = path.join(&self.config.banner);
             let banner_dir = banner_path.parent().unwrap();
             serde_yml::to_writer(create_file_and_dirs(&banner_path)?, &self.banner)?;
-            self.banner.images.save_bitmap_file(banner_dir)?;
+            let mut w = self.banner.images.save_bitmap_file(banner_dir)?;;
+            written.append(&mut w);
         }
 
         // --------------------- Save files ---------------------
