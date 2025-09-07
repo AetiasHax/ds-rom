@@ -478,17 +478,34 @@ impl<'a> Rom<'a> {
         let num_overlays = arm9_overlays.overlays().len() + arm7_overlays.overlays().len();
         let (files, path_order) = if options.load_files {
 
-            let p = path.join(&config.files_dir);
-            let files = FileSystem::load(&p, num_overlays)?;
-            read.push(p);
+            let nitrofs_dir = path.join(&config.files_dir);
+            let file_sys = FileSystem::load(&nitrofs_dir, num_overlays)?;
+            read.push(nitrofs_dir.clone());
 
-            let path_order = {
-                let p = path.join(&config.path_order);
-                let v = read_to_string(&p)?.trim().lines().map(|l| l.to_string()).collect::<Vec<_>>();
-                read.push(p);
-                v
-            };
-            (files, path_order)
+
+
+            let p = path.join(&config.path_order);
+            let path_order =
+                read_to_string(&p)?
+                    .trim()
+                    .lines()
+                    .map(|l| l.to_string())
+                    .collect::<Vec<_>>();
+
+            {
+                // add all the paths to the list of read files
+                file_sys
+                    .traverse_files(
+                        path_order.iter().map(|s| { s.as_str() }),
+                        |file, dir| {
+                            let f_name = file.name().to_string();
+                            let p = nitrofs_dir.join(dir.join(f_name));
+                            read.push(p);
+                        }
+                    );
+            }
+
+            (file_sys, path_order)
         } else {
             (FileSystem::new(num_overlays), vec![])
         };

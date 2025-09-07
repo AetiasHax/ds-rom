@@ -43,7 +43,7 @@ fn test_extract_build() -> Result<()> {
         let build_path = path.with_file_name(format!("build_{file_name}"));
         let config_path = extract_path.join("config.yaml");
 
-        let rom = Rom::load(&config_path, Default::default())?;
+        let (rom, _paths) = Rom::load(&config_path, Default::default())?;
         let raw_rom = rom.build(Some(&key))?;
         raw_rom.save(&build_path)?;
 
