@@ -163,6 +163,7 @@ pub struct FileAccess {
 }
 
 
+
 impl AccessList {
     // New, empty list.
     pub fn new() -> Self {
@@ -172,7 +173,7 @@ impl AccessList {
     }
 
     /// Log the reading of a file. Returns the original input to caller.
-    pub fn read(mut self, p: PathBuf) -> PathBuf {
+    pub fn read(&mut self, p: PathBuf) -> PathBuf {
         let pc = p.clone();
         let axs: FileAccess = FileAccess {
             path: pc,
@@ -185,7 +186,7 @@ impl AccessList {
     }
 
     /// Log the writing of a file. Returns the original input to caller.
-    pub fn write(mut self, p: PathBuf) -> PathBuf {
+    pub fn write(&mut self, p: PathBuf) -> PathBuf {
         let pc = p.clone();
         let axs: FileAccess = FileAccess {
             path: pc,

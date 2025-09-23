@@ -24,7 +24,7 @@ use crate::{
         blowfish::BlowfishKey,
         hmac_sha1::{HmacSha1, HmacSha1FromBytesError},
     },
-    io::{create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string, FileError},
+    io::{create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string, AccessList, FileError},
     rom::{raw::FileAlloc, Arm9WithTcmsOptions, RomConfig},
 };
 
@@ -312,12 +312,12 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// This function will return an error if there's a file missing or the file has an invalid format.
-    pub fn load<P: AsRef<Path>>(config_path: P, options: RomLoadOptions) -> Result<(Self, Vec<PathBuf>), RomSaveError> {
+    pub fn load<P: AsRef<Path>>(config_path: P, options: RomLoadOptions) -> Result<(Self, AccessList), RomSaveError> {
 
-        let mut read: Vec<PathBuf> = vec!(); // Second return value, a list of all files read from
+        let mut axs: AccessList = AccessList::new(); // Second return value, a list of all files read from
 
         let config_path = config_path.as_ref();
-        read.push(config_path.to_path_buf());
+        axs.read(config_path.to_path_buf());
 
         let config: RomConfig = serde_yml::from_reader(open_file(config_path)?)?;
         let path = config_path.parent().unwrap();
@@ -327,11 +327,11 @@ impl<'a> Rom<'a> {
         let (header, header_logo) = if options.load_header {
             let p = path.join(&config.header);
             let header: Header = serde_yml::from_reader(open_file(&p)?)?;
-            read.push(p);
+            axs.read(p);
 
             let p = path.join(&config.header_logo);
             let header_logo = Logo::from_png(&p)?;
-            read.push(p);
+            axs.read(p);
 
             (header, header_logo)
         } else {
@@ -342,11 +342,11 @@ impl<'a> Rom<'a> {
         // --------------------- Load ARM9 program ---------------------
         let p = path.join(&config.arm9_config);
         let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(&p)?)?;
-        read.push(p);
+        axs.read(p);
 
         let p = path.join(&config.arm9_bin);
         let arm9 = read_file(&p)?;
-        read.push(p);
+        axs.read(p);
 
 
         // --------------------- Load autoloads ---------------------
@@ -354,22 +354,22 @@ impl<'a> Rom<'a> {
 
         let p = path.join(&config.itcm.bin);
         let itcm = read_file(&p)?;
-        read.push(p);
+        axs.read(p);
 
         let p = path.join(&config.itcm.config);
         let itcm_info = serde_yml::from_reader(open_file(&p)?)?;
-        read.push(p);
+        axs.read(p);
 
         let itcm = Autoload::new(itcm, itcm_info);
         autoloads.push(itcm);
 
         let p = path.join(&config.dtcm.bin);
         let dtcm = read_file(&p)?;
-        read.push(p);
+        axs.read(p);
 
         let p = path.join(&config.dtcm.config);
         let dtcm_info = serde_yml::from_reader(open_file(&p)?)?;
-        read.push(p);
+        axs.read(p);
 
         let dtcm = Autoload::new(dtcm, dtcm_info);
         autoloads.push(dtcm);
@@ -377,11 +377,11 @@ impl<'a> Rom<'a> {
         for unknown_autoload in &config.unknown_autoloads {
             let p = path.join(&unknown_autoload.files.bin);
             let autoload = read_file(&p)?;
-            read.push(p);
+            axs.read(p);
 
             let p = path.join(&unknown_autoload.files.config);
             let autoload_info = serde_yml::from_reader(open_file(&p)?)?;
-            read.push(p);
+            axs.read(p);
 
             let autoload = Autoload::new(autoload, autoload_info);
             autoloads.push(autoload);
@@ -394,7 +394,7 @@ impl<'a> Rom<'a> {
         let arm9_hmac_sha1 = if let Some(hmac_sha1_key_file) = &config.arm9_hmac_sha1_key {
             let p = path.join(hmac_sha1_key_file);
             let hmac_sha1_key = read_file(&p)?;
-            read.push(p);
+            axs.read(p);
 
             Some(HmacSha1::try_from(hmac_sha1_key.as_ref())?)
         } else {
@@ -406,7 +406,7 @@ impl<'a> Rom<'a> {
         let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
             let p = path.join(arm9_overlays_config);
             let ret = Self::load_overlays(&p, "arm9", arm9_hmac_sha1, &options)?;
-            read.push(p);
+            axs.read(p);
             ret
         } else {
             Default::default()
@@ -442,7 +442,7 @@ impl<'a> Rom<'a> {
         let arm7_overlays = if let Some(arm7_overlays_config) = &config.arm7_overlays {
             let p = path.join(arm7_overlays_config);
             let ret = Self::load_overlays(&p, "arm7", None, &options)?;
-            read.push(p);
+            axs.read(p);
             ret
         } else {
             Default::default()
@@ -452,11 +452,11 @@ impl<'a> Rom<'a> {
         // --------------------- Load ARM7 program ---------------------
         let p = path.join(&config.arm7_bin);
         let arm7 = read_file(&p)?;
-        read.push(p);
+        axs.read(p);
 
         let p = path.join(&config.arm7_config);
         let arm7_config = serde_yml::from_reader(open_file(&p)?)?;
-        read.push(p);
+        axs.read(p);
 
         let arm7 = Arm7::new(arm7, arm7_config);
 
@@ -467,7 +467,7 @@ impl<'a> Rom<'a> {
             let banner_dir = banner_path.parent().unwrap();
 
             let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
-            read.push(banner_path.to_owned());
+            axs.read(banner_path.to_owned());
             banner.images.load(banner_dir)?;
             banner
         } else {
@@ -480,9 +480,7 @@ impl<'a> Rom<'a> {
 
             let nitrofs_dir = path.join(&config.files_dir);
             let file_sys = FileSystem::load(&nitrofs_dir, num_overlays)?;
-            read.push(nitrofs_dir.clone());
-
-
+            axs.read(nitrofs_dir.clone());
 
             let p = path.join(&config.path_order);
             let path_order =
@@ -500,7 +498,7 @@ impl<'a> Rom<'a> {
                         |file, dir| {
                             let f_name = file.name().to_string();
                             let p = nitrofs_dir.join(dir.join(f_name));
-                            read.push(p);
+                            axs.read(p);
                         }
                     );
             }
@@ -524,7 +522,7 @@ impl<'a> Rom<'a> {
             config,
         };
 
-        Ok( (rom, read) )
+        Ok( (rom, axs) )
     }
 
     fn load_overlays(
