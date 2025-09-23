@@ -177,6 +177,7 @@ impl AccessList {
         }
     }
 
+    /// Merge two `AccessList`s. Timestamps are ignored for this operation.
     pub fn append(&mut self, other: &Self) {
         let mut o_list = other.clone().list;
         self.list.append(&mut o_list);
@@ -227,9 +228,11 @@ impl AccessList {
             .collect()
     }
 
+    /// Print all the file paths in an AccessList in timestamp order.
+    /// Indents each path with a `'\t'` and prints headings (R/W).
     pub fn print_in_time_order<T: std::io::Write>(&self, mut output: T) {
-        if self.list.len() < 1 {
-            log::warn!("Printing empty AccessList");
+        if self.list.len() == 0 {
+            log::warn!("Empty AccessList");
             return;
         }
 
