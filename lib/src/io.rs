@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf}, time::SystemTime,
 };
 
+use log;
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
@@ -157,9 +158,13 @@ pub struct AccessList {
 #[derive(Debug, Clone)]
 pub struct FileAccess {
     pub path: PathBuf,
-    pub read: bool,
-    pub write: bool,
+    pub mode: AccessMode,
     pub time: SystemTime,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum AccessMode {
+    R, W
 }
 
 
@@ -182,8 +187,7 @@ impl AccessList {
         let pc = p.clone();
         let axs: FileAccess = FileAccess {
             path: pc,
-            read: true,
-            write: false,
+            mode: AccessMode::R,
             time: SystemTime::now(),
         };
         self.list.push(axs);
@@ -195,8 +199,7 @@ impl AccessList {
         let pc = p.clone();
         let axs: FileAccess = FileAccess {
             path: pc,
-            read: false,
-            write: true,
+            mode: AccessMode::W,
             time: SystemTime::now(),
         };
         self.list.push(axs);
@@ -209,7 +212,7 @@ impl AccessList {
         lc.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
         lc
             .iter()
-            .filter(|axs| { axs.read } )
+            .filter(|axs| { axs.mode == AccessMode::R } )
             .map(   |axs| { axs.path.clone() } )
             .collect()
     }
@@ -219,9 +222,42 @@ impl AccessList {
         lc.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
         lc
             .iter()
-            .filter(|axs| { axs.write } )
+            .filter(|axs| { axs.mode == AccessMode::W } )
             .map(   |axs| { axs.path.clone() } )
             .collect()
     }
+
+    pub fn print_in_time_order<T: std::io::Write>(&self, mut output: T) {
+        if self.list.len() < 1 {
+            log::warn!("Printing empty AccessList");
+            return;
+        }
+
+        let mut list = self.list.clone();
+        list.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
+        
+
+        fn rw_title(mode: AccessMode) -> String {
+            match mode {
+                AccessMode::R => "File read:".to_string(),
+                AccessMode::W => "File write:".to_string(),
+            }
+        }
+
+        let mut last = list[0].mode;
+
+        write!(output, "{}", rw_title( last ) ).unwrap();
+
+        for fa in list {
+            // Switching between R & W? Print heading.
+            if last != fa.mode {
+                let t = rw_title( last );
+                write!(output, "{}", t).unwrap();
+                last = fa.mode;
+            }
+            let p = fa.path.display();
+            write!(output, "\t{}", p).unwrap();
+        }
+     }
 
 }
