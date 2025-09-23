@@ -2,7 +2,7 @@ use std::{
     backtrace::Backtrace,
     fs::{self, File, ReadDir},
     io,
-    path::Path,
+    path::{Path, PathBuf}, time::SystemTime,
 };
 
 use snafu::Snafu;
@@ -143,4 +143,78 @@ pub fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<(), FileError> {
         }
     }
     Ok(())
+}
+
+
+
+/// A list of file accesses.
+#[derive(Debug, Clone)]
+pub struct AccessList {
+    pub list: Vec<FileAccess>,
+}
+
+/// A file access.
+#[derive(Debug, Clone)]
+pub struct FileAccess {
+    pub path: PathBuf,
+    pub read: bool,
+    pub write: bool,
+    pub time: SystemTime,
+}
+
+
+impl AccessList {
+    // New, empty list.
+    pub fn new() -> Self {
+        AccessList {
+            list: vec!(),
+        }
+    }
+
+    /// Log the reading of a file. Returns the original input to caller.
+    pub fn read(mut self, p: PathBuf) -> PathBuf {
+        let pc = p.clone();
+        let axs: FileAccess = FileAccess {
+            path: pc,
+            read: true,
+            write: false,
+            time: SystemTime::now(),
+        };
+        self.list.push(axs);
+        return p;
+    }
+
+    /// Log the writing of a file. Returns the original input to caller.
+    pub fn write(mut self, p: PathBuf) -> PathBuf {
+        let pc = p.clone();
+        let axs: FileAccess = FileAccess {
+            path: pc,
+            read: false,
+            write: true,
+            time: SystemTime::now(),
+        };
+        self.list.push(axs);
+        return p;
+    }
+
+    /// All read accesses from an AccessList, in timed order.
+    pub fn get_reads(mut self) -> Vec<PathBuf> {
+        let mut lc = self.list.clone();
+        lc.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
+        lc
+            .iter()
+            .filter(|axs| { axs.read } )
+            .map(   |axs| { axs.path.clone() } )
+            .collect()
+    }
+    /// All read accesses from an AccessList, in timed order.
+    pub fn get_writes(mut self) -> Vec<PathBuf> {
+        let mut lc = self.list.clone();
+        lc.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
+        lc
+            .iter()
+            .filter(|axs| { axs.write } )
+            .map(   |axs| { axs.path.clone() } )
+            .collect()
+    }
 }
