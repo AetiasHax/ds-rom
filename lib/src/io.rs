@@ -172,6 +172,11 @@ impl AccessList {
         }
     }
 
+    pub fn append(&mut self, other: &Self) {
+        let mut o_list = other.clone().list;
+        self.list.append(&mut o_list);
+    }
+
     /// Log the reading of a file. Returns the original input to caller.
     pub fn read(&mut self, p: PathBuf) -> PathBuf {
         let pc = p.clone();
@@ -199,7 +204,7 @@ impl AccessList {
     }
 
     /// All read accesses from an AccessList, in timed order.
-    pub fn get_reads(mut self) -> Vec<PathBuf> {
+    pub fn get_reads(&self) -> Vec<PathBuf> {
         let mut lc = self.list.clone();
         lc.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
         lc
@@ -209,7 +214,7 @@ impl AccessList {
             .collect()
     }
     /// All read accesses from an AccessList, in timed order.
-    pub fn get_writes(mut self) -> Vec<PathBuf> {
+    pub fn get_writes(&self) -> Vec<PathBuf> {
         let mut lc = self.list.clone();
         lc.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
         lc
@@ -218,4 +223,5 @@ impl AccessList {
             .map(   |axs| { axs.path.clone() } )
             .collect()
     }
+
 }

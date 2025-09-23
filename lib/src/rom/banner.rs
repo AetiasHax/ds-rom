@@ -11,7 +11,7 @@ use super::{
     raw::{self, BannerBitmap, BannerPalette, BannerVersion, Language},
     ImageSize,
 };
-use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
+use crate::{crc::CRC_16_MODBUS, io::AccessList, str::Unicode16Array};
 
 /// ROM banner.
 #[derive(Serialize, Deserialize, Default)]
@@ -266,8 +266,10 @@ impl BannerImages {
     /// # Errors
     ///
     /// See [`RgbImage::save`].
-    pub fn save_bitmap_file(&self, path: &Path) -> Result<Vec<PathBuf>, BannerImageError> {
-        let mut written: Vec<PathBuf> = vec!();
+    pub fn save_bitmap_file(&self, path: &Path) -> Result<AccessList, BannerImageError> {
+
+        let mut axs = AccessList::new();
+
         let mut bitmap_image = RgbaImage::new(32, 32);
         for y in 0..32 {
             for x in 0..32 {
@@ -285,13 +287,13 @@ impl BannerImages {
 
         let p = path.join(&self.bitmap_path);
         bitmap_image.save(&p)?;
-        written.push(p);
+        axs.write(p);
 
         let p = path.join(&self.palette_path);
         palette_image.save(&p)?;
-        written.push(p);
+        axs.write(p);
 
-        Ok(written)
+        Ok( axs )
     }
 }
 

@@ -2,7 +2,7 @@ use std::{
     backtrace::Backtrace,
     io::{self, Cursor, Write},
     mem::size_of,
-    path::{Path, PathBuf},
+    path::{Path},
 };
 
 use serde::{Deserialize, Serialize};
@@ -579,28 +579,28 @@ impl<'a> Rom<'a> {
     ///
     /// This function will return an error if a file could not be created or the a component of the ROM has an invalid format.
     pub fn save<P: AsRef<Path>>(&self, path: P, key: Option<&BlowfishKey>) 
-    -> Result<Vec<PathBuf>, RomSaveError> {
+    -> Result<AccessList, RomSaveError> {
         let path = path.as_ref();
 
-        let mut written: Vec<PathBuf> = vec!(); // return value
+        let mut axs = AccessList::new();
 
         create_dir_all(path)?;
-        written.push(path.to_owned());
+        axs.write(path.to_owned());
 
         // --------------------- Save config ---------------------
         let p = path.join("config.yaml"); 
         serde_yml::to_writer(create_file_and_dirs(&p)?, &self.config)?;
-        written.push(p);
+        axs.write(p);
 
 
         // --------------------- Save header ---------------------
         let p = path.join(&self.config.header);
         serde_yml::to_writer(create_file_and_dirs(&p)?, &self.header)?;
-        written.push(p);
+        axs.write(p);
         
         let p = path.join(&self.config.header_logo);
         self.header_logo.save_png(&p)?;
-        written.push(p);
+        axs.write(p);
 
         
         // --------------------- Save ARM9 program ---------------------
@@ -608,7 +608,7 @@ impl<'a> Rom<'a> {
 
         let p = path.join(&self.config.arm9_config);
         serde_yml::to_writer(create_file_and_dirs(&p)?, &arm9_build_config)?;
-        written.push(p);
+        axs.write(p);
         
         let mut plain_arm9 = self.arm9.clone();
         if plain_arm9.is_encrypted() {
@@ -625,7 +625,7 @@ impl<'a> Rom<'a> {
 
         let p = path.join(&self.config.arm9_bin);
         create_file_and_dirs(&p)?.write_all(plain_arm9.code()?)?;
-        written.push(p);
+        axs.write(p);
 
 
         // --------------------- Save ARM9 HMAC-SHA1 key ---------------------
@@ -633,7 +633,7 @@ impl<'a> Rom<'a> {
             if let Some(key_file) = &self.config.arm9_hmac_sha1_key {
                 let p = path.join(key_file);
                 create_file_and_dirs(&p)?.write_all(arm9_hmac_sha1_key.as_ref())?;
-                written.push(p);
+                axs.write(p);
             }
         } else if self.config.arm9_hmac_sha1_key.is_some() {
             log::warn!("ARM9 HMAC-SHA1 key not found, but config requested it to be saved");
@@ -658,37 +658,37 @@ impl<'a> Rom<'a> {
 
             let p = bin_path;
             create_file_and_dirs(&p)?.write_all(autoload.code())?;
-            written.push(p);
+            axs.write(p);
 
             let p = config_path;
             serde_yml::to_writer(create_file_and_dirs(&p)?, autoload.info())?;
-            written.push(p);
+            axs.write(p);
         }
 
 
         // --------------------- Save ARM9 overlays ---------------------
         if let Some(arm9_overlays_config) = &self.config.arm9_overlays {
             let p = path.join(arm9_overlays_config);
-            let mut w = Self::save_overlays(&p, &self.arm9_overlay_table, "arm9")?;
-            written.append(&mut w);
+            let w = Self::save_overlays(&p, &self.arm9_overlay_table, "arm9")?;
+            axs.append(&w);
         }
 
 
         // --------------------- Save ARM7 program ---------------------
         let p = path.join(&self.config.arm7_bin);
         create_file_and_dirs(&p)?.write_all(self.arm7.full_data())?;
-        written.push(p);
+        axs.write(p);
 
         let p = path.join(&self.config.arm7_config);
         serde_yml::to_writer(create_file_and_dirs(&p)?, self.arm7.offsets())?;
-        written.push(p);
+        axs.write(p);
 
 
         // --------------------- Save ARM7 overlays ---------------------
         if let Some(arm7_overlays_config) = &self.config.arm7_overlays {
             let p = path.join(arm7_overlays_config);
-            let mut w = Self::save_overlays(&p, &self.arm7_overlay_table, "arm7")?;
-            written.append(&mut w);
+            let w = Self::save_overlays(&p, &self.arm7_overlay_table, "arm7")?;
+            axs.append(&w);
         }
 
 
@@ -697,8 +697,8 @@ impl<'a> Rom<'a> {
             let banner_path = path.join(&self.config.banner);
             let banner_dir = banner_path.parent().unwrap();
             serde_yml::to_writer(create_file_and_dirs(&banner_path)?, &self.banner)?;
-            let mut w = self.banner.images.save_bitmap_file(banner_dir)?;
-            written.append(&mut w);
+            let w = self.banner.images.save_bitmap_file(banner_dir)?;
+            axs.append(&w);
         }
 
         // --------------------- Save files ---------------------
@@ -713,7 +713,7 @@ impl<'a> Rom<'a> {
                     .expect("failed to create file")
                     .write_all(file.contents())
                     .expect("failed to write file");
-                written.push(p);
+                axs.write(p);
             });
         }
         let p = path.join(&self.config.path_order);
@@ -722,9 +722,9 @@ impl<'a> Rom<'a> {
             path_order_file.write_all(path.as_bytes())?;
             path_order_file.write_all("\n".as_bytes())?;
         }
-        written.push(p);
+        axs.write(p);
 
-        Ok(written)
+        Ok( axs )
     }
 
     /// Generates a build config for ARM9, which normally goes into arm9.yaml.
@@ -737,8 +737,10 @@ impl<'a> Rom<'a> {
         })
     }
 
-    fn save_overlays(config_path: &Path, overlay_table: &OverlayTable, processor: &str) -> Result<Vec<PathBuf>, RomSaveError> {
-        let mut written: Vec<PathBuf> = vec!();
+    fn save_overlays(config_path: &Path, overlay_table: &OverlayTable, processor: &str) 
+    -> Result<AccessList, RomSaveError> {
+
+        let mut axs = AccessList::new();
 
         let overlays = overlay_table.overlays();
         if !overlays.is_empty() {
@@ -762,7 +764,7 @@ impl<'a> Rom<'a> {
                 }
                 let p = overlays_path.join(format!("{name}.bin"));
                 create_file(&p)?.write_all(plain_overlay.code())?;
-                written.push(p);
+                axs.write(p);
             }
 
             let overlay_table_config = OverlayTableConfig {
@@ -771,9 +773,9 @@ impl<'a> Rom<'a> {
                 overlays: configs,
             };
             serde_yml::to_writer(create_file(config_path)?, &overlay_table_config)?;
-            written.push(config_path.to_owned());
+            axs.write(config_path.to_owned());
         }
-        Ok(written)
+        Ok( axs )
     }
 
     /// Extracts from a raw ROM.
