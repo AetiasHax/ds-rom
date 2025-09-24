@@ -254,6 +254,59 @@ impl AccessList {
     }
 
 
+    /// Sort list alphabetically by paths. Does not clean paths first.
+    pub fn sort_by_paths(&mut self) {
+        let mut list = self.list.clone();
+        list.sort_by(|a0, a1| a0.path.cmp(&a1.path) );
+        self.list = list;
+    }
+
+
+    /// Sort list by access timestamp.
+    pub fn sort_by_timestamp(&mut self) {
+        let mut list = self.list.clone();
+        list.sort_by(|a0, a1| a0.time.cmp(&a1.time) );
+        self.list = list;
+    }
+
+
+    /// Print all the file paths in an AccessList alphabetical order of
+    /// the cleaned up path. Indents each path with a `'\t'` and prints
+    /// headings (R/W).
+    /// Runs `clean_paths()` on `self` before printing.
+    pub fn print_in_path_order<T: std::io::Write>(&mut self, mut output: T) {
+        if self.list.len() == 0 {
+            log::warn!("Empty AccessList");
+            return;
+        }
+        self.clean_paths();
+        self.sort_by_paths();
+
+        fn rw_title(mode: AccessMode) -> String {
+            match mode {
+                AccessMode::R => "File read:".to_string(),
+                AccessMode::W => "File write:".to_string(),
+            }
+        }
+
+        let mut last = self.list[0].mode;
+
+        writeln!(output, "{}", rw_title( last ) ).unwrap();
+
+        for fa in &self.list {
+            // Switching between R & W? Print heading.
+            if last != fa.mode {
+                let t = rw_title( fa.mode );
+                writeln!(output, "{}", t).unwrap();
+                last = fa.mode;
+            }
+            let p = fa.path.display();
+            writeln!(output, "\t{}", p).unwrap();
+        }
+     }
+
+
+
     /// Print all the file paths in an AccessList in timestamp order.
     /// Indents each path with a `'\t'` and prints headings (R/W).
     /// Runs `clean_paths()` on `self` before printing.
