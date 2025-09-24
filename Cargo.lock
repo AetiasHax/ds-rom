@@ -293,6 +293,7 @@ dependencies = [
  "env_logger",
  "image",
  "log",
+ "path-clean",
  "rust-bitwriter",
  "serde",
  "serde_yml",
@@ -509,6 +510,12 @@ checksum = "081b846d1d56ddfc18fdf1a922e4f6e07a11768ea1b92dec44e42b72712ccfce"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "path-clean"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
 name = "png"
