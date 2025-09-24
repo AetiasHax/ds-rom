@@ -245,13 +245,24 @@ impl AccessList {
     }
 
 
+    /// Runs `path_clean::clean()` on all paths in `self.list`.
+    pub fn clean_paths(&mut self) {
+        for i in 0 .. self.list.len() {
+            let clean = path_clean::clean( &self.list[i].path );
+            self.list[i].path = clean;
+        }
+    }
+
+
     /// Print all the file paths in an AccessList in timestamp order.
     /// Indents each path with a `'\t'` and prints headings (R/W).
-    pub fn print_in_time_order<T: std::io::Write>(&self, mut output: T) {
+    /// Runs `clean_paths()` on `self` before printing.
+    pub fn print_in_time_order<T: std::io::Write>(&mut self, mut output: T) {
         if self.list.len() == 0 {
             log::warn!("Empty AccessList");
             return;
         }
+        self.clean_paths();
 
         let mut list = self.list.clone();
         list.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
