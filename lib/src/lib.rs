@@ -14,4 +14,4 @@ pub mod rom;
 /// String utilities.
 pub mod str;
 
-pub use io::{AccessList, FileAccess, AccessMode::*};
+pub use io::{AccessList, FileAccess, AccessMode};

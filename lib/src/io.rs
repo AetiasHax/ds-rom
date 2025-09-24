@@ -257,17 +257,17 @@ impl AccessList {
 
         let mut last = list[0].mode;
 
-        write!(output, "{}", rw_title( last ) ).unwrap();
+        writeln!(output, "{}", rw_title( last ) ).unwrap();
 
         for fa in list {
             // Switching between R & W? Print heading.
             if last != fa.mode {
-                let t = rw_title( last );
-                write!(output, "{}", t).unwrap();
+                let t = rw_title( fa.mode );
+                writeln!(output, "{}", t).unwrap();
                 last = fa.mode;
             }
             let p = fa.path.display();
-            write!(output, "\t{}", p).unwrap();
+            writeln!(output, "\t{}", p).unwrap();
         }
      }
 
