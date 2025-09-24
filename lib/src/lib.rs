@@ -13,3 +13,5 @@ pub(crate) mod io;
 pub mod rom;
 /// String utilities.
 pub mod str;
+
+pub use io::{AccessList, FileAccess, AccessMode::*};

@@ -151,26 +151,34 @@ pub fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<(), FileError> {
 /// A list of file accesses.
 #[derive(Debug, Clone)]
 pub struct AccessList {
+    /// Actual list.
     pub list: Vec<FileAccess>,
 }
 
 /// A file access.
 #[derive(Debug, Clone)]
 pub struct FileAccess {
+    /// File path for the file accessed.
     pub path: PathBuf,
+    /// Read or Write mode.
     pub mode: AccessMode,
+    /// When the file was accessed.
     pub time: SystemTime,
 }
 
+/// Mode of file access
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum AccessMode {
-    R, W
+    /// Read mode.
+    R,
+    /// Write mode.
+    W,
 }
 
 
 
 impl AccessList {
-    // New, empty list.
+    /// New, empty list.
     pub fn new() -> Self {
         AccessList {
             list: vec!(),
