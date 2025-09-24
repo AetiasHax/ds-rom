@@ -178,6 +178,8 @@ pub enum AccessMode {
 
 
 impl AccessList {
+
+
     /// New, empty list.
     pub fn new() -> Self {
         AccessList {
@@ -185,11 +187,13 @@ impl AccessList {
         }
     }
 
+
     /// Merge two `AccessList`s. Timestamps are ignored for this operation.
     pub fn append(&mut self, other: &Self) {
         let mut o_list = other.clone().list;
         self.list.append(&mut o_list);
     }
+
 
     /// Log the reading of a file. Returns the original input to caller.
     pub fn read(&mut self, p: PathBuf) -> PathBuf {
@@ -203,6 +207,7 @@ impl AccessList {
         return p;
     }
 
+
     /// Log the writing of a file. Returns the original input to caller.
     pub fn write(&mut self, p: PathBuf) -> PathBuf {
         let pc = p.clone();
@@ -215,6 +220,7 @@ impl AccessList {
         return p;
     }
 
+
     /// All read accesses from an AccessList, in timed order.
     pub fn get_reads(&self) -> Vec<PathBuf> {
         let mut lc = self.list.clone();
@@ -225,6 +231,8 @@ impl AccessList {
             .map(   |axs| { axs.path.clone() } )
             .collect()
     }
+
+
     /// All read accesses from an AccessList, in timed order.
     pub fn get_writes(&self) -> Vec<PathBuf> {
         let mut lc = self.list.clone();
@@ -235,6 +243,7 @@ impl AccessList {
             .map(   |axs| { axs.path.clone() } )
             .collect()
     }
+
 
     /// Print all the file paths in an AccessList in timestamp order.
     /// Indents each path with a `'\t'` and prints headings (R/W).
