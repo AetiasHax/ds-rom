@@ -274,13 +274,16 @@ impl AccessList {
     /// the cleaned up path. Indents each path with a `'\t'` and prints
     /// headings (R/W).
     /// Runs `clean_paths()` on `self` before printing.
-    pub fn print_in_path_order<T: std::io::Write>(&mut self, mut output: T) {
+    pub fn print_in_path_order<T: std::io::Write>(&self, mut output: T) {
         if self.list.len() == 0 {
             log::warn!("Empty AccessList");
             return;
         }
-        self.clean_paths();
-        self.sort_by_paths();
+
+        let mut copy = self.clone();
+
+        copy.clean_paths();
+        copy.sort_by_paths();
 
         fn rw_title(mode: AccessMode) -> String {
             match mode {
@@ -289,11 +292,11 @@ impl AccessList {
             }
         }
 
-        let mut last = self.list[0].mode;
+        let mut last = copy.list[0].mode;
 
         writeln!(output, "{}", rw_title( last ) ).unwrap();
 
-        for fa in &self.list {
+        for fa in copy.list {
             // Switching between R & W? Print heading.
             if last != fa.mode {
                 let t = rw_title( fa.mode );
@@ -310,16 +313,15 @@ impl AccessList {
     /// Print all the file paths in an AccessList in timestamp order.
     /// Indents each path with a `'\t'` and prints headings (R/W).
     /// Runs `clean_paths()` on `self` before printing.
-    pub fn print_in_time_order<T: std::io::Write>(&mut self, mut output: T) {
+    pub fn print_in_time_order<T: std::io::Write>(&self, mut output: T) {
         if self.list.len() == 0 {
             log::warn!("Empty AccessList");
             return;
         }
-        self.clean_paths();
+        let mut copy = self.clone();
 
-        let mut list = self.list.clone();
-        list.sort_by( |a0, a1| { a0.time.cmp(&a1.time)} );
-        
+        copy.clean_paths();
+        copy.sort_by_timestamp();
 
         fn rw_title(mode: AccessMode) -> String {
             match mode {
@@ -328,11 +330,11 @@ impl AccessList {
             }
         }
 
-        let mut last = list[0].mode;
+        let mut last = copy.list[0].mode;
 
         writeln!(output, "{}", rw_title( last ) ).unwrap();
 
-        for fa in list {
+        for fa in copy.list {
             // Switching between R & W? Print heading.
             if last != fa.mode {
                 let t = rw_title( fa.mode );
