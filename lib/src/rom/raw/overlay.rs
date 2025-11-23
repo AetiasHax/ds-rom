@@ -7,9 +7,8 @@ use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
-use crate::rom::Arm9OverlaySignaturesError;
-
 use super::{RawArm9Error, RawHeaderError};
+use crate::rom::Arm9OverlaySignaturesError;
 
 /// An entry in an overlay table. This is the raw struct, see the plain one [here](super::super::Overlay).
 #[repr(C)]

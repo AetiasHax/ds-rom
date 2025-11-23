@@ -370,15 +370,10 @@ impl<'a> Rom<'a> {
         };
 
         // --------------------- Build ARM9 program ---------------------
-        let mut arm9 = Arm9::with_autoloads(
-            arm9,
-            &autoloads,
-            arm9_build_config.offsets,
-            Arm9WithTcmsOptions {
-                originally_compressed: arm9_build_config.compressed,
-                originally_encrypted: arm9_build_config.encrypted,
-            },
-        )?;
+        let mut arm9 = Arm9::with_autoloads(arm9, &autoloads, arm9_build_config.offsets, Arm9WithTcmsOptions {
+            originally_compressed: arm9_build_config.compressed,
+            originally_encrypted: arm9_build_config.encrypted,
+        })?;
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         arm9.update_overlay_signatures(&arm9_overlays)?;
         if arm9_build_config.compressed && options.compress {

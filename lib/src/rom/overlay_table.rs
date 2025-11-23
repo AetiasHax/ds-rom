@@ -1,9 +1,8 @@
-use crate::crypto::hmac_sha1::HmacSha1;
-
 use super::{
     raw::{self, HmacSha1Signature},
     Arm9, Overlay, OverlayError,
 };
+use crate::crypto::hmac_sha1::HmacSha1;
 
 /// An overlay table, used for both ARM9 and ARM7 overlays. This is the plain struct, see the raw one [here](super::raw::OverlayTable).
 #[derive(Clone, Default)]
