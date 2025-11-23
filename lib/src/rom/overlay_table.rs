@@ -22,6 +22,11 @@ impl<'a> OverlayTable<'a> {
         &self.overlays
     }
 
+    /// Returns a mutable reference to the overlays of this [`OverlayTable`].
+    pub fn overlays_mut(&mut self) -> &mut [Overlay<'a>] {
+        &mut self.overlays
+    }
+
     /// Returns the length of this [`OverlayTable`].
     pub fn len(&self) -> usize {
         self.overlays.len()

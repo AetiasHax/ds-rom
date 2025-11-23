@@ -864,9 +864,19 @@ impl<'a> Rom<'a> {
         &self.header_logo
     }
 
+    /// Returns a mutable reference to the header logo of this [`Rom`].
+    pub fn header_logo_mut(&mut self) -> &mut Logo {
+        &mut self.header_logo
+    }
+
     /// Returns a reference to the ARM9 program of this [`Rom`].
     pub fn arm9(&self) -> &Arm9<'a> {
         &self.arm9
+    }
+
+    /// Returns a mutable reference to the ARM9 program of this [`Rom`].
+    pub fn arm9_mut(&mut self) -> &mut Arm9<'a> {
+        &mut self.arm9
     }
 
     /// Returns a reference to the ARM9 overlay table of this [`Rom`].
@@ -874,9 +884,19 @@ impl<'a> Rom<'a> {
         &self.arm9_overlay_table
     }
 
+    /// Returns a mutable reference to the ARM9 overlay table of this [`Rom`].
+    pub fn arm9_overlay_table_mut(&mut self) -> &mut OverlayTable<'a> {
+        &mut self.arm9_overlay_table
+    }
+
     /// Returns a reference to the ARM9 overlays of this [`Rom`].
     pub fn arm9_overlays(&self) -> &[Overlay<'a>] {
         self.arm9_overlay_table.overlays()
+    }
+
+    /// Returns a mutable reference to the ARM9 overlays of this [`Rom`].
+    pub fn arm9_overlays_mut(&mut self) -> &mut [Overlay<'a>] {
+        self.arm9_overlay_table.overlays_mut()
     }
 
     /// Returns a reference to the ARM7 program of this [`Rom`].
@@ -884,9 +904,19 @@ impl<'a> Rom<'a> {
         &self.arm7
     }
 
+    /// Returns a mutable reference to the ARM7 program of this [`Rom`].
+    pub fn arm7_mut(&mut self) -> &mut Arm7<'a> {
+        &mut self.arm7
+    }
+
     /// Returns a reference to the ARM7 overlay table of this [`Rom`].
     pub fn arm7_overlay_table(&self) -> &OverlayTable<'a> {
         &self.arm7_overlay_table
+    }
+
+    /// Returns a mutable reference to the ARM7 overlay table of this [`Rom`].
+    pub fn arm7_overlay_table_mut(&mut self) -> &mut OverlayTable<'a> {
+        &mut self.arm7_overlay_table
     }
 
     /// Returns a reference to the ARM7 overlays of this [`Rom`].
@@ -894,9 +924,19 @@ impl<'a> Rom<'a> {
         self.arm7_overlay_table.overlays()
     }
 
+    /// Returns a mutable reference to the ARM7 overlays of this [`Rom`].
+    pub fn arm7_overlays_mut(&mut self) -> &mut [Overlay<'a>] {
+        self.arm7_overlay_table.overlays_mut()
+    }
+
     /// Returns a reference to the header of this [`Rom`].
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// Returns a mutable reference to the header of this [`Rom`].
+    pub fn header_mut(&mut self) -> &mut Header {
+        &mut self.header
     }
 
     /// Returns the [`RomConfig`] consisting of paths to extracted files.
