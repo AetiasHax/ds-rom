@@ -105,7 +105,7 @@ impl Overlay {
     }
 
     /// Creates a [`DisplayOverlay`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayOverlay {
+    pub fn display(&self, indent: usize) -> DisplayOverlay<'_> {
         DisplayOverlay { overlay: self, indent }
     }
 }

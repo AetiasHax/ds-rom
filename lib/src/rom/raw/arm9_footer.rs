@@ -121,7 +121,7 @@ impl Arm9Footer {
     }
 
     /// Creates a [`DisplayArm9Footer`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayArm9Footer {
+    pub fn display(&self, indent: usize) -> DisplayArm9Footer<'_> {
         DisplayArm9Footer { footer: self, indent }
     }
 }

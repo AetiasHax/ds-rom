@@ -57,7 +57,7 @@ impl<'a> OverlayTable<'a> {
     }
 
     /// Builds a raw overlay table.
-    pub fn build(&self) -> raw::OverlayTable {
+    pub fn build(&self) -> raw::OverlayTable<'a> {
         let overlays: Vec<raw::Overlay> = self.overlays.iter().map(|overlay| overlay.build()).collect();
         let signature = self.signature;
         raw::OverlayTable::new(overlays, signature)

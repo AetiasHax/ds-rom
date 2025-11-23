@@ -200,7 +200,7 @@ impl<'a> Banner<'a> {
     }
 
     /// Creates a [`DisplayBanner`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayBanner {
+    pub fn display(&self, indent: usize) -> DisplayBanner<'_> {
         DisplayBanner { banner: self, indent }
     }
 }

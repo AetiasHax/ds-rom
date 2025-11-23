@@ -98,7 +98,7 @@ impl Banner {
     ///
     /// This function will return an error if the banner version is not yet supported by this library, or there are too many
     /// keyframes.
-    pub fn build(&self) -> Result<raw::Banner, BannerError> {
+    pub fn build(&self) -> Result<raw::Banner<'_>, BannerError> {
         // TODO: Increase max version to Animated
         // The challenge is to convert the animated icon to indexed bitmaps. Each bitmap can use any of the 8 palettes at any
         // given time according to the keyframes. This means that to convert the PNG animation frames to indexed bitmaps, we

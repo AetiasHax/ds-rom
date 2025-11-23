@@ -162,7 +162,7 @@ impl AutoloadInfo {
     }
 
     /// Creates a [`DisplayAutoloadInfo`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayAutoloadInfo {
+    pub fn display(&self, indent: usize) -> DisplayAutoloadInfo<'_> {
         DisplayAutoloadInfo { info: self, indent }
     }
 }

@@ -137,7 +137,7 @@ impl BuildInfo {
     }
 
     /// Creates a [`DisplayBuildInfo`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayBuildInfo {
+    pub fn display(&self, indent: usize) -> DisplayBuildInfo<'_> {
         DisplayBuildInfo { build_info: self, indent }
     }
 }

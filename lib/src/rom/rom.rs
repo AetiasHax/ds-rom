@@ -865,32 +865,32 @@ impl<'a> Rom<'a> {
     }
 
     /// Returns a reference to the ARM9 program of this [`Rom`].
-    pub fn arm9(&self) -> &Arm9 {
+    pub fn arm9(&self) -> &Arm9<'a> {
         &self.arm9
     }
 
     /// Returns a reference to the ARM9 overlay table of this [`Rom`].
-    pub fn arm9_overlay_table(&self) -> &OverlayTable {
+    pub fn arm9_overlay_table(&self) -> &OverlayTable<'a> {
         &self.arm9_overlay_table
     }
 
     /// Returns a reference to the ARM9 overlays of this [`Rom`].
-    pub fn arm9_overlays(&self) -> &[Overlay] {
+    pub fn arm9_overlays(&self) -> &[Overlay<'a>] {
         self.arm9_overlay_table.overlays()
     }
 
     /// Returns a reference to the ARM7 program of this [`Rom`].
-    pub fn arm7(&self) -> &Arm7 {
+    pub fn arm7(&self) -> &Arm7<'a> {
         &self.arm7
     }
 
     /// Returns a reference to the ARM7 overlay table of this [`Rom`].
-    pub fn arm7_overlay_table(&self) -> &OverlayTable {
+    pub fn arm7_overlay_table(&self) -> &OverlayTable<'a> {
         &self.arm7_overlay_table
     }
 
     /// Returns a reference to the ARM7 overlays of this [`Rom`].
-    pub fn arm7_overlays(&self) -> &[Overlay] {
+    pub fn arm7_overlays(&self) -> &[Overlay<'a>] {
         self.arm7_overlay_table.overlays()
     }
 
