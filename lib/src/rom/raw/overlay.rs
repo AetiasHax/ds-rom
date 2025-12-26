@@ -74,7 +74,7 @@ pub enum RawOverlayError {
 impl Overlay {
     fn check_size(data: &[u8]) -> Result<(), RawOverlayError> {
         let size = size_of::<Self>();
-        if data.len() % size != 0 {
+        if !data.len().is_multiple_of(size) {
             InvalidSizeSnafu {}.fail()
         } else {
             Ok(())

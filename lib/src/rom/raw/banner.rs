@@ -83,7 +83,7 @@ impl<'a> Banner<'a> {
     /// or is not aligned enough.
     pub fn borrow_from_slice(data: &'a [u8]) -> Result<Self, RawBannerError> {
         let addr = data as *const [u8] as *const () as usize;
-        if addr % 2 != 0 {
+        if !addr.is_multiple_of(2) {
             return MisalignedSnafu { expected: 2usize, actual: 1usize << addr.trailing_zeros() as usize }.fail();
         }
 

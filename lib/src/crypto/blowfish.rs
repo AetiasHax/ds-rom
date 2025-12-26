@@ -58,7 +58,7 @@ impl Blowfish {
     ///
     /// This function will return an error if `data.len()` is not a multiple of 8.
     pub fn encrypt(&self, data: &mut [u8]) -> Result<(), BlowfishError> {
-        if data.len() % 8 != 0 {
+        if !data.len().is_multiple_of(8) {
             OddBlockCountSnafu {}.fail()?;
         }
         for chunk in data.chunks_exact_mut(8) {
@@ -89,7 +89,7 @@ impl Blowfish {
     ///
     /// This function will return an error if `data.len()` is not a multiple of 8.
     pub fn decrypt(&self, data: &mut [u8]) -> Result<(), BlowfishError> {
-        if data.len() % 8 != 0 {
+        if !data.len().is_multiple_of(8) {
             OddBlockCountSnafu {}.fail()?;
         }
         for chunk in data.chunks_mut(8) {

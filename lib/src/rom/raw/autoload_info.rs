@@ -93,7 +93,7 @@ pub enum RawAutoloadInfoError {
 impl AutoloadInfoEntry {
     fn check_size(data: &'_ [u8]) -> Result<(), RawAutoloadInfoError> {
         let size = size_of::<Self>();
-        if data.len() % size != 0 {
+        if !data.len().is_multiple_of(size) {
             InvalidSizeSnafu {}.fail()
         } else {
             Ok(())

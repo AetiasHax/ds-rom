@@ -48,7 +48,7 @@ pub enum RawFatError {
 impl FileAlloc {
     fn check_size(data: &'_ [u8]) -> Result<(), RawFatError> {
         let size = size_of::<Self>();
-        if data.len() % size != 0 {
+        if !data.len().is_multiple_of(size) {
             InvalidSizeSnafu {}.fail()
         } else {
             Ok(())

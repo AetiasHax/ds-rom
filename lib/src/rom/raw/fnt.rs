@@ -93,7 +93,7 @@ impl<'a> Fnt<'a> {
     pub fn borrow_from_slice(data: &'a [u8]) -> Result<Self, RawFntError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        if addr % 4 != 0 {
+        if !addr.is_multiple_of(4) {
             return MisalignedSnafu { expected: 4usize, actual: 1usize << addr.trailing_zeros() as usize }.fail();
         }
 
