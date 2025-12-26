@@ -1,7 +1,4 @@
-/target
+/target/
 *.nds
-/.vscode
-/*.bin
-/test
-/build.sh
-/build.ps1
+/.vscode/
+/temp/
