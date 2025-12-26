@@ -472,12 +472,12 @@ impl<'a> Rom<'a> {
 
         let mut overlay_table = OverlayTable::new(overlays);
         if overlay_table_config.table_signed {
-            let Some(ref hmac_sha1) = hmac_sha1 else {
-                return NoHmacSha1KeySnafu {}.fail();
-            };
             if let Some(signature) = overlay_table_config.table_signature {
                 overlay_table.set_signature(signature);
             } else {
+                let Some(ref hmac_sha1) = hmac_sha1 else {
+                    return NoHmacSha1KeySnafu {}.fail();
+                };
                 overlay_table.sign(hmac_sha1);
             }
         }
