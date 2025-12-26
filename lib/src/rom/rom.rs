@@ -25,7 +25,10 @@ use crate::{
         hmac_sha1::{HmacSha1, HmacSha1FromBytesError},
     },
     io::{create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string, FileError},
-    rom::{raw::FileAlloc, Arm9WithTcmsOptions, RomConfig},
+    rom::{
+        raw::{FileAlloc, MultibootSignature, RawMultibootSignatureError},
+        Arm9WithTcmsOptions, RomConfig,
+    },
 };
 
 /// A plain ROM.
@@ -38,6 +41,8 @@ pub struct Rom<'a> {
     arm7_overlay_table: OverlayTable<'a>,
     banner: Banner,
     files: FileSystem<'a>,
+    multiboot_signature: Option<MultibootSignature>,
+
     path_order: Vec<String>,
     config: RomConfig,
 }
@@ -128,6 +133,12 @@ pub enum RomExtractError {
     Arm9HmacSha1Key {
         /// Source error.
         source: Arm9HmacSha1KeyError,
+    },
+    /// See [`RawMultibootSignatureError`].
+    #[snafu(transparent)]
+    RawMultibootSignature {
+        /// Source error.
+        source: RawMultibootSignatureError,
     },
 }
 
@@ -423,6 +434,13 @@ impl<'a> Rom<'a> {
             (FileSystem::new(num_overlays), vec![])
         };
 
+        // --------------------- Load multiboot signature ---------------------
+        let multiboot_signature = if let Some(multiboot_signature) = config.multiboot_signature.as_ref() {
+            serde_yml::from_reader(open_file(path.join(multiboot_signature))?)?
+        } else {
+            None
+        };
+
         Ok(Self {
             header,
             header_logo,
@@ -433,6 +451,7 @@ impl<'a> Rom<'a> {
             banner,
             files,
             path_order,
+            multiboot_signature,
             config,
         })
     }
@@ -590,6 +609,16 @@ impl<'a> Rom<'a> {
             path_order_file.write_all("\n".as_bytes())?;
         }
 
+        // --------------------- Save multiboot signature ---------------------
+        if let Some(multiboot_signature) = &self.multiboot_signature {
+            if let Some(signature_file) = &self.config.multiboot_signature {
+                let file_path = path.join(signature_file);
+                serde_yml::to_writer(create_file_and_dirs(&file_path)?, multiboot_signature)?;
+            }
+        } else if self.config.multiboot_signature.is_some() {
+            log::warn!("Multiboot signature not found, but config requested it to be saved");
+        }
+
         Ok(())
     }
 
@@ -678,6 +707,8 @@ impl<'a> Rom<'a> {
 
         let has_arm9_hmac_sha1 = decompressed_arm9.hmac_sha1_key()?.is_some();
 
+        let multiboot_signature = rom.multiboot_signature()?.cloned();
+
         let alignment = rom.alignments()?;
 
         let config = RomConfig {
@@ -697,6 +728,7 @@ impl<'a> Rom<'a> {
             banner: "banner/banner.yaml".into(),
             files_dir: "files/".into(),
             path_order: "path_order.txt".into(),
+            multiboot_signature: if multiboot_signature.is_none() { None } else { Some("multiboot_signature.yaml".into()) },
             arm9_hmac_sha1_key: has_arm9_hmac_sha1.then_some("arm9/hmac_sha1_key.bin".into()),
             alignment,
         };
@@ -710,6 +742,7 @@ impl<'a> Rom<'a> {
             arm7_overlay_table: arm7_overlays,
             banner: Banner::load_raw(&banner),
             files: file_root,
+            multiboot_signature,
             path_order,
             config,
         })
@@ -824,8 +857,14 @@ impl<'a> Rom<'a> {
             cursor.write_all(contents).expect("failed to write file contents");
         });
 
-        // --------------------- Write padding ---------------------
+        // --------------------- Write multiboot signature ---------------------
+        // Multiboot signature is placed "after" the ROM ends
         context.rom_size = Some(cursor.position() as u32);
+        if let Some(multiboot_signature) = &self.multiboot_signature {
+            cursor.write_all(bytemuck::bytes_of(multiboot_signature))?;
+        }
+
+        // --------------------- Write padding ---------------------
         let padded_rom_size = cursor.position().next_power_of_two().max(128 * 1024) as u32;
         self.align_file_image(&mut cursor, padded_rom_size)?;
 
@@ -943,6 +982,11 @@ impl<'a> Rom<'a> {
     pub fn config(&self) -> &RomConfig {
         &self.config
     }
+
+    /// Returns the [`MultibootSignature`] of this [`Rom`].
+    pub fn multiboot_signature(&self) -> Option<&MultibootSignature> {
+        self.multiboot_signature.as_ref()
+    }
 }
 
 /// Build context, generated during [`Rom::build`] and later passed to [`Header::build`] to fill in the header.
@@ -988,14 +1032,24 @@ pub struct RomLoadOptions<'a> {
     pub encrypt: bool,
     /// If true (default), load asset files.
     pub load_files: bool,
-    /// If true (default), load header and header logo.
+    /// If true (default), load the header and the header logo.
     pub load_header: bool,
-    /// If true (default), load banner.
+    /// If true (default), load the banner.
     pub load_banner: bool,
+    /// If true (default), load the multiboot signature.
+    pub load_multiboot_signature: bool,
 }
 
 impl Default for RomLoadOptions<'_> {
     fn default() -> Self {
-        Self { key: None, compress: true, encrypt: true, load_files: true, load_header: true, load_banner: true }
+        Self {
+            key: None,
+            compress: true,
+            encrypt: true,
+            load_files: true,
+            load_header: true,
+            load_banner: true,
+            load_multiboot_signature: true,
+        }
     }
 }

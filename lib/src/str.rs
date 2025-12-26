@@ -141,30 +141,3 @@ impl Display for BlobSize {
         }
     }
 }
-
-/// For debugging purposes.
-#[allow(unused)]
-pub(crate) fn write_hex(f: &mut std::fmt::Formatter<'_>, data: &[u8]) -> std::fmt::Result {
-    for (offset, chunk) in data.chunks(16).enumerate() {
-        write!(f, "{:08x} ", offset * 16)?;
-        for byte in chunk {
-            write!(f, " {byte:02x}")?;
-        }
-        writeln!(f)?;
-    }
-    writeln!(f)?;
-    Ok(())
-}
-
-/// For debugging purposes.
-#[allow(unused)]
-pub(crate) fn print_hex(data: &[u8]) {
-    for (offset, chunk) in data.chunks(16).enumerate() {
-        print!("{:08x} ", offset * 16);
-        for byte in chunk {
-            print!(" {byte:02x}");
-        }
-        println!();
-    }
-    println!();
-}

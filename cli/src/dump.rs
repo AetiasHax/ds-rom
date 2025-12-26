@@ -75,6 +75,7 @@ impl Dump {
             DumpCommand::Arm7Overlay(dump_arm7_overlay) => dump_arm7_overlay.run(&rom),
             DumpCommand::Arm9Footer(dump_arm9_footer) => dump_arm9_footer.run(&rom),
             DumpCommand::Arm9OverlaySignatures(dump_arm9_overlay_signatures) => dump_arm9_overlay_signatures.run(&rom),
+            DumpCommand::MultibootSignature(dump_multiboot_signature) => dump_multiboot_signature.run(&rom),
         }
     }
 }
@@ -103,6 +104,8 @@ enum DumpCommand {
     Arm9Footer(DumpArm9Footer),
     #[command(name = "arm9-ov-sigs")]
     Arm9OverlaySignatures(DumpArm9OverlaySignatures),
+    #[command(name = "mb-sig")]
+    MultibootSignature(DumpMultibootSignature),
 }
 
 /// Shows the contents of the ROM header.
@@ -490,6 +493,24 @@ impl DumpArm9OverlaySignatures {
                     println!("ARM9 overlay {} has no signature", overlay.id());
                 }
             }
+        }
+
+        Ok(())
+    }
+}
+
+/// Prints the multiboot (download play) signature.
+#[derive(Args)]
+struct DumpMultibootSignature {}
+
+impl DumpMultibootSignature {
+    pub fn run(&self, raw_rom: &raw::Rom) -> Result<()> {
+        let rom = Rom::extract(raw_rom)?;
+
+        if let Some(multiboot_signature) = rom.multiboot_signature() {
+            println!("{}", multiboot_signature.display(2));
+        } else {
+            println!("No multiboot signature found");
         }
 
         Ok(())

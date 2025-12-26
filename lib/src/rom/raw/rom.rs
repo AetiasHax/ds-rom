@@ -8,7 +8,10 @@ use super::{
 };
 use crate::{
     io::{open_file, write_file, FileError},
-    rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets, RomConfigAlignment},
+    rom::{
+        raw::{MultibootSignature, RawMultibootSignatureError},
+        Arm7, Arm7Offsets, Arm9, Arm9Offsets, RomConfigAlignment,
+    },
 };
 
 /// A raw DS ROM, see the plain struct [here](super::super::Rom).
@@ -301,6 +304,22 @@ impl<'a> Rom<'a> {
         let start = header.banner_offset as usize;
         let data = &self.data[start..];
         Banner::borrow_from_slice(data)
+    }
+
+    /// Returns the multiboot signature of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`MultibootSignature::borrow_from_slice`].
+    pub fn multiboot_signature(&self) -> Result<Option<&MultibootSignature>, RawMultibootSignatureError> {
+        let header = self.header()?;
+        let start = header.rom_size_ds as usize;
+        let data = &self.data[start..];
+        match MultibootSignature::borrow_from_slice(data) {
+            Ok(s) => Ok(Some(s)),
+            Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Returns the padding value in the file image block of this [`Rom`].
