@@ -189,11 +189,17 @@ pub enum RomSaveError {
         /// Source error.
         source: FileError,
     },
-    /// See [`serde_yml::Error`].
+    /// See [`serde_saphyr::Error`].
     #[snafu(transparent)]
-    SerdeJson {
+    SerdeSaphyrDeserialize {
         /// Source error.
-        source: serde_yml::Error,
+        source: serde_saphyr::Error,
+    },
+    /// See [`serde_saphyr::ser_error::Error`].
+    #[snafu(transparent)]
+    SerdeSaphyrSerialize {
+        /// Source error.
+        source: serde_saphyr::ser_error::Error,
     },
     /// See [`LogoSaveError`].
     #[snafu(transparent)]
@@ -327,12 +333,12 @@ impl<'a> Rom<'a> {
         let config_path = config_path.as_ref();
         log::info!("Loading ROM from {}", config_path.display());
 
-        let config: RomConfig = serde_yml::from_reader(open_file(config_path)?)?;
+        let config: RomConfig = serde_saphyr::from_reader(open_file(config_path)?)?;
         let path = config_path.parent().unwrap();
 
         // --------------------- Load header ---------------------
         let (header, header_logo) = if options.load_header {
-            let header: Header = serde_yml::from_reader(open_file(path.join(&config.header))?)?;
+            let header: Header = serde_saphyr::from_reader(open_file(path.join(&config.header))?)?;
             let header_logo = Logo::from_png(path.join(&config.header_logo))?;
             (header, header_logo)
         } else {
@@ -340,25 +346,25 @@ impl<'a> Rom<'a> {
         };
 
         // --------------------- Load ARM9 program ---------------------
-        let arm9_build_config: Arm9BuildConfig = serde_yml::from_reader(open_file(path.join(&config.arm9_config))?)?;
+        let arm9_build_config: Arm9BuildConfig = serde_saphyr::from_reader(open_file(path.join(&config.arm9_config))?)?;
         let arm9 = read_file(path.join(&config.arm9_bin))?;
 
         // --------------------- Load autoloads ---------------------
         let mut autoloads = vec![];
 
         let itcm = read_file(path.join(&config.itcm.bin))?;
-        let itcm_info = serde_yml::from_reader(open_file(path.join(&config.itcm.config))?)?;
+        let itcm_info = serde_saphyr::from_reader(open_file(path.join(&config.itcm.config))?)?;
         let itcm = Autoload::new(itcm, itcm_info);
         autoloads.push(itcm);
 
         let dtcm = read_file(path.join(&config.dtcm.bin))?;
-        let dtcm_info = serde_yml::from_reader(open_file(path.join(&config.dtcm.config))?)?;
+        let dtcm_info = serde_saphyr::from_reader(open_file(path.join(&config.dtcm.config))?)?;
         let dtcm = Autoload::new(dtcm, dtcm_info);
         autoloads.push(dtcm);
 
         for unknown_autoload in &config.unknown_autoloads {
             let autoload = read_file(path.join(&unknown_autoload.files.bin))?;
-            let autoload_info = serde_yml::from_reader(open_file(path.join(&unknown_autoload.files.config))?)?;
+            let autoload_info = serde_saphyr::from_reader(open_file(path.join(&unknown_autoload.files.config))?)?;
             let autoload = Autoload::new(autoload, autoload_info);
             autoloads.push(autoload);
         }
@@ -408,14 +414,14 @@ impl<'a> Rom<'a> {
 
         // --------------------- Load ARM7 program ---------------------
         let arm7 = read_file(path.join(&config.arm7_bin))?;
-        let arm7_config = serde_yml::from_reader(open_file(path.join(&config.arm7_config))?)?;
+        let arm7_config = serde_saphyr::from_reader(open_file(path.join(&config.arm7_config))?)?;
         let arm7 = Arm7::new(arm7, arm7_config);
 
         // --------------------- Load banner ---------------------
         let banner = if options.load_banner {
             let banner_path = path.join(&config.banner);
             let banner_dir = banner_path.parent().unwrap();
-            let mut banner: Banner = serde_yml::from_reader(open_file(&banner_path)?)?;
+            let mut banner: Banner = serde_saphyr::from_reader(open_file(&banner_path)?)?;
             banner.images.load(banner_dir)?;
             banner
         } else {
@@ -436,7 +442,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Load multiboot signature ---------------------
         let multiboot_signature = if let Some(multiboot_signature) = config.multiboot_signature.as_ref() {
-            serde_yml::from_reader(open_file(path.join(multiboot_signature))?)?
+            serde_saphyr::from_reader(open_file(path.join(multiboot_signature))?)?
         } else {
             None
         };
@@ -464,7 +470,7 @@ impl<'a> Rom<'a> {
     ) -> Result<OverlayTable<'a>, RomSaveError> {
         let path = config_path.parent().unwrap();
         let mut overlays = vec![];
-        let overlay_table_config: OverlayTableConfig = serde_yml::from_reader(open_file(config_path)?)?;
+        let overlay_table_config: OverlayTableConfig = serde_saphyr::from_reader(open_file(config_path)?)?;
         let num_overlays = overlay_table_config.overlays.len();
         for mut config in overlay_table_config.overlays.into_iter() {
             let data = read_file(path.join(config.file_name))?;
@@ -516,15 +522,15 @@ impl<'a> Rom<'a> {
         log::info!("Saving ROM to directory {}", path.display());
 
         // --------------------- Save config ---------------------
-        serde_yml::to_writer(create_file_and_dirs(path.join("config.yaml"))?, &self.config)?;
+        serde_saphyr::to_io_writer(&mut create_file_and_dirs(path.join("config.yaml"))?, &self.config)?;
 
         // --------------------- Save header ---------------------
-        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.header))?, &self.header)?;
+        serde_saphyr::to_io_writer(&mut create_file_and_dirs(path.join(&self.config.header))?, &self.header)?;
         self.header_logo.save_png(path.join(&self.config.header_logo))?;
 
         // --------------------- Save ARM9 program ---------------------
         let arm9_build_config = self.arm9_build_config()?;
-        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm9_config))?, &arm9_build_config)?;
+        serde_saphyr::to_io_writer(&mut create_file_and_dirs(path.join(&self.config.arm9_config))?, &arm9_build_config)?;
         let mut plain_arm9 = self.arm9.clone();
         if plain_arm9.is_encrypted() {
             let Some(key) = key else {
@@ -564,7 +570,7 @@ impl<'a> Rom<'a> {
                 }
             };
             create_file_and_dirs(bin_path)?.write_all(autoload.code())?;
-            serde_yml::to_writer(create_file_and_dirs(config_path)?, autoload.info())?;
+            serde_saphyr::to_io_writer(&mut create_file_and_dirs(config_path)?, autoload.info())?;
         }
 
         // --------------------- Save ARM9 overlays ---------------------
@@ -574,7 +580,7 @@ impl<'a> Rom<'a> {
 
         // --------------------- Save ARM7 program ---------------------
         create_file_and_dirs(path.join(&self.config.arm7_bin))?.write_all(self.arm7.full_data())?;
-        serde_yml::to_writer(create_file_and_dirs(path.join(&self.config.arm7_config))?, self.arm7.offsets())?;
+        serde_saphyr::to_io_writer(&mut create_file_and_dirs(path.join(&self.config.arm7_config))?, self.arm7.offsets())?;
 
         // --------------------- Save ARM7 overlays ---------------------
         if let Some(arm7_overlays_config) = &self.config.arm7_overlays {
@@ -585,7 +591,7 @@ impl<'a> Rom<'a> {
         {
             let banner_path = path.join(&self.config.banner);
             let banner_dir = banner_path.parent().unwrap();
-            serde_yml::to_writer(create_file_and_dirs(&banner_path)?, &self.banner)?;
+            serde_saphyr::to_io_writer(&mut create_file_and_dirs(&banner_path)?, &self.banner)?;
             self.banner.images.save_bitmap_file(banner_dir)?;
         }
 
@@ -613,7 +619,7 @@ impl<'a> Rom<'a> {
         if let Some(multiboot_signature) = &self.multiboot_signature {
             if let Some(signature_file) = &self.config.multiboot_signature {
                 let file_path = path.join(signature_file);
-                serde_yml::to_writer(create_file_and_dirs(&file_path)?, multiboot_signature)?;
+                serde_saphyr::to_io_writer(&mut create_file_and_dirs(&file_path)?, multiboot_signature)?;
             }
         } else if self.config.multiboot_signature.is_some() {
             log::warn!("Multiboot signature not found, but config requested it to be saved");
@@ -661,7 +667,7 @@ impl<'a> Rom<'a> {
                 table_signature: overlay_table.signature(),
                 overlays: configs,
             };
-            serde_yml::to_writer(create_file(config_path)?, &overlay_table_config)?;
+            serde_saphyr::to_io_writer(&mut create_file_and_dirs(config_path)?, &overlay_table_config)?;
         }
         Ok(())
     }
