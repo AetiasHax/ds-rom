@@ -679,6 +679,8 @@ impl<'a> Rom<'a> {
     /// This function will return an error if a component is missing from the raw ROM.
     pub fn extract(rom: &'a raw::Rom) -> Result<Self, RomExtractError> {
         let header = rom.header()?;
+        log::info!("Extracting from {}", header.title);
+
         let fnt = rom.fnt()?;
         let fat = rom.fat()?;
         let banner = rom.banner()?;

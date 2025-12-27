@@ -317,7 +317,8 @@ impl<'a> Rom<'a> {
         let data = &self.data[start..];
         match MultibootSignature::borrow_from_slice(data) {
             Ok(s) => Ok(Some(s)),
-            Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None),
+            Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None), // signature not found
+            Err(RawMultibootSignatureError::Misaligned { .. }) => Ok(None),   // not aligned by 4
             Err(e) => Err(e),
         }
     }
