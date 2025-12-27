@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io, mem::replace, ops::Range};
+use std::{borrow::Cow, io, mem::replace, ops::Range, str::Utf8Error};
 
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
@@ -14,6 +14,7 @@ use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
     crc::CRC_16_MODBUS,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
+    rom::LibraryEntry,
 };
 
 /// ARM9 program.
@@ -350,6 +351,43 @@ impl<'a> Arm9<'a> {
     /// See [`BuildInfo::borrow_from_slice_mut`].
     pub fn build_info_mut(&mut self) -> Result<&mut BuildInfo, RawBuildInfoError> {
         BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info as usize..])
+    }
+
+    /// Returns the library version strings in this [`Arm9`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if a library string is not valid UTF-8.
+    pub fn libraries(&self) -> Result<Box<[LibraryEntry<'_>]>, Utf8Error> {
+        let libraries_start = self.offsets.build_info as usize + size_of::<BuildInfo>();
+        let mut address = self.base_address() + libraries_start as u32;
+        let mut data = &self.data[libraries_start..];
+
+        let mut libraries = Vec::new();
+
+        'outer: while data[0] == b'[' {
+            let Some((end_pos, _)) = data.iter().enumerate().find(|(_, c)| **c == b']') else {
+                break;
+            };
+            let version_string = str::from_utf8(&data[..end_pos + 1])?;
+
+            libraries.push(LibraryEntry::new(address, version_string));
+
+            address += end_pos as u32 + 1;
+            data = &data[end_pos + 1..];
+            loop {
+                match data[0] {
+                    b'\0' => {
+                        address += 1;
+                        data = &data[1..]
+                    }
+                    b'[' => break,
+                    _ => break 'outer,
+                }
+            }
+        }
+
+        Ok(libraries.into_boxed_slice())
     }
 
     /// Returns whether this ARM9 program is compressed. See [`Self::originally_compressed`] for whether the program was
