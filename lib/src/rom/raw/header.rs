@@ -288,7 +288,7 @@ impl Header {
     }
 
     /// Creates a [`DisplayHeader`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayHeader {
+    pub fn display(&self, indent: usize) -> DisplayHeader<'_> {
         DisplayHeader { header: self, indent }
     }
 }
@@ -479,7 +479,7 @@ pub struct ProgramOffset {
 
 impl ProgramOffset {
     /// Creates a [`DisplayProgramOffset`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayProgramOffset {
+    pub fn display(&self, indent: usize) -> DisplayProgramOffset<'_> {
         DisplayProgramOffset { offset: self, indent }
     }
 }
@@ -514,7 +514,7 @@ pub struct TableOffset {
 
 impl TableOffset {
     /// Creates a [`DisplayTableOffset`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayTableOffset {
+    pub fn display(&self, indent: usize) -> DisplayTableOffset<'_> {
         DisplayTableOffset { offset: self, indent }
     }
 }

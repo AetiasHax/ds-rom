@@ -102,7 +102,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`].
-    pub fn arm9(&self) -> Result<Arm9, RawArm9Error> {
+    pub fn arm9(&self) -> Result<Arm9<'_>, RawArm9Error> {
         let header = self.header()?;
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
@@ -178,7 +178,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::arm9`] and [`Self::arm9_overlay_table_with`].
-    pub fn arm9_overlay_table(&self) -> Result<OverlayTable, RawOverlayError> {
+    pub fn arm9_overlay_table(&self) -> Result<OverlayTable<'_>, RawOverlayError> {
         let arm9 = self.arm9()?;
         self.arm9_overlay_table_with(&arm9)
     }
@@ -188,7 +188,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::arm9_overlays`] and [`Arm9::overlay_table_signature`].
-    pub fn arm9_overlay_table_with(&self, arm9: &Arm9) -> Result<OverlayTable, RawOverlayError> {
+    pub fn arm9_overlay_table_with(&self, arm9: &Arm9) -> Result<OverlayTable<'_>, RawOverlayError> {
         let overlays = self.arm9_overlays()?;
         let signature = arm9.overlay_table_signature()?.cloned();
         Ok(OverlayTable::new(overlays, signature))
@@ -211,7 +211,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`].
-    pub fn arm7(&self) -> Result<Arm7, RawHeaderError> {
+    pub fn arm7(&self) -> Result<Arm7<'_>, RawHeaderError> {
         let header = self.header()?;
         let start = header.arm7.offset as usize;
         let end = start + header.arm7.size as usize;
@@ -253,7 +253,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::arm7_overlays`].
-    pub fn arm7_overlay_table(&self) -> Result<OverlayTable, RawOverlayError> {
+    pub fn arm7_overlay_table(&self) -> Result<OverlayTable<'_>, RawOverlayError> {
         let overlays = self.arm7_overlays()?;
         Ok(OverlayTable::new(overlays, None))
     }
@@ -275,7 +275,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`] and [`Fnt::borrow_from_slice`].
-    pub fn fnt(&self) -> Result<Fnt, RawFntError> {
+    pub fn fnt(&self) -> Result<Fnt<'_>, RawFntError> {
         let header = self.header()?;
         let start = header.file_names.offset as usize;
         let end = start + header.file_names.size as usize;
@@ -302,7 +302,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`] and [`Banner::borrow_from_slice`].
-    pub fn banner(&self) -> Result<Banner, RawBannerError> {
+    pub fn banner(&self) -> Result<Banner<'_>, RawBannerError> {
         let header = self.header()?;
         let start = header.banner_offset as usize;
         let data = &self.data[start..];

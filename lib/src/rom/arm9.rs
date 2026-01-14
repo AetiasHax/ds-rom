@@ -442,7 +442,7 @@ impl<'a> Arm9<'a> {
     ///
     /// This function will return an error if [`Self::build_info`] or [`Self::get_autoload_infos`] fails or this ARM9 program
     /// is compressed.
-    pub fn autoloads(&self) -> Result<Box<[Autoload]>, Arm9AutoloadError> {
+    pub fn autoloads(&self) -> Result<Box<[Autoload<'_>]>, Arm9AutoloadError> {
         let build_info = self.build_info()?;
         if build_info.is_compressed() {
             CompressedSnafu {}.fail()?;
