@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use image::{io::Reader, GenericImageView, ImageError, Rgba, RgbaImage};
+use image::{GenericImageView, ImageError, ImageReader, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
@@ -218,7 +218,7 @@ impl BannerImages {
     /// This function will return an error if [`Reader::open`] or [`Reader::decode`] fails, or if the images are the wrong
     /// size, or the bitmap has a color not present in the palette.
     pub fn load(&mut self, path: &Path) -> Result<(), BannerImageError> {
-        let bitmap_image = Reader::open(path.join(&self.bitmap_path))?.decode()?;
+        let bitmap_image = ImageReader::open(path.join(&self.bitmap_path))?.decode()?;
         if bitmap_image.width() != 32 || bitmap_image.height() != 32 {
             return WrongSizeSnafu {
                 expected: ImageSize { width: 32, height: 32 },
@@ -227,7 +227,7 @@ impl BannerImages {
             .fail();
         }
 
-        let palette_image = Reader::open(path.join(&self.palette_path))?.decode()?;
+        let palette_image = ImageReader::open(path.join(&self.palette_path))?.decode()?;
         if palette_image.width() != 16 || palette_image.height() != 1 {
             return WrongSizeSnafu {
                 expected: ImageSize { width: 16, height: 1 },
