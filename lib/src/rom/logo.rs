@@ -1,6 +1,6 @@
 use std::{fmt::Display, io, path::Path};
 
-use image::{io::Reader, GenericImageView, GrayImage, ImageError, Luma};
+use image::{GenericImageView, GrayImage, ImageError, ImageReader, Luma};
 use snafu::{Backtrace, Snafu};
 
 use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode};
@@ -175,7 +175,7 @@ impl Logo {
     ///
     /// This function will return an error if it failed to open or decode the image, or the image has the wrong size or colors.
     pub fn from_png<P: AsRef<Path>>(path: P) -> Result<Self, LogoLoadError> {
-        let image = Reader::open(path)?.decode()?;
+        let image = ImageReader::open(path)?.decode()?;
         if image.width() != WIDTH as u32 || image.height() != HEIGHT as u32 {
             ImageSizeSnafu {
                 expected: ImageSize { width: WIDTH as u32, height: HEIGHT as u32 },

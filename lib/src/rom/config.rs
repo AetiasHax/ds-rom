@@ -49,6 +49,9 @@ pub struct RomConfig {
     /// Path to HMAC SHA1 key file for ARM9
     pub arm9_hmac_sha1_key: Option<PathBuf>,
 
+    /// Path to multiboot signature YAML
+    pub multiboot_signature: Option<PathBuf>,
+
     /// Alignment of ROM sections
     pub alignment: RomConfigAlignment,
 }

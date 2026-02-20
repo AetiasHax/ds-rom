@@ -7,9 +7,8 @@ use bitfield_struct::bitfield;
 use bytemuck::{Pod, PodCastError, Zeroable};
 use snafu::{Backtrace, Snafu};
 
-use crate::rom::Arm9OverlaySignaturesError;
-
 use super::{RawArm9Error, RawHeaderError};
+use crate::rom::Arm9OverlaySignaturesError;
 
 /// An entry in an overlay table. This is the raw struct, see the plain one [here](super::super::Overlay).
 #[repr(C)]
@@ -75,7 +74,7 @@ pub enum RawOverlayError {
 impl Overlay {
     fn check_size(data: &[u8]) -> Result<(), RawOverlayError> {
         let size = size_of::<Self>();
-        if data.len() % size != 0 {
+        if !data.len().is_multiple_of(size) {
             InvalidSizeSnafu {}.fail()
         } else {
             Ok(())
@@ -106,7 +105,7 @@ impl Overlay {
     }
 
     /// Creates a [`DisplayOverlay`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayOverlay {
+    pub fn display(&self, indent: usize) -> DisplayOverlay<'_> {
         DisplayOverlay { overlay: self, indent }
     }
 }

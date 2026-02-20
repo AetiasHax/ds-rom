@@ -8,7 +8,10 @@ use super::{
 };
 use crate::{
     io::{open_file, write_file, FileError},
-    rom::{Arm7, Arm7Offsets, Arm9, Arm9Offsets, RomConfigAlignment},
+    rom::{
+        raw::{MultibootSignature, RawMultibootSignatureError},
+        Arm7, Arm7Offsets, Arm9, Arm9Offsets, RomConfigAlignment,
+    },
 };
 
 /// A raw DS ROM, see the plain struct [here](super::super::Rom).
@@ -102,7 +105,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`].
-    pub fn arm9(&self) -> Result<Arm9, RawArm9Error> {
+    pub fn arm9(&self) -> Result<Arm9<'_>, RawArm9Error> {
         let header = self.header()?;
         let start = header.arm9.offset as usize;
         let end = start + header.arm9.size as usize;
@@ -118,16 +121,13 @@ impl<'a> Rom<'a> {
             header.arm9_build_info_offset
         };
 
-        Ok(Arm9::new(
-            Cow::Borrowed(data),
-            Arm9Offsets {
-                base_address: header.arm9.base_addr,
-                entry_function: header.arm9.entry,
-                build_info: build_info_offset,
-                autoload_callback: header.arm9_autoload_callback,
-                overlay_signatures: footer.overlay_signatures_offset,
-            },
-        )?)
+        Ok(Arm9::new(Cow::Borrowed(data), Arm9Offsets {
+            base_address: header.arm9.base_addr,
+            entry_function: header.arm9.entry,
+            build_info: build_info_offset,
+            autoload_callback: header.arm9_autoload_callback,
+            overlay_signatures: footer.overlay_signatures_offset,
+        })?)
     }
 
     /// Returns a reference to the ARM9 footer of this [`Rom`].
@@ -178,7 +178,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::arm9`] and [`Self::arm9_overlay_table_with`].
-    pub fn arm9_overlay_table(&self) -> Result<OverlayTable, RawOverlayError> {
+    pub fn arm9_overlay_table(&self) -> Result<OverlayTable<'_>, RawOverlayError> {
         let arm9 = self.arm9()?;
         self.arm9_overlay_table_with(&arm9)
     }
@@ -188,7 +188,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::arm9_overlays`] and [`Arm9::overlay_table_signature`].
-    pub fn arm9_overlay_table_with(&self, arm9: &Arm9) -> Result<OverlayTable, RawOverlayError> {
+    pub fn arm9_overlay_table_with(&self, arm9: &Arm9) -> Result<OverlayTable<'_>, RawOverlayError> {
         let overlays = self.arm9_overlays()?;
         let signature = arm9.overlay_table_signature()?.cloned();
         Ok(OverlayTable::new(overlays, signature))
@@ -211,7 +211,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`].
-    pub fn arm7(&self) -> Result<Arm7, RawHeaderError> {
+    pub fn arm7(&self) -> Result<Arm7<'_>, RawHeaderError> {
         let header = self.header()?;
         let start = header.arm7.offset as usize;
         let end = start + header.arm7.size as usize;
@@ -220,15 +220,12 @@ impl<'a> Rom<'a> {
         let build_info_offset =
             if header.arm7_build_info_offset == 0 { 0 } else { header.arm7_build_info_offset - header.arm7.offset };
 
-        Ok(Arm7::new(
-            Cow::Borrowed(data),
-            Arm7Offsets {
-                base_address: header.arm7.base_addr,
-                entry_function: header.arm7.entry,
-                build_info: build_info_offset,
-                autoload_callback: header.arm7_autoload_callback,
-            },
-        ))
+        Ok(Arm7::new(Cow::Borrowed(data), Arm7Offsets {
+            base_address: header.arm7.base_addr,
+            entry_function: header.arm7.entry,
+            build_info: build_info_offset,
+            autoload_callback: header.arm7_autoload_callback,
+        }))
     }
 
     /// Returns the ARM7 overlay table of this [`Rom`].
@@ -253,7 +250,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::arm7_overlays`].
-    pub fn arm7_overlay_table(&self) -> Result<OverlayTable, RawOverlayError> {
+    pub fn arm7_overlay_table(&self) -> Result<OverlayTable<'_>, RawOverlayError> {
         let overlays = self.arm7_overlays()?;
         Ok(OverlayTable::new(overlays, None))
     }
@@ -275,7 +272,7 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`] and [`Fnt::borrow_from_slice`].
-    pub fn fnt(&self) -> Result<Fnt, RawFntError> {
+    pub fn fnt(&self) -> Result<Fnt<'_>, RawFntError> {
         let header = self.header()?;
         let start = header.file_names.offset as usize;
         let end = start + header.file_names.size as usize;
@@ -302,11 +299,28 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`] and [`Banner::borrow_from_slice`].
-    pub fn banner(&self) -> Result<Banner, RawBannerError> {
+    pub fn banner(&self) -> Result<Banner<'_>, RawBannerError> {
         let header = self.header()?;
         let start = header.banner_offset as usize;
         let data = &self.data[start..];
         Banner::borrow_from_slice(data)
+    }
+
+    /// Returns the multiboot signature of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`MultibootSignature::borrow_from_slice`].
+    pub fn multiboot_signature(&self) -> Result<Option<&MultibootSignature>, RawMultibootSignatureError> {
+        let header = self.header()?;
+        let start = header.rom_size_ds as usize;
+        let data = &self.data[start..];
+        match MultibootSignature::borrow_from_slice(data) {
+            Ok(s) => Ok(Some(s)),
+            Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None), // signature not found
+            Err(RawMultibootSignatureError::Misaligned { .. }) => Ok(None),   // not aligned by 4
+            Err(e) => Err(e),
+        }
     }
 
     /// Returns the padding value in the file image block of this [`Rom`].

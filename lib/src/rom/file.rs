@@ -158,7 +158,7 @@ impl<'a> FileSystem<'a> {
     }
 
     /// Returns a file.
-    pub fn file(&self, id: u16) -> &File {
+    pub fn file(&self, id: u16) -> &File<'a> {
         &self.files[id as usize - self.num_overlays]
     }
 
@@ -237,7 +237,7 @@ impl<'a> FileSystem<'a> {
         }
     }
 
-    fn build_subtable(&self, parent: &Dir) -> Result<FntSubtable, FileBuildError> {
+    fn build_subtable(&self, parent: &Dir) -> Result<FntSubtable<'a>, FileBuildError> {
         let mut data = vec![];
 
         for child in &parent.children {
@@ -287,7 +287,7 @@ impl<'a> FileSystem<'a> {
     /// # Errors
     ///
     /// This function will return an error if a file/directory name contains non-ASCII characters.
-    pub fn build_fnt(&self) -> Result<Fnt, FileBuildError> {
+    pub fn build_fnt(&self) -> Result<Fnt<'_>, FileBuildError> {
         let mut subtables = vec![];
         self.build_fnt_recursive(&mut subtables, ROOT_DIR_ID)?;
         Ok(Fnt { subtables: subtables.into_boxed_slice() })
@@ -385,7 +385,7 @@ impl<'a> FileSystem<'a> {
         self.dirs.last().unwrap()
     }
 
-    fn make_child_file(&mut self, name: String, parent_id: u16, contents: Vec<u8>) -> &File {
+    fn make_child_file(&mut self, name: String, parent_id: u16, contents: Vec<u8>) -> &File<'a> {
         let id = self.next_file_id;
         self.files.push(File { id, name, original_offset: 0, contents: contents.into() });
         let parent = self.dir_mut(parent_id);
@@ -471,7 +471,7 @@ impl<'a> FileSystem<'a> {
     }
 
     /// Creates a [`DisplayFileSystem`] which implements [`Display`].
-    pub fn display(&self, indent: usize) -> DisplayFileSystem {
+    pub fn display(&self, indent: usize) -> DisplayFileSystem<'_> {
         DisplayFileSystem { files: self, parent_id: ROOT_DIR_ID, indent }
     }
 

@@ -80,7 +80,7 @@ impl NibbleHuffman {
     ///
     /// Panics if `data.len()` is not a multiple of 2.
     pub fn diff16_to_data(&self, data: &mut [u8]) {
-        assert!(data.len() % 2 == 0);
+        assert!(data.len().is_multiple_of(2));
         let mut prev = 0;
         for i in (0..data.len()).step_by(2) {
             let curr = u16::from_le_bytes([data[i], data[i + 1]]);
@@ -100,7 +100,7 @@ impl NibbleHuffman {
     ///
     /// Panics if `data.len()` is not a multiple of 2.
     pub fn data_to_diff16(&self, data: &mut [u8]) {
-        assert!(data.len() % 2 == 0);
+        assert!(data.len().is_multiple_of(2));
         let mut prev = 0;
         for i in (0..data.len()).step_by(2) {
             let curr = u16::from_le_bytes([data[i], data[i + 1]]);

@@ -75,6 +75,8 @@ impl Dump {
             DumpCommand::Arm7Overlay(dump_arm7_overlay) => dump_arm7_overlay.run(&rom),
             DumpCommand::Arm9Footer(dump_arm9_footer) => dump_arm9_footer.run(&rom),
             DumpCommand::Arm9OverlaySignatures(dump_arm9_overlay_signatures) => dump_arm9_overlay_signatures.run(&rom),
+            DumpCommand::MultibootSignature(dump_multiboot_signature) => dump_multiboot_signature.run(&rom),
+            DumpCommand::Libraries(dump_libraries) => dump_libraries.run(&rom),
         }
     }
 }
@@ -103,6 +105,10 @@ enum DumpCommand {
     Arm9Footer(DumpArm9Footer),
     #[command(name = "arm9-ov-sigs")]
     Arm9OverlaySignatures(DumpArm9OverlaySignatures),
+    #[command(name = "mb-sig")]
+    MultibootSignature(DumpMultibootSignature),
+    #[command(name = "libs")]
+    Libraries(DumpLibraries),
 }
 
 /// Shows the contents of the ROM header.
@@ -490,6 +496,44 @@ impl DumpArm9OverlaySignatures {
                     println!("ARM9 overlay {} has no signature", overlay.id());
                 }
             }
+        }
+
+        Ok(())
+    }
+}
+
+/// Prints the multiboot (download play) signature.
+#[derive(Args)]
+struct DumpMultibootSignature {}
+
+impl DumpMultibootSignature {
+    pub fn run(&self, raw_rom: &raw::Rom) -> Result<()> {
+        let rom = Rom::extract(raw_rom)?;
+
+        if let Some(multiboot_signature) = rom.multiboot_signature() {
+            println!("{}", multiboot_signature.display(2));
+        } else {
+            println!("No multiboot signature found");
+        }
+
+        Ok(())
+    }
+}
+
+/// Prints libraries used by the game.
+#[derive(Args)]
+pub struct DumpLibraries {}
+
+impl DumpLibraries {
+    pub fn run(&self, raw_rom: &raw::Rom) -> Result<()> {
+        let arm9 = raw_rom.arm9()?;
+        let libraries = arm9.libraries()?;
+
+        if libraries.is_empty() {
+            println!("No libraries found");
+        }
+        for library in libraries {
+            println!("{}", library.display(2));
         }
 
         Ok(())

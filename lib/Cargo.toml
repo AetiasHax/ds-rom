@@ -1,6 +1,6 @@
 [package]
 name = "ds-rom"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 authors = ["Aetias <aetias@outlook.com>"]
 license = "MIT"
@@ -9,22 +9,22 @@ readme = "../README.md"
 description = "Library for extracting/building Nintendo DS ROMs."
 
 [dependencies]
-bitfield-struct = "0.8.0"
-bitreader = "0.3.8"
-bytemuck = { version = "1.16.1", features = ["derive"] }
-crc = "3.2.1"
-encoding_rs = "0.8.34"
-image = { version = "0.25.1", default-features = false, features = ["png"] }
-log = "0.4.22"
-rust-bitwriter = "0.0.1"
-serde = { version = "1.0.204", features = ["derive"] }
-serde_yml = "0.0.10"
-sha1 = "0.10.6"
-snafu = { version = "0.8.3", features = ["backtrace"] }
+bitfield-struct = "0.12"
+bitreader = "0.3"
+bytemuck = { version = "1.25", features = ["derive"] }
+crc = "3.4"
+encoding_rs = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+rust-bitwriter = "0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde-saphyr = "0.0"
+sha1 = "0.10"
+snafu = { version = "0.8", features = ["backtrace"] }
 
 [dev-dependencies]
-anyhow = "1.0.86"
-env_logger = "0.11.5"
+anyhow = "1.0"
+env_logger = "0.11"
 
 [lints.clippy]
 needless_range_loop = "allow"

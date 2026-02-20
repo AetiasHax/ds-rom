@@ -1,8 +1,7 @@
 use std::{borrow::Cow, fmt::Display};
 
-use crate::crypto::hmac_sha1::HmacSha1;
-
 use super::{HmacSha1Signature, Overlay};
+use crate::crypto::hmac_sha1::HmacSha1;
 
 /// An overlay table, used for both ARM9 and ARM7 overlays. This is the raw struct, see the plain one [here](crate::rom::OverlayTable).
 pub struct OverlayTable<'a> {

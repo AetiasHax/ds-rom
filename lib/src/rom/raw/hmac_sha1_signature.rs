@@ -49,7 +49,7 @@ impl HmacSha1Signature {
 
     fn check_size(data: &[u8]) -> Result<(), HmacSha1SignatureError> {
         let size = size_of::<Self>();
-        if data.len() % size != 0 {
+        if !data.len().is_multiple_of(size) {
             InvalidSizeSnafu {}.fail()
         } else {
             Ok(())

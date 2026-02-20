@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io, mem::replace, ops::Range};
+use std::{borrow::Cow, io, mem::replace, ops::Range, str::Utf8Error};
 
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
@@ -14,6 +14,7 @@ use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
     crc::CRC_16_MODBUS,
     crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
+    rom::LibraryEntry,
 };
 
 /// ARM9 program.
@@ -352,6 +353,43 @@ impl<'a> Arm9<'a> {
         BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info as usize..])
     }
 
+    /// Returns the library version strings in this [`Arm9`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if a library string is not valid UTF-8.
+    pub fn libraries(&self) -> Result<Box<[LibraryEntry<'_>]>, Utf8Error> {
+        let libraries_start = self.offsets.build_info as usize + size_of::<BuildInfo>();
+        let mut address = self.base_address() + libraries_start as u32;
+        let mut data = &self.data[libraries_start..];
+
+        let mut libraries = Vec::new();
+
+        'outer: while data[0] == b'[' {
+            let Some((end_pos, _)) = data.iter().enumerate().find(|(_, c)| **c == b']') else {
+                break;
+            };
+            let version_string = str::from_utf8(&data[..end_pos + 1])?;
+
+            libraries.push(LibraryEntry::new(address, version_string));
+
+            address += end_pos as u32 + 1;
+            data = &data[end_pos + 1..];
+            loop {
+                match data[0] {
+                    b'\0' => {
+                        address += 1;
+                        data = &data[1..]
+                    }
+                    b'[' => break,
+                    _ => break 'outer,
+                }
+            }
+        }
+
+        Ok(libraries.into_boxed_slice())
+    }
+
     /// Returns whether this ARM9 program is compressed. See [`Self::originally_compressed`] for whether the program was
     /// compressed originally.
     ///
@@ -442,7 +480,7 @@ impl<'a> Arm9<'a> {
     ///
     /// This function will return an error if [`Self::build_info`] or [`Self::get_autoload_infos`] fails or this ARM9 program
     /// is compressed.
-    pub fn autoloads(&self) -> Result<Box<[Autoload]>, Arm9AutoloadError> {
+    pub fn autoloads(&self) -> Result<Box<[Autoload<'_>]>, Arm9AutoloadError> {
         let build_info = self.build_info()?;
         if build_info.is_compressed() {
             CompressedSnafu {}.fail()?;
@@ -507,7 +545,7 @@ impl<'a> Arm9<'a> {
         if end > self.data.len() {
             return Ok(None);
         }
-        return Ok(Some(start..end));
+        Ok(Some(start..end))
     }
 
     /// Returns the ARM9 overlay table signature.
@@ -555,7 +593,7 @@ impl<'a> Arm9<'a> {
         if end > self.data.len() {
             return Ok(None);
         }
-        return Ok(Some(start..end));
+        Ok(Some(start..end))
     }
 
     /// Returns the ARM9 overlay signature table.

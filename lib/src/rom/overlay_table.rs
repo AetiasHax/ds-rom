@@ -1,9 +1,8 @@
-use crate::crypto::hmac_sha1::HmacSha1;
-
 use super::{
     raw::{self, HmacSha1Signature},
     Arm9, Overlay, OverlayError,
 };
+use crate::crypto::hmac_sha1::HmacSha1;
 
 /// An overlay table, used for both ARM9 and ARM7 overlays. This is the plain struct, see the raw one [here](super::raw::OverlayTable).
 #[derive(Clone, Default)]
@@ -21,6 +20,11 @@ impl<'a> OverlayTable<'a> {
     /// Returns a reference to the overlays of this [`OverlayTable`].
     pub fn overlays(&self) -> &[Overlay<'a>] {
         &self.overlays
+    }
+
+    /// Returns a mutable reference to the overlays of this [`OverlayTable`].
+    pub fn overlays_mut(&mut self) -> &mut [Overlay<'a>] {
+        &mut self.overlays
     }
 
     /// Returns the length of this [`OverlayTable`].
@@ -58,7 +62,7 @@ impl<'a> OverlayTable<'a> {
     }
 
     /// Builds a raw overlay table.
-    pub fn build(&self) -> raw::OverlayTable {
+    pub fn build(&self) -> raw::OverlayTable<'a> {
         let overlays: Vec<raw::Overlay> = self.overlays.iter().map(|overlay| overlay.build()).collect();
         let signature = self.signature;
         raw::OverlayTable::new(overlays, signature)
