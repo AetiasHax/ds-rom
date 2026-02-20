@@ -545,7 +545,7 @@ impl<'a> Arm9<'a> {
         if end > self.data.len() {
             return Ok(None);
         }
-        return Ok(Some(start..end));
+        Ok(Some(start..end))
     }
 
     /// Returns the ARM9 overlay table signature.
@@ -593,7 +593,7 @@ impl<'a> Arm9<'a> {
         if end > self.data.len() {
             return Ok(None);
         }
-        return Ok(Some(start..end));
+        Ok(Some(start..end))
     }
 
     /// Returns the ARM9 overlay signature table.
