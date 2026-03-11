@@ -319,6 +319,7 @@ impl<'a> Rom<'a> {
             Ok(s) => Ok(Some(s)),
             Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None), // signature not found
             Err(RawMultibootSignatureError::Misaligned { .. }) => Ok(None),   // not aligned by 4
+            Err(RawMultibootSignatureError::DataTooSmall { .. }) => Ok(None), // signature truncated or absent at EOF
             Err(e) => Err(e),
         }
     }
