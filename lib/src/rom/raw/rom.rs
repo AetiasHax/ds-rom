@@ -318,6 +318,7 @@ impl<'a> Rom<'a> {
         match MultibootSignature::from_slice(data) {
             Ok(s) => Ok(Some(s)),
             Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None), // signature not found
+            Err(RawMultibootSignatureError::DataTooSmall { .. }) => Ok(None), // signature truncated or absent at EOF
             Err(e) => Err(e),
         }
     }
