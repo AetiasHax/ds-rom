@@ -311,14 +311,13 @@ impl<'a> Rom<'a> {
     /// # Errors
     ///
     /// See [`Self::header`] and [`MultibootSignature::borrow_from_slice`].
-    pub fn multiboot_signature(&self) -> Result<Option<&MultibootSignature>, RawMultibootSignatureError> {
+    pub fn multiboot_signature(&self) -> Result<Option<MultibootSignature>, RawMultibootSignatureError> {
         let header = self.header()?;
         let start = header.rom_size_ds as usize;
         let data = &self.data[start..];
-        match MultibootSignature::borrow_from_slice(data) {
+        match MultibootSignature::from_slice(data) {
             Ok(s) => Ok(Some(s)),
             Err(RawMultibootSignatureError::InvalidMagic { .. }) => Ok(None), // signature not found
-            Err(RawMultibootSignatureError::Misaligned { .. }) => Ok(None),   // not aligned by 4
             Err(e) => Err(e),
         }
     }

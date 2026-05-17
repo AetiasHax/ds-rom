@@ -1,6 +1,6 @@
 use std::{backtrace::Backtrace, fmt::Display};
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
@@ -38,16 +38,6 @@ pub enum RawMultibootSignatureError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`MultibootSignature`].
-    #[snafu(display("expected {expected}-alignment but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
     /// Occurs when the magic number does not match [`MULTIBOOT_SIGNATURE_MAGIC`].
     #[snafu(display("expected magic number {expected:#010x} but got {actual:#010x}:\n{backtrace}"))]
     InvalidMagic {
@@ -70,28 +60,19 @@ impl MultibootSignature {
         }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, RawMultibootSignatureError> {
-        match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
-    }
-
-    /// Reinterprets a `&[u8]` as a reference to [`MultibootSignature`].
+    /// Creates a [`MultibootSignature`] from `&[u8]`.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the input is too small or not aligned enough.
-    pub fn borrow_from_slice(data: &[u8]) -> Result<&Self, RawMultibootSignatureError> {
+    /// This function will return an error if the input is too small or has the wrong magic header.
+    pub fn from_slice(data: &[u8]) -> Result<Self, RawMultibootSignatureError> {
         let size = size_of::<Self>();
         Self::check_size(data)?;
-        let addr = data as *const [u8] as *const () as usize;
-        let multiboot_signature: &Self = Self::handle_pod_cast(bytemuck::try_from_bytes(&data[..size]), addr)?;
+
+        let mut multiboot_signature = Self::zeroed();
+        let signature_bytes = bytemuck::bytes_of_mut(&mut multiboot_signature);
+        signature_bytes.copy_from_slice(&data[..size]);
+
         if multiboot_signature.magic != MULTIBOOT_SIGNATURE_MAGIC {
             return InvalidMagicSnafu { expected: MULTIBOOT_SIGNATURE_MAGIC, actual: multiboot_signature.magic }.fail();
         }

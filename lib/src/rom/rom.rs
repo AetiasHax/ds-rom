@@ -715,7 +715,7 @@ impl<'a> Rom<'a> {
 
         let has_arm9_hmac_sha1 = decompressed_arm9.hmac_sha1_key()?.is_some();
 
-        let multiboot_signature = rom.multiboot_signature()?.cloned();
+        let multiboot_signature = rom.multiboot_signature()?;
 
         let alignment = rom.alignments()?;
 
