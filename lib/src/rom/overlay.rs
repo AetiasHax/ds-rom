@@ -16,6 +16,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Overlay<'a> {
     originally_compressed: bool,
+    originally_signed: bool,
     info: OverlayInfo,
     signature: Option<HmacSha1Signature>,
     data: Cow<'a, [u8]>,
@@ -27,6 +28,8 @@ const LZ77: Lz77 = Lz77 {};
 pub struct OverlayOptions {
     /// Whether the overlay was originally compressed.
     pub originally_compressed: bool,
+    /// Whether the overlay was originally signed.
+    pub originally_signed: bool,
     /// Overlay info.
     pub info: OverlayInfo,
 }
@@ -75,10 +78,10 @@ pub enum OverlayError {
 impl<'a> Overlay<'a> {
     /// Creates a new [`Overlay`] from plain data.
     pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, options: OverlayOptions) -> Result<Self, OverlayError> {
-        let OverlayOptions { originally_compressed, info } = options;
+        let OverlayOptions { originally_compressed, originally_signed, info } = options;
         let data = data.into();
 
-        Ok(Self { originally_compressed, info, signature: None, data })
+        Ok(Self { originally_compressed, originally_signed, info, signature: None, data })
     }
 
     /// Parses an ARM9 [`Overlay`] from a ROM.
@@ -101,6 +104,7 @@ impl<'a> Overlay<'a> {
 
         let overlay = Self {
             originally_compressed: overlay.flags.is_compressed(),
+            originally_signed: overlay.flags.is_signed(),
             info: OverlayInfo::new(overlay),
             signature,
             data: Cow::Borrowed(data),
@@ -126,6 +130,7 @@ impl<'a> Overlay<'a> {
 
         let overlay = Self {
             originally_compressed: overlay.flags.is_compressed(),
+            originally_signed: overlay.flags.is_signed(),
             info: OverlayInfo::new(overlay),
             signature: None,
             data: Cow::Borrowed(data),
@@ -201,7 +206,8 @@ impl<'a> Overlay<'a> {
         self.info.compressed
     }
 
-    /// Returns whether this [`Overlay`] has a signature.
+    /// Returns whether this [`Overlay`] has a signature. See [`Self::originally_signed`] for whether this overlay was
+    /// signed originally.
     pub fn is_signed(&self) -> bool {
         self.signature.is_some()
     }
@@ -248,6 +254,11 @@ impl<'a> Overlay<'a> {
     /// Returns whether this [`Overlay`] was compressed originally. See [`Self::is_compressed`] for the current state.
     pub fn originally_compressed(&self) -> bool {
         self.originally_compressed
+    }
+
+    /// Returns whether this [`Overlay`] was compressed signed. See [`Self::is_signed`] for the current state.
+    pub fn originally_signed(&self) -> bool {
+        self.originally_signed
     }
 
     /// Computes the signature of this [`Overlay`] using the given HMAC-SHA1 key.

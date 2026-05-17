@@ -476,7 +476,11 @@ impl<'a> Rom<'a> {
             let data = read_file(path.join(config.file_name))?;
             let compressed = config.info.compressed;
             config.info.compressed = false;
-            let mut overlay = Overlay::new(data, OverlayOptions { info: config.info, originally_compressed: compressed })?;
+            let mut overlay = Overlay::new(data, OverlayOptions {
+                info: config.info,
+                originally_compressed: compressed,
+                originally_signed: config.signed,
+            })?;
 
             if options.compress {
                 if compressed {
