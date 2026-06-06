@@ -13,7 +13,10 @@ use super::{
 use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
     crc::CRC_16_MODBUS,
-    crypto::blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
+    crypto::{
+        blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
+        dsprot::{DsProtDecryptDetails, DsProtError, DsProtInfo},
+    },
     rom::LibraryEntry,
 };
 
@@ -161,6 +164,30 @@ pub enum Arm9HmacSha1KeyError {
     HmacSha1KeyCompressed {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
+    },
+}
+
+/// Errors related to [`Arm9::dsprot_info`].
+#[derive(Debug, Snafu)]
+#[snafu(module)]
+pub enum Arm9DsProtInfoError {
+    /// See [`RawBuildInfoError`].
+    #[snafu(transparent)]
+    RawBuildInfo {
+        /// Source error.
+        source: RawBuildInfoError,
+    },
+    /// Occurs when trying to detect DS Protect while the ARM9 program is compressed.
+    #[snafu(display("ARM9 program must be decompressed before detecting DS Protect:\n{backtrace}"))]
+    Compressed {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`DsProtError`].
+    #[snafu(transparent)]
+    DsProtError {
+        /// Source error.
+        source: DsProtError,
     },
 }
 
@@ -720,6 +747,36 @@ impl<'a> Arm9<'a> {
         }
 
         Ok(())
+    }
+
+    /// Looks for DS Protect inside this ARM9 program.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the program is compressed.
+    pub fn dsprot_info(&self) -> Result<Option<DsProtInfo>, Arm9DsProtInfoError> {
+        if self.is_compressed()? {
+            arm9_ds_prot_info_error::CompressedSnafu.fail()
+        } else {
+            Ok(DsProtInfo::detect(&self.data))
+        }
+    }
+
+    /// Decrypts all functions in this ARM9 program that were encrypted by DS Protect.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`DsProtInfo::decrypt`] fails.
+    pub fn decrypt_dsprot(&mut self) -> Result<Option<DsProtDecryptDetails>, Arm9DsProtInfoError> {
+        let Some(dsprot_info) = self.dsprot_info()? else {
+            // DS Protect is not used
+            return Ok(None);
+        };
+
+        let base_address = self.base_address();
+        let details = dsprot_info.decrypt(self.data.to_mut(), base_address)?;
+
+        Ok(Some(details))
     }
 }
 

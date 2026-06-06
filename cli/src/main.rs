@@ -16,6 +16,9 @@ use log::LevelFilter;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
+    #[arg(long)]
+    debug: bool,
 }
 
 #[derive(Subcommand)]
@@ -36,9 +39,9 @@ impl Command {
 }
 
 fn main() -> Result<()> {
-    env_logger::builder().filter_level(LevelFilter::Info).init();
-
     let args: Cli = Cli::parse();
+    env_logger::builder().filter_level(if args.debug { LevelFilter::Debug } else { LevelFilter::Info }).init();
+
     args.command.run()
 }
 

@@ -9,7 +9,10 @@ use super::{
 };
 use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
-    crypto::hmac_sha1::HmacSha1,
+    crypto::{
+        dsprot::{DsProtDecryptDetails, DsProtError, DsProtInfo},
+        hmac_sha1::HmacSha1,
+    },
 };
 
 /// An overlay module for ARM9/ARM7.
@@ -72,6 +75,24 @@ pub enum OverlayError {
     OverlayCompression {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
+    },
+}
+
+/// Errors related to [`Overlay::dsprot_info`] and [`Overlay::decrypt_dsprot`].
+#[derive(Debug, Snafu)]
+#[snafu(module)]
+pub enum OverlayDsProtError {
+    /// Occurs when trying to detect DS Protect while the overlay is compressed.
+    #[snafu(display("overlay must be decompressed before detecting DS Protect:\n{backtrace}"))]
+    Compressed {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`DsProtError`].
+    #[snafu(transparent)]
+    DsProtError {
+        /// Source error.
+        source: DsProtError,
     },
 }
 
@@ -289,6 +310,36 @@ impl<'a> Overlay<'a> {
     pub fn sign(&mut self, hmac_sha1: &HmacSha1) -> Result<(), OverlayError> {
         self.signature = Some(self.compute_signature(hmac_sha1)?);
         Ok(())
+    }
+
+    /// Looks for DS Protect inside this overlay.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the overlay is compressed.
+    pub fn dsprot_info(&self) -> Result<Option<DsProtInfo>, OverlayDsProtError> {
+        if self.is_compressed() {
+            overlay_ds_prot_error::CompressedSnafu.fail()
+        } else {
+            Ok(DsProtInfo::detect(&self.data))
+        }
+    }
+
+    /// Decrypts all functions in this overlay that were encrypted by DS Protect.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if [`DsProtInfo::decrypt`] fails.
+    pub fn decrypt_dsprot(&mut self) -> Result<Option<DsProtDecryptDetails>, OverlayDsProtError> {
+        let Some(dsprot_info) = self.dsprot_info()? else {
+            // DS Protect is not used
+            return Ok(None);
+        };
+
+        let base_address = self.base_address();
+        let details = dsprot_info.decrypt(self.data.to_mut(), base_address)?;
+
+        Ok(Some(details))
     }
 }
 

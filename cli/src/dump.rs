@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -77,6 +77,7 @@ impl Dump {
             DumpCommand::Arm9OverlaySignatures(dump_arm9_overlay_signatures) => dump_arm9_overlay_signatures.run(&rom),
             DumpCommand::MultibootSignature(dump_multiboot_signature) => dump_multiboot_signature.run(&rom),
             DumpCommand::Libraries(dump_libraries) => dump_libraries.run(&rom),
+            DumpCommand::DsProt(dump_dsprot) => dump_dsprot.run(&rom),
         }
     }
 }
@@ -109,6 +110,8 @@ enum DumpCommand {
     MultibootSignature(DumpMultibootSignature),
     #[command(name = "libs")]
     Libraries(DumpLibraries),
+    #[command(name = "dsprot")]
+    DsProt(DumpDsProt),
 }
 
 /// Shows the contents of the ROM header.
@@ -534,6 +537,57 @@ impl DumpLibraries {
         }
         for library in libraries {
             println!("{}", library.display(2));
+        }
+
+        Ok(())
+    }
+}
+
+/// Prints information about DS Protect usage.
+#[derive(Args)]
+pub struct DumpDsProt {
+    #[arg(long)]
+    yaml: bool,
+}
+
+impl DumpDsProt {
+    pub fn run(&self, raw_rom: &raw::Rom) -> Result<()> {
+        let mut rom = Rom::extract(raw_rom)?;
+
+        let arm9 = rom.arm9_mut();
+        arm9.decompress()?;
+        for overlay in rom.arm9_overlays_mut() {
+            overlay.decompress()?;
+        }
+
+        let arm9 = rom.arm9_mut();
+        if !self.yaml {
+            if let Some(dsprot_info) = arm9.dsprot_info()? {
+                println!("DS Protect found in ARM9 main:\n{}", dsprot_info.display(2));
+                if let Some(details) = arm9.decrypt_dsprot()? {
+                    println!("Result from decryption:\n{}", details.display(2));
+                }
+            }
+
+            for overlay in rom.arm9_overlays_mut() {
+                if let Some(dsprot_info) = overlay.dsprot_info()? {
+                    println!("DS Protect found in ARM9 overlay {}:\n{}", overlay.id(), dsprot_info.display(2));
+                    if let Some(details) = overlay.decrypt_dsprot()? {
+                        println!("Result from decryption:\n{}", details.display(2));
+                    }
+                }
+            }
+        } else {
+            let mut details_list = HashMap::new();
+            if let Some(details) = arm9.decrypt_dsprot()? {
+                details_list.insert("arm9".to_string(), details);
+            }
+            for overlay in rom.arm9_overlays_mut() {
+                if let Some(details) = overlay.decrypt_dsprot()? {
+                    details_list.insert(format!("ov{:03}", overlay.id()), details);
+                }
+            }
+            serde_saphyr::to_io_writer(&mut std::io::stdout().lock(), &details_list)?;
         }
 
         Ok(())

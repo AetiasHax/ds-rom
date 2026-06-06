@@ -340,6 +340,7 @@ dependencies = [
  "ds-rom",
  "env_logger",
  "log",
+ "serde-saphyr",
 ]
 
 [[package]]
