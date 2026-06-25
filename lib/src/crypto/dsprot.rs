@@ -108,6 +108,7 @@ const DSPROT_VERSIONS: &[DsProtVersion] = &[
             reference_offset: 0x3200,
             unkeyed_encryption_xor: 0x0976afcc,
             precalculated_seed_key: 0xfa8fd0ea,
+            encrypt_opcode: |curr, prev| curr ^ prev,
         },
     },
     DsProtVersion {
@@ -117,6 +118,7 @@ const DSPROT_VERSIONS: &[DsProtVersion] = &[
             reference_offset: 0x3200,
             unkeyed_encryption_xor: 0x0976afcc,
             precalculated_seed_key: 0xfa8fd0ea,
+            encrypt_opcode: |curr, prev| curr ^ prev,
         },
     },
     DsProtVersion {
@@ -126,6 +128,7 @@ const DSPROT_VERSIONS: &[DsProtVersion] = &[
             reference_offset: 0x2200,
             unkeyed_encryption_xor: 0x0a471abb,
             precalculated_seed_key: 0x89ede4ea,
+            encrypt_opcode: |curr, prev| curr.wrapping_sub(prev),
         },
     },
     DsProtVersion {
@@ -135,6 +138,7 @@ const DSPROT_VERSIONS: &[DsProtVersion] = &[
             reference_offset: 0x2200,
             unkeyed_encryption_xor: 0x0a471abb,
             precalculated_seed_key: 0x89ede4ea,
+            encrypt_opcode: |curr, prev| curr.wrapping_sub(prev),
         },
     },
 ];
@@ -240,7 +244,7 @@ impl DsProtInfo {
         // Make 32-bit chunks
         let words: &mut [u32] = bytemuck::cast_slice_mut(data);
 
-        self.version.algo.decrypt(words, &AlgoDecryptOptions { base_address, end_address })
+        self.version.algo.decrypt(words, &AlgoDecryptOptions { base_address, end_address, version: self.version.number })
     }
 
     /// Creates a [`DisplayDsProtInfo`] which implements [`Display`].
@@ -290,14 +294,15 @@ impl Display for DisplayDsProtInfo<'_> {
 struct AlgoDecryptOptions {
     base_address: u32,
     end_address: u32,
+    version: &'static str,
 }
 
 const DECRYPTION_WRAPPER_SIGNATURE_1: [u32; 3] = [0xe92d00f0, 0xe92d000f, 0xe8bd00f0];
 const DECRYPTION_WRAPPER_SIGNATURE_2: [u32; 4] = [0xe18fc00f, 0xe01cc00c, 0x03a0c000, 0x128cc01c];
 const DECRYPTION_WRAPPER_SIGNATURE_3: [u32; 4] = [0xe18fc00f, 0xe01cc00c, 0x03a0c000, 0x128cc068];
+const DECRYPTION_WRAPPER_SIGNATURE_4: [u32; 4] = [0xe18fc00f, 0xe01cc00c, 0x03a0c000, 0x128cc08c];
 
 trait DsProtAlgo {
-    fn algorithm(&self) -> DsProtAlgoVersion;
     fn reference_offset(&self) -> u32;
     fn integrity_check_offset(&self) -> u32;
     fn unkeyed_encryption_xor(&self) -> u32;
@@ -331,7 +336,7 @@ trait DsProtAlgo {
         encrypted_functions.sort_unstable_by_key(|f| f.address);
 
         Ok(DsProtDecryptDetails::Post1_23 {
-            algorithm: self.algorithm(),
+            version: options.version,
             dsprot_bss,
             encrypted_functions,
             encoded_function_pointers,
@@ -344,9 +349,11 @@ trait DsProtAlgo {
         let mut signature_1 = DECRYPTION_WRAPPER_SIGNATURE_1;
         let mut signature_2 = DECRYPTION_WRAPPER_SIGNATURE_2;
         let mut signature_3 = DECRYPTION_WRAPPER_SIGNATURE_3;
+        let mut signature_4 = DECRYPTION_WRAPPER_SIGNATURE_4;
         let signature_1 = self.unkeyed_encrypt_decryption_wrapper(&mut signature_1);
         let signature_2 = self.unkeyed_encrypt_decryption_wrapper(&mut signature_2);
         let signature_3 = self.unkeyed_encrypt_decryption_wrapper(&mut signature_3);
+        let signature_4 = self.unkeyed_encrypt_decryption_wrapper(&mut signature_4);
 
         for (i, window) in words.windows(4).enumerate() {
             let func_size = if &window[0..3] == signature_1 {
@@ -355,6 +362,8 @@ trait DsProtAlgo {
                 0x24
             } else if window == signature_3 {
                 0x70
+            } else if window == signature_4 {
+                0x94
             } else {
                 continue;
             };
@@ -540,9 +549,9 @@ trait DsProtAlgo {
                 pool_words[1] = dest_func_size;
                 pool_words[2] = seed_key;
                 pool_words[3] = dest_func_address;
+                // sanity check that this looks like a RAM address
                 let with_garbage = garbage_address >> 24 == 0x02;
                 if with_garbage {
-                    // sanity check that this looks like a RAM address
                     pool_words[4] = garbage_address;
                 }
 
@@ -574,9 +583,9 @@ trait DsProtAlgo {
                 pool_words[2] = dest_func_address;
                 pool_words[3] = dest_func_size;
                 pool_words[5] = wrapper_fragment;
+                // sanity check that this looks like a RAM address
                 let with_garbage = garbage_address >> 24 == 0x02;
                 if with_garbage {
-                    // sanity check that this looks like a RAM address
                     pool_words[6] = garbage_address;
                 }
 
@@ -592,7 +601,9 @@ trait DsProtAlgo {
                     encryption: EncryptionType::Keyed(seed_key),
                     constant_pool: EncodedConstantPool::None,
                 });
-            } else if func_words.len() >= 4 && func_words[0..4] == DECRYPTION_WRAPPER_SIGNATURE_3 {
+            } else if func_words.len() >= 4
+                && (func_words[0..4] == DECRYPTION_WRAPPER_SIGNATURE_3 || func_words[0..4] == DECRYPTION_WRAPPER_SIGNATURE_4)
+            {
                 let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 7)?;
 
                 let bss = pool_words[0] - 1;
@@ -610,38 +621,11 @@ trait DsProtAlgo {
                 pool_words[2] = dest_func_address;
                 pool_words[3] = dest_func_size;
                 pool_words[5] = wrapper_fragment;
+                // sanity check that this looks like a RAM address
                 let with_garbage = garbage_address >> 24 == 0x02;
                 if with_garbage {
-                    // sanity check that this looks like a RAM address
                     pool_words[6] = garbage_address;
                 }
-
-                // let wrapper_fragment_offset = ((wrapper_fragment - base_address) / 4) as usize;
-                // let Some(wrapper_fragment_words) =
-                //     words.get(wrapper_fragment_offset..wrapper_fragment_offset + wrapper_fragment_size as usize)
-                // else {
-                //     return RangeOutOfBoundsSnafu {
-                //         what: "wrapper fragment",
-                //         start: wrapper_fragment,
-                //         end: wrapper_fragment + wrapper_fragment_size * 4,
-                //         base_address,
-                //         end_address,
-                //     }
-                //     .fail();
-                // };
-
-                // let mut seed_key = 0;
-                // for &word in wrapper_fragment_words {
-                //     println!("WORD {:#010x}", word);
-                //     let opcode = word >> 24;
-                //     if opcode == 0xea || opcode == 0xeb {
-                //         // skip branch instructions
-                //         continue;
-                //     }
-                //     seed_key ^= word.rotate_right(17);
-                //     seed_key = seed_key.wrapping_add(word.rotate_right(28));
-                //     seed_key ^= word.rotate_right(1);
-                // }
 
                 let seed_key = self.precalculated_seed_key().unwrap();
 
@@ -730,19 +714,21 @@ trait DsProtAlgo {
                 .fail();
             };
 
-            let mut chunk_iter = pool_words.chunks_exact_mut(2);
-            for chunk in chunk_iter.by_ref() {
-                if chunk[0] == 0 {
+            let mut pool_iter = pool_words.iter_mut();
+            while let Some(first) = pool_iter.next()
+                && let Some(second) = pool_iter.next()
+            {
+                if *first == 0 {
                     // End of list
                     break;
                 }
 
-                let func_address = chunk[0] - self.reference_offset();
-                let func_size = chunk[1] - dsprot_bss - self.reference_offset();
+                let func_address = *first - self.reference_offset();
+                let func_size = *second - dsprot_bss - self.reference_offset();
                 log::debug!("Found unkeyed encrypted function at {:#010x}, size {:#x}", func_address, func_size);
 
-                chunk[0] = func_address;
-                chunk[1] = func_size;
+                *first = func_address;
+                *second = func_size;
 
                 encrypted_functions.push(EncryptedFunction {
                     address: func_address,
@@ -753,13 +739,13 @@ trait DsProtAlgo {
             }
 
             // Decode pointer to garbage data
-            if with_garbage && let Some(next_chunk) = chunk_iter.next() {
-                next_chunk[0] -= self.reference_offset();
+            if with_garbage && let Some(next_chunk) = pool_iter.next() {
+                *next_chunk -= self.reference_offset();
                 log::debug!("Decoded garbage pointer after decoder function at {:#010x}", func_address);
             }
             // Decode pointer to this decoder function
-            if with_overwrite && let Some(next_chunk) = chunk_iter.next() {
-                next_chunk[0] -= self.reference_offset();
+            if with_overwrite && let Some(next_chunk) = pool_iter.next() {
+                *next_chunk -= self.reference_offset();
                 log::debug!("Decoded overwrite pointer after decoder function at {:#010x}", func_address);
             }
         }
@@ -865,7 +851,7 @@ trait DsProtAlgo {
                 pool_words[0] = test_fn_addr;
                 function.constant_pool = EncodedConstantPool::DummyDetector;
                 log::debug!("Decrypted dummy detector");
-            } else if func_start[0..4] == [0xe92d4ff8, 0xe94dd018, 0xe59fa100, 0xe59f6100] {
+            } else if func_start[0..4] == [0xe92d4ff8, 0xe24dd018, 0xe59fa100, 0xe59f6100] {
                 // MAC and ROM integrity checkers
                 let mac_integrity_fn_addr = pool_words[0] - reference_offset;
                 let mac_test_fn_addr = pool_words[1] - reference_offset;
@@ -903,7 +889,7 @@ trait DsProtAlgo {
         words: &mut [u32],
         encoded_function_pointers: &[EncodedFunctionPointer],
     ) -> Result<(), DsProtError> {
-        let &AlgoDecryptOptions { base_address, end_address } = options;
+        let &AlgoDecryptOptions { base_address, end_address, .. } = options;
         for &encoded_fn_ptr in encoded_function_pointers.iter() {
             let Some(encoded_fn) = words.get_mut((encoded_fn_ptr.0 - base_address) as usize / 4) else {
                 return OutOfBoundsSnafu {
@@ -1005,70 +991,50 @@ fn expand_seed_key(seed_key: u32, func_size: u32) -> [u32; 4] {
     ]
 }
 
-/// Defines each version of the de/encryption algorithm.
-#[derive(Serialize, Deserialize)]
-pub enum DsProtAlgoVersion {
-    /// Before 1.23
-    V1(DsProtAlgoV1),
-    /// Before 1.25
-    V2(DsProtAlgoV2),
-    /// 1.25 only
-    V3(DsProtAlgoV3),
-    /// Before 2.00
-    V4(DsProtAlgoV4),
-    /// Before 2.03
-    V5(DsProtAlgoV5),
-    /// 2.03 onwards
-    V6(DsProtAlgoV6),
-}
-
 /// Before 1.23
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct DsProtAlgoV1 {
     encrypted_range_start_signature: [u32; 5],
 }
 
 /// Before 1.25
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct DsProtAlgoV2 {
     reference_offset: u32,
     unkeyed_encryption_xor: u32,
 }
 
 /// 1.25 only
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct DsProtAlgoV3 {
     reference_offset: u32,
     unkeyed_encryption_xor: u32,
 }
 
 /// Before 2.00
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct DsProtAlgoV4 {
     reference_offset: u32,
     unkeyed_encryption_xor: u32,
 }
 
 /// Before 2.03
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct DsProtAlgoV5 {
     reference_offset: u32,
     unkeyed_encryption_xor: u32,
 }
 
 /// 2.03 onwards
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct DsProtAlgoV6 {
     reference_offset: u32,
     unkeyed_encryption_xor: u32,
     precalculated_seed_key: u32,
+    encrypt_opcode: fn(curr: u8, prev: u8) -> u8,
 }
 
 impl DsProtAlgo for DsProtAlgoV1 {
-    fn algorithm(&self) -> DsProtAlgoVersion {
-        DsProtAlgoVersion::V1(*self)
-    }
-
     fn reference_offset(&self) -> u32 {
         0 // unused
     }
@@ -1104,7 +1070,7 @@ impl DsProtAlgo for DsProtAlgoV1 {
     }
 
     fn decrypt(&self, words: &mut [u32], options: &AlgoDecryptOptions) -> Result<DsProtDecryptDetails, DsProtError> {
-        let AlgoDecryptOptions { base_address, .. } = *options;
+        let AlgoDecryptOptions { base_address, version, .. } = *options;
 
         // Find the starts and keys of all encrypted code ranges
         let encrypted_range_starts: Vec<(u32, u32)> = words
@@ -1137,15 +1103,11 @@ impl DsProtAlgo for DsProtAlgoV1 {
         }
         encrypted_ranges.sort_unstable_by_key(|r| r.start_address);
 
-        Ok(DsProtDecryptDetails::Pre1_23 { encrypted_ranges })
+        Ok(DsProtDecryptDetails::Pre1_23 { version, encrypted_ranges })
     }
 }
 
 impl DsProtAlgo for DsProtAlgoV2 {
-    fn algorithm(&self) -> DsProtAlgoVersion {
-        DsProtAlgoVersion::V2(*self)
-    }
-
     fn reference_offset(&self) -> u32 {
         self.reference_offset
     }
@@ -1198,10 +1160,6 @@ impl DsProtAlgo for DsProtAlgoV2 {
 }
 
 impl DsProtAlgo for DsProtAlgoV3 {
-    fn algorithm(&self) -> DsProtAlgoVersion {
-        DsProtAlgoVersion::V3(*self)
-    }
-
     fn reference_offset(&self) -> u32 {
         self.reference_offset
     }
@@ -1278,10 +1236,6 @@ impl DsProtAlgo for DsProtAlgoV3 {
 }
 
 impl DsProtAlgo for DsProtAlgoV4 {
-    fn algorithm(&self) -> DsProtAlgoVersion {
-        DsProtAlgoVersion::V4(*self)
-    }
-
     fn reference_offset(&self) -> u32 {
         self.reference_offset
     }
@@ -1363,10 +1317,6 @@ impl DsProtAlgo for DsProtAlgoV4 {
 }
 
 impl DsProtAlgo for DsProtAlgoV5 {
-    fn algorithm(&self) -> DsProtAlgoVersion {
-        DsProtAlgoVersion::V5(*self)
-    }
-
     fn reference_offset(&self) -> u32 {
         self.reference_offset
     }
@@ -1426,10 +1376,6 @@ impl DsProtAlgo for DsProtAlgoV5 {
 }
 
 impl DsProtAlgo for DsProtAlgoV6 {
-    fn algorithm(&self) -> DsProtAlgoVersion {
-        DsProtAlgoVersion::V6(*self)
-    }
-
     fn reference_offset(&self) -> u32 {
         self.reference_offset
     }
@@ -1456,7 +1402,9 @@ impl DsProtAlgo for DsProtAlgoV6 {
 
     fn decrypt_instruction(&self, rc4: &mut Rc4, ins: u32, prev_ins: u32) -> u32 {
         let opcode = (ins >> 24) as u8;
-        let ins = ins ^ (prev_ins & 0xff000000);
+        let prev_opcode = (prev_ins >> 24) as u8;
+        let new_opcode = (self.encrypt_opcode)(opcode, prev_opcode);
+        let ins = (ins & 0xffffff) | ((new_opcode as u32) << 24);
         let category = InstructionCategory::new(ins);
         let new_ins = match category {
             InstructionCategory::BlxImm | InstructionCategory::B => decrypt_branch_2(self.reference_offset, ins),
@@ -1493,13 +1441,15 @@ impl DsProtAlgo for DsProtAlgoV6 {
 pub enum DsProtDecryptDetails {
     /// Before DS Protect version 1.23
     Pre1_23 {
+        /// The DS Protect version number.
+        version: &'static str,
         /// List of encrypted ranges of instructions.
         encrypted_ranges: Vec<EncryptedRange>,
     },
     /// DS Protect version 1.23 and onwards
     Post1_23 {
-        /// Which decryption algorithm was used.
-        algorithm: DsProtAlgoVersion,
+        /// The DS Protect version number.
+        version: &'static str,
         /// Address of the DS Protect BSS variable. Used for offsetting constants.
         dsprot_bss: u32,
         /// List of encrypted functions.
@@ -1527,55 +1477,16 @@ impl Display for DisplayDsProtDecryptDetails<'_> {
         let i = " ".repeat(self.indent);
         let inner = self.inner;
         match inner {
-            DsProtDecryptDetails::Pre1_23 { encrypted_ranges } => {
+            DsProtDecryptDetails::Pre1_23 { version, encrypted_ranges } => {
+                writeln!(f, "{i}Version ........... : {}", version)?;
                 writeln!(f, "{i}Encrypted ranges .. :")?;
                 for range in encrypted_ranges {
                     writeln!(f, "{i}  {:#010x}..{:#010x}", range.start_address, range.end_address)?;
                 }
             }
-            DsProtDecryptDetails::Post1_23 { algorithm, dsprot_bss, encrypted_functions, encoded_function_pointers } => {
+            DsProtDecryptDetails::Post1_23 { version, dsprot_bss, encrypted_functions, encoded_function_pointers } => {
+                writeln!(f, "{i}Version .................... : {}", version)?;
                 writeln!(f, "{i}BSS variable ............... : {:#010x}", dsprot_bss)?;
-                write!(f, "{i}Algorithm .................. : ")?;
-                match algorithm {
-                    DsProtAlgoVersion::V1(_algo) => {
-                        writeln!(f, "v1")?;
-                    }
-                    DsProtAlgoVersion::V2(algo) => {
-                        writeln!(
-                            f,
-                            "v2 (reference offset = {:#x}, xor = {:#x})",
-                            algo.reference_offset, algo.unkeyed_encryption_xor
-                        )?;
-                    }
-                    DsProtAlgoVersion::V3(algo) => {
-                        writeln!(
-                            f,
-                            "v3 (reference offset = {:#x}, xor = {:#x})",
-                            algo.reference_offset, algo.unkeyed_encryption_xor
-                        )?;
-                    }
-                    DsProtAlgoVersion::V4(algo) => {
-                        writeln!(
-                            f,
-                            "v4 (reference offset = {:#x}, xor = {:#x})",
-                            algo.reference_offset, algo.unkeyed_encryption_xor
-                        )?;
-                    }
-                    DsProtAlgoVersion::V5(algo) => {
-                        writeln!(
-                            f,
-                            "v5 (reference offset = {:#x}, xor = {:#x})",
-                            algo.reference_offset, algo.unkeyed_encryption_xor
-                        )?;
-                    }
-                    DsProtAlgoVersion::V6(algo) => {
-                        writeln!(
-                            f,
-                            "v6 (reference offset = {:#x}, xor = {:#x}, seed_key = {:#x})",
-                            algo.reference_offset, algo.unkeyed_encryption_xor, algo.precalculated_seed_key
-                        )?;
-                    }
-                }
                 writeln!(f, "{i}Encrypted functions ........ :")?;
                 for function in encrypted_functions {
                     writeln!(f, "{i}  Address ................ : {:#010x}", function.address)?;
