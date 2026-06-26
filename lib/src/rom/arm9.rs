@@ -4,11 +4,11 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::{
-    raw::{
-        AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, HmacSha1Signature, HmacSha1SignatureError,
-        RawAutoloadInfoError, RawBuildInfoError, NITROCODE_BYTES,
-    },
     Autoload, OverlayTable,
+    raw::{
+        AutoloadInfo, AutoloadInfoEntry, AutoloadKind, BuildInfo, HmacSha1Signature, HmacSha1SignatureError, NITROCODE_BYTES,
+        RawAutoloadInfoError, RawBuildInfoError,
+    },
 };
 use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
@@ -277,12 +277,12 @@ impl<'a> Arm9<'a> {
     /// encrypted originally.
     pub fn is_encrypted(&self) -> bool {
         if self.data.len() >= 8 && self.data[0..8] == SECURE_AREA_ID {
-            true
+            false
         } else if self.data.len() >= 0x800 {
             let zero_count = self.data[0..0x800].iter().filter(|&&b| b == 0).count();
             zero_count < SECURE_AREA_UNENCRYPTED_THRESHOLD
         } else {
-            false
+            true
         }
     }
 
