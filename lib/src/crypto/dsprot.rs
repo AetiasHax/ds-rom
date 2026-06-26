@@ -17,7 +17,7 @@ struct DsProtVersion {
 
 const DSPROT_VERSIONS: &[DsProtVersion] = &[
     DsProtVersion {
-        number: "1.00/2",
+        number: "1.00",
         detect_signature: [0xe3527270, 0xbafe77fc, 0xe59e0989, 0xe1c2f9af, 0xea018a51, 0xeb004ae2],
         algo: &DsProtAlgoV1 { encrypted_range_start_signature: [0xe92d0001, 0xe1a0000f, 0xe2800010, 0xe8bd0001, 0xea000000] },
     },
@@ -788,15 +788,10 @@ trait DsProtAlgo {
                 .fail();
             };
             let mut prev_ins = 0;
-            for (i, instruction) in func_words.iter_mut().enumerate() {
+            for instruction in func_words.iter_mut() {
                 let ins = *instruction;
                 *instruction = self.decrypt_instruction(&mut rc4, ins, prev_ins);
                 prev_ins = ins;
-
-                let options = unarm::Options::default();
-                let pc = function.address + i as u32 * 4;
-                let ins = unarm::parse_arm(*instruction, pc, &options);
-                println!("{:08x}  {:08x}  {}", pc, *instruction, ins.display(&options));
             }
 
             // Decrypt constant pools based on function signature
