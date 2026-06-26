@@ -54,6 +54,11 @@ pub fn print_hex(data: &[u8], raw: bool, base: u32) -> Result<()> {
             for byte in chunk {
                 print!(" {byte:02x}");
             }
+            print!("  ");
+            for &byte in chunk {
+                let ch = char::from(byte);
+                print!("{}", if ch.is_ascii_graphic() { ch } else { '.' });
+            }
             println!();
         }
     }
