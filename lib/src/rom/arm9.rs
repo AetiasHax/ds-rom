@@ -47,6 +47,11 @@ pub struct Arm9Offsets {
 const SECURE_AREA_ID: [u8; 8] = [0xff, 0xde, 0xff, 0xe7, 0xff, 0xde, 0xff, 0xe7];
 const SECURE_AREA_ENCRY_OBJ: &[u8] = "encryObj".as_bytes();
 
+/// Number of zero-bytes in the secure area for it to be considered unencrypted. This applies to a
+/// few retail games with a secure area which, after decryption, does not start with "encryObj" like
+/// it normally does.
+const SECURE_AREA_UNENCRYPTED_THRESHOLD: usize = 256;
+
 const LZ77: Lz77 = Lz77 {};
 
 const COMPRESSION_START: usize = 0x4000;
@@ -69,12 +74,6 @@ pub enum Arm9Error {
     Blowfish {
         /// Source error.
         source: BlowfishError,
-    },
-    /// Occurs when the string "encryObj" is not found when de/encrypting the secure area.
-    #[snafu(display("invalid encryption, 'encryObj' not found"))]
-    NotEncryObj {
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
     },
     /// See [`RawBuildInfoError`].
     #[snafu(transparent)]
@@ -277,7 +276,14 @@ impl<'a> Arm9<'a> {
     /// Returns whether the secure area is encrypted. See [`Self::originally_encrypted`] for whether the secure area was
     /// encrypted originally.
     pub fn is_encrypted(&self) -> bool {
-        self.data.len() < 8 || self.data[0..8] != SECURE_AREA_ID
+        if self.data.len() >= 8 && self.data[0..8] == SECURE_AREA_ID {
+            true
+        } else if self.data.len() >= 0x800 {
+            let zero_count = self.data[0..0x800].iter().filter(|&&b| b == 0).count();
+            zero_count < SECURE_AREA_UNENCRYPTED_THRESHOLD
+        } else {
+            false
+        }
     }
 
     /// Decrypts the secure area. Does nothing if already decrypted.
@@ -305,7 +311,7 @@ impl<'a> Arm9<'a> {
         blowfish.decrypt(&mut secure_area[0..0x800])?;
 
         if &secure_area[0..8] != SECURE_AREA_ENCRY_OBJ {
-            NotEncryObjSnafu {}.fail()?;
+            log::warn!("Failed to decrypt secure area");
         }
 
         secure_area[0..8].copy_from_slice(&SECURE_AREA_ID);
@@ -328,10 +334,6 @@ impl<'a> Arm9<'a> {
             DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len() }.fail()?;
         }
 
-        if self.data[0..8] != SECURE_AREA_ID {
-            NotEncryObjSnafu {}.fail()?;
-        }
-
         let secure_area = self.encrypted_secure_area(key, gamecode);
         self.data.to_mut()[0..0x4000].copy_from_slice(&secure_area);
         Ok(())
@@ -341,7 +343,7 @@ impl<'a> Arm9<'a> {
     pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> [u8; 0x4000] {
         let mut secure_area = [0u8; 0x4000];
         secure_area.copy_from_slice(&self.data[0..0x4000]);
-        if self.is_encrypted() {
+        if self.data[0..8] != SECURE_AREA_ID {
             return secure_area;
         }
 
