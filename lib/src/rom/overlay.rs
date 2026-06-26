@@ -13,6 +13,7 @@ use crate::{
         dsprot::{DsProtDecryptDetails, DsProtError, DsProtInfo},
         hmac_sha1::HmacSha1,
     },
+    rom::Arm9HmacSha1KeyError,
 };
 
 /// An overlay module for ARM9/ARM7.
@@ -58,12 +59,6 @@ pub enum OverlayError {
         /// Source error.
         source: Arm9OverlaySignaturesError,
     },
-    /// Occurs when there are no overlay signatures in the ARM9 program.
-    #[snafu(display("no overlay signatures found in ARM9 program:\n{backtrace}"))]
-    NoOverlaySignatures {
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
     /// Occurs when trying to create a signed ARM7 overlay, but signing ARM7 overlays is not supported.
     #[snafu(display("signing ARM7 overlays is not supported:\n{backtrace}"))]
     SignedArm7Overlay {
@@ -75,6 +70,12 @@ pub enum OverlayError {
     OverlayCompression {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
+    },
+    /// Occurs when trying to compute the signature while parsing the ROM, but the original signature was not found in ARM9.
+    #[snafu(transparent)]
+    Arm9HmacSha1Key {
+        /// Source error.
+        source: Arm9HmacSha1KeyError,
     },
 }
 
@@ -116,22 +117,31 @@ impl<'a> Overlay<'a> {
         let alloc = fat[overlay.file_id as usize];
         let data = &rom.data()[alloc.range()];
 
-        let mut signature = None;
-        if overlay.flags.is_signed() {
-            let num_overlays = rom.num_arm9_overlays()?;
-            let signatures = arm9.overlay_signatures(num_overlays)?;
-            signature = Some(signatures.map(|s| s[overlay.id as usize]).ok_or_else(|| NoOverlaySignaturesSnafu {}.build())?);
-        }
-
-        let overlay = Self {
+        let mut parsed_overlay = Self {
             originally_compressed: overlay.flags.is_compressed(),
             originally_signed: overlay.flags.is_signed(),
             info: OverlayInfo::new(overlay),
-            signature,
+            signature: None,
             data: Cow::Borrowed(data),
         };
 
-        Ok(overlay)
+        if overlay.flags.is_signed() {
+            let num_overlays = rom.num_arm9_overlays()?;
+            let signatures = arm9.overlay_signatures(num_overlays)?;
+            if let Some(signatures) = signatures {
+                parsed_overlay.signature = Some(signatures[overlay.id as usize]);
+            } else if let Some(key) = arm9.hmac_sha1_key()? {
+                // Compute the signature if it's missing
+                parsed_overlay.sign(&HmacSha1::new(key))?;
+            } else {
+                log::error!(
+                    "ARM9 overlay {} was marked as signed, but no signature or HMAC-SHA1 key was found in ARM9",
+                    overlay.id
+                );
+            }
+        }
+
+        Ok(parsed_overlay)
     }
 
     /// Parses an ARM7 [`Overlay`] from a ROM.
