@@ -96,15 +96,21 @@ impl<'a> FileSystem<'a> {
 
     fn load_in<P: AsRef<Path>>(&mut self, path: P, parent_id: u16) -> Result<(), FileError> {
         // Sort children by FNT order so the file/dir IDs become correct
-        let mut children =
-            read_dir(&path)?.collect::<Result<Vec<_>, _>>()?.into_iter().map(|entry| entry.path()).collect::<Vec<_>>();
-        children.sort_unstable_by(|a, b| {
-            Self::compare_for_fnt(a.to_string_lossy().as_ref(), a.is_dir(), b.to_string_lossy().as_ref(), b.is_dir())
-        });
+        let mut children = read_dir(&path)?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|entry| entry.path())
+            .map(|child| {
+                let as_string = child.to_string_lossy().to_string();
+                let is_dir = child.is_dir();
+                (child, as_string, is_dir)
+            })
+            .collect::<Vec<_>>();
+        children.sort_unstable_by(|a, b| Self::compare_for_fnt(&a.1, a.2, &b.1, b.2));
 
-        for child in children.into_iter() {
+        for (child, _, is_dir) in children.into_iter() {
             let name = child.file_name().unwrap().to_string_lossy().to_string();
-            if child.is_dir() {
+            if is_dir {
                 let child_id = self.next_dir_id;
                 let child_path = path.as_ref().join(&name);
                 self.make_child_dir(name, parent_id);
