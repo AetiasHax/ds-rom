@@ -15,7 +15,7 @@ use crate::{
     crc::CRC_16_MODBUS,
     crypto::{
         blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
-        dsprot::{DsProtDecryptDetails, DsProtError, DsProtInfo},
+        dsprot::{DecryptOptions, DsProtDecryptDetails, DsProtError, DsProtInfo},
     },
     rom::LibraryEntry,
 };
@@ -769,14 +769,14 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// This function will return an error if [`DsProtInfo::decrypt`] fails.
-    pub fn decrypt_dsprot(&mut self) -> Result<Option<DsProtDecryptDetails>, Arm9DsProtInfoError> {
+    pub fn decrypt_dsprot(&mut self, options: &DecryptOptions) -> Result<Option<DsProtDecryptDetails>, Arm9DsProtInfoError> {
         let Some(dsprot_info) = self.dsprot_info()? else {
             // DS Protect is not used
             return Ok(None);
         };
 
         let base_address = self.base_address();
-        let details = dsprot_info.decrypt(self.data.to_mut(), base_address)?;
+        let details = dsprot_info.decrypt(self.data.to_mut(), base_address, options)?;
 
         Ok(Some(details))
     }

@@ -1,11 +1,11 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use ds_rom::{
     compress::lz77::Lz77,
-    crypto::{blowfish::BlowfishKey, hmac_sha1::HmacSha1},
-    rom::{self, raw, Arm9, Logo, Overlay, Rom},
+    crypto::{blowfish::BlowfishKey, dsprot::DecryptOptions, hmac_sha1::HmacSha1},
+    rom::{self, Arm9, Logo, Overlay, Rom, raw},
 };
 
 use crate::print_hex;
@@ -560,11 +560,13 @@ impl DumpDsProt {
             overlay.decompress()?;
         }
 
+        let options = DecryptOptions { decode_literals: true };
+
         let arm9 = rom.arm9_mut();
         if !self.yaml {
             if let Some(dsprot_info) = arm9.dsprot_info()? {
                 println!("DS Protect found in ARM9 main:\n{}", dsprot_info.display(2));
-                if let Some(details) = arm9.decrypt_dsprot()? {
+                if let Some(details) = arm9.decrypt_dsprot(&options)? {
                     println!("Result from decryption:\n{}", details.display(2));
                 }
             }
@@ -572,18 +574,18 @@ impl DumpDsProt {
             for overlay in rom.arm9_overlays_mut() {
                 if let Some(dsprot_info) = overlay.dsprot_info()? {
                     println!("DS Protect found in ARM9 overlay {}:\n{}", overlay.id(), dsprot_info.display(2));
-                    if let Some(details) = overlay.decrypt_dsprot()? {
+                    if let Some(details) = overlay.decrypt_dsprot(&options)? {
                         println!("Result from decryption:\n{}", details.display(2));
                     }
                 }
             }
         } else {
             let mut details_list = HashMap::new();
-            if let Some(details) = arm9.decrypt_dsprot()? {
+            if let Some(details) = arm9.decrypt_dsprot(&options)? {
                 details_list.insert("arm9".to_string(), details);
             }
             for overlay in rom.arm9_overlays_mut() {
-                if let Some(details) = overlay.decrypt_dsprot()? {
+                if let Some(details) = overlay.decrypt_dsprot(&options)? {
                     details_list.insert(format!("ov{:03}", overlay.id()), details);
                 }
             }

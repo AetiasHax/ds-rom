@@ -215,6 +215,20 @@ pub enum DsProtError {
     },
 }
 
+/// Options for [`DsProtInfo::decrypt`].
+#[derive(Clone)]
+pub struct DecryptOptions {
+    /// If true, pointers and constants will be decoded. This applies to constant pools and global
+    /// variables managed by DS Protect.
+    ///
+    /// Pointers are decoded by subtracting the reference offset value based on the DS Protect
+    /// version.
+    ///
+    /// Constants are decoded by subtracting the reference offset and the address of an unused BSS
+    /// variable owned by DS Protect.
+    pub decode_literals: bool,
+}
+
 impl DsProtInfo {
     /// Searches for DS Protect usage in the provided module.
     pub fn detect(data: &[u8]) -> Option<Self> {
@@ -238,13 +252,24 @@ impl DsProtInfo {
     ///
     /// This function will return an error if it accesses data out of bounds. This happens if the
     /// wrong data is passed, or due to a bug in this function.
-    pub fn decrypt(&self, data: &mut [u8], base_address: u32) -> Result<DsProtDecryptDetails, DsProtError> {
+    pub fn decrypt(
+        &self,
+        data: &mut [u8],
+        base_address: u32,
+        options: &DecryptOptions,
+    ) -> Result<DsProtDecryptDetails, DsProtError> {
         let end_address = base_address + data.len() as u32;
 
         // Make 32-bit chunks
         let words: &mut [u32] = bytemuck::cast_slice_mut(data);
 
-        self.version.algo.decrypt(words, &AlgoDecryptOptions { base_address, end_address, version: self.version.number })
+        let DecryptOptions { decode_literals } = options.clone();
+        self.version.algo.decrypt(words, &AlgoDecryptOptions {
+            base_address,
+            end_address,
+            version: self.version.number,
+            decode_literals,
+        })
     }
 
     /// Creates a [`DisplayDsProtInfo`] which implements [`Display`].
@@ -295,6 +320,7 @@ struct AlgoDecryptOptions {
     base_address: u32,
     end_address: u32,
     version: &'static str,
+    decode_literals: bool,
 }
 
 const DECRYPTION_WRAPPER_SIGNATURE_1: [u32; 3] = [0xe92d00f0, 0xe92d000f, 0xe8bd00f0];
@@ -397,7 +423,7 @@ trait DsProtAlgo {
     fn find_obfuscated_function_tables(
         &self,
         options: &AlgoDecryptOptions,
-        words: &mut [u32],
+        words: &[u32],
     ) -> Result<Vec<EncryptedFunction>, DsProtError> {
         let AlgoDecryptOptions { base_address, .. } = *options;
 
@@ -502,7 +528,7 @@ trait DsProtAlgo {
         dsprot_bss: u32,
         unkeyed_encrypted_functions: &mut [EncryptedFunction],
     ) -> Result<(Vec<EncryptedFunction>, Vec<EncodedFunctionPointer>), DsProtError> {
-        let AlgoDecryptOptions { base_address, end_address, .. } = *options;
+        let AlgoDecryptOptions { base_address, end_address, decode_literals, .. } = *options;
 
         let mut decryption_wrappers = Vec::new();
         let mut encoded_function_pointers = Vec::new();
@@ -545,14 +571,17 @@ trait DsProtAlgo {
                 let dest_func_address = pool_words[3] - reference_offset;
                 let garbage_address = pool_words[4] - reference_offset;
 
-                pool_words[0] = bss;
-                pool_words[1] = dest_func_size;
-                pool_words[2] = seed_key;
-                pool_words[3] = dest_func_address;
-                // sanity check that this looks like a RAM address
+                // Check that this looks like a RAM address
                 let with_garbage = garbage_address >> 24 == 0x02;
-                if with_garbage {
-                    pool_words[4] = garbage_address;
+
+                if decode_literals {
+                    pool_words[0] = bss;
+                    pool_words[1] = dest_func_size;
+                    pool_words[2] = seed_key;
+                    pool_words[3] = dest_func_address;
+                    if with_garbage {
+                        pool_words[4] = garbage_address;
+                    }
                 }
 
                 function.constant_pool = EncodedConstantPool::DecryptionWrapperType1 { with_garbage };
@@ -578,15 +607,18 @@ trait DsProtAlgo {
                 let wrapper_fragment = pool_words[5] - reference_offset;
                 let garbage_address = pool_words[6] - reference_offset;
 
-                pool_words[0] = bss;
-                pool_words[1] = seed_key;
-                pool_words[2] = dest_func_address;
-                pool_words[3] = dest_func_size;
-                pool_words[5] = wrapper_fragment;
-                // sanity check that this looks like a RAM address
+                // Check that this looks like a RAM address
                 let with_garbage = garbage_address >> 24 == 0x02;
-                if with_garbage {
-                    pool_words[6] = garbage_address;
+
+                if decode_literals {
+                    pool_words[0] = bss;
+                    pool_words[1] = seed_key;
+                    pool_words[2] = dest_func_address;
+                    pool_words[3] = dest_func_size;
+                    pool_words[5] = wrapper_fragment;
+                    if with_garbage {
+                        pool_words[6] = garbage_address;
+                    }
                 }
 
                 function.constant_pool = EncodedConstantPool::DecryptionWrapperType2 { with_garbage };
@@ -616,15 +648,18 @@ trait DsProtAlgo {
 
                 let wrapper_fragment_size = pool_words[5] >> 26;
 
-                pool_words[0] = bss;
-                pool_words[1] = seed_key_placeholder;
-                pool_words[2] = dest_func_address;
-                pool_words[3] = dest_func_size;
-                pool_words[5] = wrapper_fragment;
-                // sanity check that this looks like a RAM address
+                // Check that this looks like a RAM address
                 let with_garbage = garbage_address >> 24 == 0x02;
-                if with_garbage {
-                    pool_words[6] = garbage_address;
+
+                if decode_literals {
+                    pool_words[0] = bss;
+                    pool_words[1] = seed_key_placeholder;
+                    pool_words[2] = dest_func_address;
+                    pool_words[3] = dest_func_size;
+                    pool_words[5] = wrapper_fragment;
+                    if with_garbage {
+                        pool_words[6] = garbage_address;
+                    }
                 }
 
                 let seed_key = self.precalculated_seed_key().unwrap();
@@ -689,7 +724,7 @@ trait DsProtAlgo {
         dsprot_bss: u32,
         obfuscated_function_tables: &[EncryptedFunction],
     ) -> Result<Vec<EncryptedFunction>, DsProtError> {
-        let AlgoDecryptOptions { base_address, end_address, .. } = *options;
+        let AlgoDecryptOptions { base_address, end_address, decode_literals, .. } = *options;
 
         let mut encrypted_functions = Vec::new();
         for &EncryptedFunction { address: func_address, size: func_size, encryption: _, constant_pool } in
@@ -727,8 +762,10 @@ trait DsProtAlgo {
                 let func_size = *second - dsprot_bss - self.reference_offset();
                 log::debug!("Found unkeyed encrypted function at {:#010x}, size {:#x}", func_address, func_size);
 
-                *first = func_address;
-                *second = func_size;
+                if decode_literals {
+                    *first = func_address;
+                    *second = func_size;
+                }
 
                 encrypted_functions.push(EncryptedFunction {
                     address: func_address,
@@ -738,15 +775,17 @@ trait DsProtAlgo {
                 });
             }
 
-            // Decode pointer to garbage data
-            if with_garbage && let Some(next_chunk) = pool_iter.next() {
-                *next_chunk -= self.reference_offset();
-                log::debug!("Decoded garbage pointer after decoder function at {:#010x}", func_address);
-            }
-            // Decode pointer to this decoder function
-            if with_overwrite && let Some(next_chunk) = pool_iter.next() {
-                *next_chunk -= self.reference_offset();
-                log::debug!("Decoded overwrite pointer after decoder function at {:#010x}", func_address);
+            if decode_literals {
+                // Decode pointer to garbage data
+                if with_garbage && let Some(next_chunk) = pool_iter.next() {
+                    *next_chunk -= self.reference_offset();
+                    log::debug!("Decoded garbage pointer after decoder function at {:#010x}", func_address);
+                }
+                // Decode pointer to this decoder function
+                if with_overwrite && let Some(next_chunk) = pool_iter.next() {
+                    *next_chunk -= self.reference_offset();
+                    log::debug!("Decoded overwrite pointer after decoder function at {:#010x}", func_address);
+                }
             }
         }
         Ok(encrypted_functions)
@@ -758,7 +797,7 @@ trait DsProtAlgo {
         words: &mut [u32],
         decryption_wrappers: &mut [EncryptedFunction],
     ) -> Result<(), DsProtError> {
-        let AlgoDecryptOptions { base_address, end_address, .. } = *options;
+        let AlgoDecryptOptions { base_address, end_address, decode_literals, .. } = *options;
 
         for function in decryption_wrappers {
             let EncryptionType::Keyed(seed_key) = function.encryption else {
@@ -817,24 +856,28 @@ trait DsProtAlgo {
                 || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f307c, 0xe59f207c]
             {
                 // Flashcart/Emulator detector
-                let test_fn_addr = pool_words[0] - reference_offset;
-                let integrity_fn_addr = pool_words[1] - reference_offset;
-                pool_words[0] = test_fn_addr;
-                pool_words[1] = integrity_fn_addr;
+                if decode_literals {
+                    let test_fn_addr = pool_words[0] - reference_offset;
+                    let integrity_fn_addr = pool_words[1] - reference_offset;
+                    pool_words[0] = test_fn_addr;
+                    pool_words[1] = integrity_fn_addr;
+                }
                 function.constant_pool = EncodedConstantPool::FlashcartEmulatorDetectorType1;
                 log::debug!("Decrypted flashcart/emulator detector (type 1)");
             } else if func_start[0..4] == [0xe92d4ff8, 0xe24dd098, 0xe59f2170, 0xe59f4170]
                 || func_start[0..4] == [0xe92d4ff8, 0xe24dd098, 0xe59f2174, 0xe59f4174]
             {
                 // Flashcart/Emulator detector
-                let callback_index_addr = pool_words[0] - reference_offset;
-                let callback_table_addr = pool_words[1] - reference_offset;
-                let test_fn_addr = pool_words[2] - reference_offset;
-                let integrity_fn_addr = pool_words[3] - reference_offset;
-                pool_words[0] = callback_index_addr;
-                pool_words[1] = callback_table_addr;
-                pool_words[2] = test_fn_addr;
-                pool_words[3] = integrity_fn_addr;
+                if decode_literals {
+                    let callback_index_addr = pool_words[0] - reference_offset;
+                    let callback_table_addr = pool_words[1] - reference_offset;
+                    let test_fn_addr = pool_words[2] - reference_offset;
+                    let integrity_fn_addr = pool_words[3] - reference_offset;
+                    pool_words[0] = callback_index_addr;
+                    pool_words[1] = callback_table_addr;
+                    pool_words[2] = test_fn_addr;
+                    pool_words[3] = integrity_fn_addr;
+                }
                 function.constant_pool = EncodedConstantPool::FlashcartEmulatorDetectorType2;
                 log::debug!("Decrypted flashcart/emulator detector (type 2)");
             } else if func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f3070, 0xe3a02000]
@@ -842,34 +885,42 @@ trait DsProtAlgo {
                 || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f3080, 0xe3a02000]
             {
                 // Dummy detector
-                let test_fn_addr = pool_words[0] - reference_offset;
-                pool_words[0] = test_fn_addr;
+                if decode_literals {
+                    let test_fn_addr = pool_words[0] - reference_offset;
+                    pool_words[0] = test_fn_addr;
+                }
                 function.constant_pool = EncodedConstantPool::DummyDetector;
                 log::debug!("Decrypted dummy detector");
             } else if func_start[0..4] == [0xe92d4ff8, 0xe24dd018, 0xe59fa100, 0xe59f6100] {
                 // MAC and ROM integrity checkers
-                let mac_integrity_fn_addr = pool_words[0] - reference_offset;
-                let mac_test_fn_addr = pool_words[1] - reference_offset;
-                let rom_integrity_fn_addr = pool_words[2] - reference_offset;
-                let rom_test_fn_addr = pool_words[3] - reference_offset;
-                pool_words[0] = mac_integrity_fn_addr;
-                pool_words[1] = mac_test_fn_addr;
-                pool_words[2] = rom_integrity_fn_addr;
-                pool_words[3] = rom_test_fn_addr;
+                if decode_literals {
+                    let mac_integrity_fn_addr = pool_words[0] - reference_offset;
+                    let mac_test_fn_addr = pool_words[1] - reference_offset;
+                    let rom_integrity_fn_addr = pool_words[2] - reference_offset;
+                    let rom_test_fn_addr = pool_words[3] - reference_offset;
+                    pool_words[0] = mac_integrity_fn_addr;
+                    pool_words[1] = mac_test_fn_addr;
+                    pool_words[2] = rom_integrity_fn_addr;
+                    pool_words[3] = rom_test_fn_addr;
+                }
                 function.constant_pool = EncodedConstantPool::MacRomIntegrityChecker;
                 log::debug!("Decrypted MAC and ROM integrity checkers");
             } else if func_start[6] == 0x112fff1e {
                 // Integrity checkers
-                let checked_fn_addr = pool_words[0] - self.integrity_check_offset();
-                pool_words[0] = checked_fn_addr;
+                if decode_literals {
+                    let checked_fn_addr = pool_words[0] - self.integrity_check_offset();
+                    pool_words[0] = checked_fn_addr;
+                }
                 function.constant_pool = EncodedConstantPool::IntegrityChecker;
                 log::debug!("Decrypted integrity checker");
             } else if func_start[0..4] == [0xe1a0a00f, 0xe19aa00a, 0x102ee00e, 0xe25aa008] {
                 // Crash
-                let clear_fn_addr = pool_words[0] - reference_offset;
-                let terminate_fn_addr = pool_words[1] - reference_offset;
-                pool_words[0] = clear_fn_addr;
-                pool_words[1] = terminate_fn_addr;
+                if decode_literals {
+                    let clear_fn_addr = pool_words[0] - reference_offset;
+                    let terminate_fn_addr = pool_words[1] - reference_offset;
+                    pool_words[0] = clear_fn_addr;
+                    pool_words[1] = terminate_fn_addr;
+                }
                 function.constant_pool = EncodedConstantPool::Crash;
                 log::debug!("Decrypted crash function");
             }
@@ -884,6 +935,10 @@ trait DsProtAlgo {
         words: &mut [u32],
         encoded_function_pointers: &[EncodedFunctionPointer],
     ) -> Result<(), DsProtError> {
+        if !options.decode_literals {
+            return Ok(());
+        }
+
         let &AlgoDecryptOptions { base_address, end_address, .. } = options;
         for &encoded_fn_ptr in encoded_function_pointers.iter() {
             let Some(encoded_fn) = words.get_mut((encoded_fn_ptr.0 - base_address) as usize / 4) else {

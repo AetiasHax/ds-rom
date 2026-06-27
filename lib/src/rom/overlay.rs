@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use super::{
-    raw::{self, HmacSha1Signature, OverlayFlags, RawFatError, RawHeaderError},
     Arm9, Arm9OverlaySignaturesError,
+    raw::{self, HmacSha1Signature, OverlayFlags, RawFatError, RawHeaderError},
 };
 use crate::{
     compress::lz77::{Lz77, Lz77DecompressError},
     crypto::{
-        dsprot::{DsProtDecryptDetails, DsProtError, DsProtInfo},
+        dsprot::{DecryptOptions, DsProtDecryptDetails, DsProtError, DsProtInfo},
         hmac_sha1::HmacSha1,
     },
     rom::Arm9HmacSha1KeyError,
@@ -328,11 +328,7 @@ impl<'a> Overlay<'a> {
     ///
     /// This function will return an error if the overlay is compressed.
     pub fn dsprot_info(&self) -> Result<Option<DsProtInfo>, OverlayDsProtError> {
-        if self.is_compressed() {
-            overlay_ds_prot_error::CompressedSnafu.fail()
-        } else {
-            Ok(DsProtInfo::detect(&self.data))
-        }
+        if self.is_compressed() { overlay_ds_prot_error::CompressedSnafu.fail() } else { Ok(DsProtInfo::detect(&self.data)) }
     }
 
     /// Decrypts all functions in this overlay that were encrypted by DS Protect.
@@ -340,14 +336,14 @@ impl<'a> Overlay<'a> {
     /// # Errors
     ///
     /// This function will return an error if [`DsProtInfo::decrypt`] fails.
-    pub fn decrypt_dsprot(&mut self) -> Result<Option<DsProtDecryptDetails>, OverlayDsProtError> {
+    pub fn decrypt_dsprot(&mut self, options: &DecryptOptions) -> Result<Option<DsProtDecryptDetails>, OverlayDsProtError> {
         let Some(dsprot_info) = self.dsprot_info()? else {
             // DS Protect is not used
             return Ok(None);
         };
 
         let base_address = self.base_address();
-        let details = dsprot_info.decrypt(self.data.to_mut(), base_address)?;
+        let details = dsprot_info.decrypt(self.data.to_mut(), base_address, options)?;
 
         Ok(Some(details))
     }
