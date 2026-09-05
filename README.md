@@ -1,6 +1,6 @@
 # ds-rom
 
-Library for extracting and building matching Nintendo DS ROMs. DSi/DSiware not supported yet.
+Library for extracting and building matching Nintendo DS and DSi-enhanced ROMs. DSiware is not supported yet.
 
 ## Contents
 

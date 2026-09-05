@@ -1,10 +1,10 @@
 use std::{borrow::Cow, collections::BTreeSet, io::Read, mem::size_of, path::Path};
 
-use snafu::Snafu;
+use snafu::{Backtrace, Snafu};
 
 use super::{
-    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, OverlayTable, RawBannerError, RawBuildInfoError,
-    RawFatError, RawFntError, RawHeaderError, RawOverlayError,
+    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, NITROCODE_BYTES, Overlay, OverlayTable, RawBannerError,
+    RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
 };
 use crate::{
     io::{FileError, open_file, write_file},
@@ -39,6 +39,12 @@ pub enum RawArm9Error {
     RawBuildInfo {
         /// Source error.
         source: RawBuildInfoError,
+    },
+    /// Occurs when the ARM9 build info can be found neither in the header nor in an ARM9 footer.
+    #[snafu(display("ROM header has no ARM9 build info offset and there is no ARM9 footer to take one from:\n{backtrace}"))]
+    NoBuildInfo {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
     },
 }
 
@@ -111,8 +117,10 @@ impl<'a> Rom<'a> {
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
 
-        let footer = self.arm9_footer()?;
+        // Some ROMs, mainly DSi-enhanced ones, have no ARM9 footer at all.
+        let footer = self.try_arm9_footer()?;
         let build_info_offset = if header.arm9_build_info_offset == 0 {
+            let Some(footer) = footer else { return NoBuildInfoSnafu {}.fail() };
             footer.build_info_offset
         } else if header.arm9_build_info_offset > header.arm9.offset {
             header.arm9_build_info_offset - header.arm9.offset
@@ -121,13 +129,15 @@ impl<'a> Rom<'a> {
             header.arm9_build_info_offset
         };
 
-        Ok(Arm9::new(Cow::Borrowed(data), Arm9Offsets {
+        let mut arm9 = Arm9::new(Cow::Borrowed(data), Arm9Offsets {
             base_address: header.arm9.base_addr,
             entry_function: header.arm9.entry,
             build_info: build_info_offset,
             autoload_callback: header.arm9_autoload_callback,
-            overlay_signatures: footer.overlay_signatures_offset,
-        })?)
+            overlay_signatures: footer.map_or(0, |footer| footer.overlay_signatures_offset),
+        })?;
+        arm9.set_has_footer(footer.is_some());
+        Ok(arm9)
     }
 
     /// Returns a reference to the ARM9 footer of this [`Rom`].
@@ -141,6 +151,26 @@ impl<'a> Rom<'a> {
         let end = start + size_of::<Arm9Footer>();
         let data = &self.data[start..end];
         Arm9Footer::borrow_from_slice(data)
+    }
+
+    /// Returns a reference to the ARM9 footer of this [`Rom`], or [`None`] if this ROM has no ARM9 footer. The footer is
+    /// considered absent if it doesn't fit in the ROM or doesn't start with the nitrocode.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice`].
+    pub fn try_arm9_footer(&self) -> Result<Option<&Arm9Footer>, Arm9FooterError> {
+        let header = self.header()?;
+        let start = (header.arm9.offset + header.arm9.size) as usize;
+        let end = start + size_of::<Arm9Footer>();
+        if end > self.data.len() {
+            return Ok(None);
+        }
+        let data = &self.data[start..end];
+        if data[0..4] != NITROCODE_BYTES {
+            return Ok(None);
+        }
+        Arm9Footer::borrow_from_slice(data).map(Some)
     }
 
     /// Returns a mutable reference to the ARM9 footer of this [`Rom`].
@@ -219,8 +249,11 @@ impl<'a> Rom<'a> {
 
         let build_info_offset = if header.arm7_build_info_offset == 0 {
             0
-        } else {
+        } else if header.arm7_build_info_offset > header.arm7.offset {
             header.arm7_build_info_offset - header.arm7.offset
+        } else {
+            // `arm7_build_info_offset` is not an absolute ROM offset in DSi titles
+            header.arm7_build_info_offset
         };
 
         Ok(Arm7::new(Cow::Borrowed(data), Arm7Offsets {

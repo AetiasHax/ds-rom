@@ -12,3 +12,6 @@ pub mod dsprot;
 
 /// Modified RC4 stream cipher implementation.
 pub mod rc4;
+
+/// AES-128-CTR de/encryption of the DSi-exclusive ARM9i and ARM7i programs.
+pub mod modcrypt;

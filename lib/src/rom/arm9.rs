@@ -28,6 +28,7 @@ pub struct Arm9<'a> {
     originally_compressed: bool,
     originally_encrypted: bool,
     dsprot_state: DsProtState,
+    has_footer: bool,
 }
 
 /// Offsets in the ARM9 program.
@@ -210,6 +211,7 @@ impl<'a> Arm9<'a> {
             originally_compressed: false,
             originally_encrypted: false,
             dsprot_state: DsProtState::None,
+            has_footer: true,
         };
         arm9.originally_compressed = arm9.is_compressed()?;
         arm9.originally_encrypted = arm9.is_encrypted();
@@ -237,11 +239,14 @@ impl<'a> Arm9<'a> {
         data.extend(itcm.into_data().iter());
         data.extend(dtcm.into_data().iter());
         let autoload_infos_start = data.len() as u32 + offsets.base_address;
-        data.extend(bytemuck::bytes_of(&autoload_infos));
+        for entry in autoload_infos {
+            data.extend(entry.to_bytes());
+        }
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
         let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state } = options;
-        let mut arm9 = Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state };
+        let mut arm9 =
+            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer: true };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -270,12 +275,13 @@ impl<'a> Arm9<'a> {
 
         let autoload_infos_start = data.len() as u32 + offsets.base_address;
         for autoload in autoloads {
-            data.extend(bytemuck::bytes_of(autoload.info().entry()));
+            data.extend(autoload.info().entry().to_bytes());
         }
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
         let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state } = options;
-        let mut arm9 = Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state };
+        let mut arm9 =
+            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer: true };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -283,6 +289,17 @@ impl<'a> Arm9<'a> {
         build_info.autoload_infos_end = autoload_infos_end;
 
         Ok(arm9)
+    }
+
+    /// Returns whether this ARM9 program is followed by an [`Arm9Footer`](super::raw::Arm9Footer) in the ROM. Most ROMs have
+    /// one, but some (mainly DSi-enhanced ones) put the build info offset in the ROM header instead and have no footer.
+    pub fn has_footer(&self) -> bool {
+        self.has_footer
+    }
+
+    /// Sets whether this ARM9 program is followed by an [`Arm9Footer`](super::raw::Arm9Footer) in the ROM.
+    pub fn set_has_footer(&mut self, has_footer: bool) {
+        self.has_footer = has_footer;
     }
 
     /// Returns whether the secure area is encrypted. See [`Self::originally_encrypted`] for whether the secure area was
@@ -489,10 +506,13 @@ impl<'a> Arm9<'a> {
         Ok(())
     }
 
-    fn get_autoload_info_entries(&self, build_info: &BuildInfo) -> Result<&[AutoloadInfoEntry], Arm9AutoloadError> {
+    fn get_autoload_info_entries(&self, build_info: &BuildInfo) -> Result<Vec<AutoloadInfoEntry>, Arm9AutoloadError> {
         let start = (build_info.autoload_infos_start - self.base_address()) as usize;
         let end = (build_info.autoload_infos_end - self.base_address()) as usize;
-        let autoload_info = AutoloadInfoEntry::borrow_from_slice(&self.data[start..end])?;
+        // The autoload blocks are stored back to back, ending where the autoload list starts. Their combined size tells the
+        // on-disk layouts of the list apart.
+        let blocks_size = build_info.autoload_infos_start - build_info.autoload_blocks;
+        let autoload_info = AutoloadInfoEntry::parse_list(&self.data[start..end], blocks_size)?;
         Ok(autoload_info)
     }
 
@@ -509,9 +529,9 @@ impl<'a> Arm9<'a> {
         }
         Ok(self
             .get_autoload_info_entries(build_info)?
-            .iter()
+            .into_iter()
             .enumerate()
-            .map(|(index, entry)| AutoloadInfo::new(*entry, index as u32))
+            .map(|(index, entry)| AutoloadInfo::new(entry, index as u32))
             .collect())
     }
 

@@ -9,6 +9,7 @@ readme = "../README.md"
 description = "Library for extracting/building Nintendo DS ROMs."
 
 [dependencies]
+aes = "0.9"
 bitfield-struct = "0.12"
 bitreader = "0.3"
 bytemuck = { version = "1.25", features = ["derive"] }
