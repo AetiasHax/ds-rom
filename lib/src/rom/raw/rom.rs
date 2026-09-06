@@ -3,8 +3,8 @@ use std::{borrow::Cow, collections::BTreeSet, io::Read, mem::size_of, path::Path
 use snafu::Snafu;
 
 use super::{
-    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, Overlay, OverlayTable, RawBannerError, RawBuildInfoError,
-    RawFatError, RawFntError, RawHeaderError, RawOverlayError,
+    Arm9Footer, Arm9FooterError, Banner, FileAlloc, Fnt, Header, NITROCODE_BYTES, Overlay, OverlayTable, RawBannerError,
+    RawBuildInfoError, RawFatError, RawFntError, RawHeaderError, RawOverlayError,
 };
 use crate::{
     io::{FileError, open_file, write_file},
@@ -107,8 +107,12 @@ impl<'a> Rom<'a> {
     /// See [`Self::header`].
     pub fn arm9(&self) -> Result<Arm9<'_>, RawArm9Error> {
         let header = self.header()?;
+        let footer_offset = self.arm9_footer_offset()?;
         let start = header.arm9.offset as usize;
-        let end = start + header.arm9.size as usize;
+        // The footer normally follows the ARM9 program, but some ROMs report an ARM9 size that
+        // includes the footer. In that case `footer_offset` lands inside the reported size, so
+        // slicing up to it keeps the footer out of the ARM9 program data.
+        let end = footer_offset.max(start);
         let data = &self.data[start..end];
 
         let footer = self.arm9_footer()?;
@@ -130,14 +134,42 @@ impl<'a> Rom<'a> {
         })?)
     }
 
+    /// Returns the ROM offset of the ARM9 footer.
+    ///
+    /// The footer normally follows the ARM9 program at `arm9.offset + arm9.size`. However, some
+    /// ROMs report an ARM9 size that includes the 12-byte footer, in which case the footer is
+    /// located at `arm9.offset + arm9.size - size_of::<Arm9Footer>()`. This function detects the
+    /// nitrocode to find the footer in either case, falling back to the standard location so that
+    /// callers report the usual "missing nitrocode" error when no footer is present.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
+    fn arm9_footer_offset(&self) -> Result<usize, Arm9FooterError> {
+        let header = self.header()?;
+        let after_arm9 = (header.arm9.offset + header.arm9.size) as usize;
+        let footer_size = size_of::<Arm9Footer>();
+        if self.has_nitrocode_at(after_arm9) {
+            Ok(after_arm9)
+        } else if after_arm9 >= footer_size && self.has_nitrocode_at(after_arm9 - footer_size) {
+            Ok(after_arm9 - footer_size)
+        } else {
+            Ok(after_arm9)
+        }
+    }
+
+    /// Returns whether the ARM9 footer nitrocode is present at the given ROM offset.
+    fn has_nitrocode_at(&self, offset: usize) -> bool {
+        self.data.get(offset..offset + NITROCODE_BYTES.len()).is_some_and(|bytes| bytes == NITROCODE_BYTES)
+    }
+
     /// Returns a reference to the ARM9 footer of this [`Rom`].
     ///
     /// # Errors
     ///
     /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice`].
     pub fn arm9_footer(&self) -> Result<&Arm9Footer, Arm9FooterError> {
-        let header = self.header()?;
-        let start = (header.arm9.offset + header.arm9.size) as usize;
+        let start = self.arm9_footer_offset()?;
         let end = start + size_of::<Arm9Footer>();
         let data = &self.data[start..end];
         Arm9Footer::borrow_from_slice(data)
@@ -149,8 +181,7 @@ impl<'a> Rom<'a> {
     ///
     /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice_mut`].
     pub fn arm9_footer_mut(&mut self) -> Result<&mut Arm9Footer, Arm9FooterError> {
-        let header = self.header()?;
-        let start = (header.arm9.offset + header.arm9.size) as usize;
+        let start = self.arm9_footer_offset()?;
         let end = start + size_of::<Arm9Footer>();
         let data = &mut self.data.to_mut()[start..end];
         Arm9Footer::borrow_from_slice_mut(data)
