@@ -117,8 +117,7 @@ impl<'a> Rom<'a> {
         let end = start + header.arm9.size as usize;
         let data = &self.data[start..end];
 
-        // Some ROMs, mainly DSi-enhanced ones, have no ARM9 footer at all.
-        let footer = self.try_arm9_footer()?;
+        let footer = self.arm9_footer()?;
         let build_info_offset = if header.arm9_build_info_offset == 0 {
             let Some(footer) = footer else { return NoBuildInfoSnafu {}.fail() };
             footer.build_info_offset
@@ -140,26 +139,13 @@ impl<'a> Rom<'a> {
         Ok(arm9)
     }
 
-    /// Returns a reference to the ARM9 footer of this [`Rom`].
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice`].
-    pub fn arm9_footer(&self) -> Result<&Arm9Footer, Arm9FooterError> {
-        let header = self.header()?;
-        let start = (header.arm9.offset + header.arm9.size) as usize;
-        let end = start + size_of::<Arm9Footer>();
-        let data = &self.data[start..end];
-        Arm9Footer::borrow_from_slice(data)
-    }
-
     /// Returns a reference to the ARM9 footer of this [`Rom`], or [`None`] if this ROM has no ARM9 footer. The footer is
     /// considered absent if it doesn't fit in the ROM or doesn't start with the nitrocode.
     ///
     /// # Errors
     ///
     /// See [`Self::header`] and [`Arm9Footer::borrow_from_slice`].
-    pub fn try_arm9_footer(&self) -> Result<Option<&Arm9Footer>, Arm9FooterError> {
+    pub fn arm9_footer(&self) -> Result<Option<&Arm9Footer>, Arm9FooterError> {
         let header = self.header()?;
         let start = (header.arm9.offset + header.arm9.size) as usize;
         let end = start + size_of::<Arm9Footer>();

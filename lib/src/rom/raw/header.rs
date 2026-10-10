@@ -244,8 +244,7 @@ impl Header {
         }
     }
 
-    /// Returns whether this ROM has a DSi area, which holds the ARM9i/ARM7i programs and the digest tables. Unit code bit 1
-    /// marks a DSi-enhanced (2) or DSi-exclusive (3) title.
+    /// Returns whether this ROM has a DSi area, which holds the ARM9i/ARM7i programs and the digest tables.
     pub fn has_dsi_area(&self) -> bool {
         self.unitcode & 2 != 0 && self.arm9i.size != 0
     }
