@@ -5,12 +5,12 @@ use snafu::{Backtrace, Snafu};
 
 use super::RawBuildInfoError;
 
-/// On-disk layout of the entries in the ARM9 autoload list. Which one a game uses depends on its SDK version.
+/// Layout of the entries in the ARM9 autoload list.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Deserialize, Serialize)]
 pub enum AutoloadInfoLayout {
-    /// 12 bytes per entry: base address, code size and .bss size. Used by most games.
+    /// Base address, code size and .bss size.
     Basic,
-    /// 16 bytes per entry: base address, code size, static initializer list and .bss size. Seen in DSi-enhanced games.
+    /// Base address, code size, .ctor address and .bss size.
     Extended,
 }
 
@@ -45,12 +45,10 @@ pub struct AutoloadInfoEntry {
     pub code_size: u32,
     /// Size of the module's uninitialized area.
     pub bss_size: u32,
-    /// Address of the module's static initializer list, a list of function pointers terminated by a null pointer. The ARM9
-    /// entry function passes this address to a routine which copies the list into a table in DTCM, to be called once the
-    /// program has started. Only exists in [`AutoloadInfoLayout::Extended`]; entries without it are written back in
-    /// [`AutoloadInfoLayout::Basic`].
+    /// Address of the module's static initializer list, a list of function pointers terminated by a null pointer. Only exists
+    /// in [`AutoloadInfoLayout::Extended`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sinit_start: Option<u32>,
+    pub ctor_start: Option<u32>,
 }
 
 /// Autoload kind.
@@ -196,10 +194,10 @@ impl AutoloadInfoEntry {
         let word = |index: usize| u32::from_le_bytes(data[index * 4..index * 4 + 4].try_into().unwrap());
         match layout {
             AutoloadInfoLayout::Basic => {
-                Self { base_address: word(0), code_size: word(1), bss_size: word(2), sinit_start: None }
+                Self { base_address: word(0), code_size: word(1), bss_size: word(2), ctor_start: None }
             }
             AutoloadInfoLayout::Extended => {
-                Self { base_address: word(0), code_size: word(1), bss_size: word(3), sinit_start: Some(word(2)) }
+                Self { base_address: word(0), code_size: word(1), bss_size: word(3), ctor_start: Some(word(2)) }
             }
         }
     }
@@ -214,7 +212,7 @@ impl AutoloadInfoEntry {
 
     /// Returns the layout this entry is written back in.
     pub fn layout(&self) -> AutoloadInfoLayout {
-        if self.sinit_start.is_some() {
+        if self.ctor_start.is_some() {
             AutoloadInfoLayout::Extended
         } else {
             AutoloadInfoLayout::Basic
@@ -226,8 +224,8 @@ impl AutoloadInfoEntry {
         let mut bytes = Vec::with_capacity(self.layout().entry_size());
         bytes.extend(self.base_address.to_le_bytes());
         bytes.extend(self.code_size.to_le_bytes());
-        if let Some(sinit_start) = self.sinit_start {
-            bytes.extend(sinit_start.to_le_bytes());
+        if let Some(ctor_start) = self.ctor_start {
+            bytes.extend(ctor_start.to_le_bytes());
         }
         bytes.extend(self.bss_size.to_le_bytes());
         bytes
@@ -239,7 +237,6 @@ impl AutoloadInfo {
     pub fn new(list_entry: AutoloadInfoEntry, index: u32) -> Self {
         let kind = match list_entry.base_address {
             0x1ff8000 => AutoloadKind::Itcm,
-            // The last one is the DTCM of DSi games, which sits at the top of the DSi's 16MB of main RAM.
             0x27e0000 | 0x27c0000 | 0x23c0000 | 0x2fe0000 => AutoloadKind::Dtcm,
             _ => AutoloadKind::Unknown(index),
         };
@@ -263,9 +260,9 @@ impl AutoloadInfo {
     }
 
     /// Returns the address of the static initializer list of this [`AutoloadInfo`], if it has one. See
-    /// [`AutoloadInfoEntry::sinit_start`].
-    pub fn sinit_start(&self) -> Option<u32> {
-        self.list_entry.sinit_start
+    /// [`AutoloadInfoEntry::ctor_start`].
+    pub fn ctor_start(&self) -> Option<u32> {
+        self.list_entry.ctor_start
     }
 
     /// Returns the kind of this [`AutoloadInfo`].
@@ -298,8 +295,8 @@ impl Display for DisplayAutoloadInfo<'_> {
         writeln!(f, "{i}Base address .. : {:#x}", info.list_entry.base_address)?;
         writeln!(f, "{i}Code size ..... : {:#x}", info.list_entry.code_size)?;
         writeln!(f, "{i}.bss size ..... : {:#x}", info.list_entry.bss_size)?;
-        if let Some(sinit_start) = info.list_entry.sinit_start {
-            writeln!(f, "{i}Sinit start ... : {sinit_start:#x}")?;
+        if let Some(ctor_start) = info.list_entry.ctor_start {
+            writeln!(f, "{i}.ctor start ... : {ctor_start:#x}")?;
         }
         Ok(())
     }
@@ -319,7 +316,6 @@ impl Display for AutoloadKind {
 mod tests {
     use super::*;
 
-    /// Autoload list of Pokémon Black Version 2, which uses the extended layout.
     const EXTENDED: [u8; 64] = [
         0x00, 0x80, 0xff, 0x01, 0xa0, 0x13, 0x00, 0x00, 0x00, 0x80, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0xfe, 0x02, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x02, 0x20, 0x00, 0x00, 0x00, //
@@ -327,7 +323,6 @@ mod tests {
         0x00, 0x80, 0x89, 0x06, 0x20, 0x00, 0x00, 0x00, 0x00, 0x80, 0x89, 0x06, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    /// Autoload list in the basic layout, with an ITCM and a DTCM block.
     const BASIC: [u8; 24] = [
         0x00, 0x80, 0xff, 0x01, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x7e, 0x02, 0x00, 0x10, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00,
@@ -341,7 +336,7 @@ mod tests {
             base_address: 0x01ff8000,
             code_size: 0x13a0,
             bss_size: 0,
-            sinit_start: Some(0x01ff8000),
+            ctor_start: Some(0x01ff8000),
         });
         assert_eq!(entries[1].base_address, 0x02fe0000);
         assert_eq!(entries[1].bss_size, 0x20);
@@ -357,25 +352,23 @@ mod tests {
             base_address: 0x01ff8000,
             code_size: 0x2000,
             bss_size: 0,
-            sinit_start: None
+            ctor_start: None
         });
         assert_eq!(entries[1], AutoloadInfoEntry {
             base_address: 0x027e0000,
             code_size: 0x1000,
             bss_size: 0x400,
-            sinit_start: None
+            ctor_start: None
         });
     }
 
-    /// A list of three extended entries is 48 bytes, which also divides into four basic entries. The size of the autoload
-    /// blocks has to break the tie.
     #[test]
     fn tells_ambiguous_sizes_apart() {
         let data = &EXTENDED[..48];
         let entries = AutoloadInfoEntry::parse_list(data, 0x1460).unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[2].base_address, 0x02400000);
-        assert!(entries.iter().all(|entry| entry.sinit_start.is_some()));
+        assert!(entries.iter().all(|entry| entry.ctor_start.is_some()));
     }
 
     #[test]
