@@ -570,8 +570,8 @@ impl<'a> Rom<'a> {
             originally_compressed: arm9_build_config.compressed,
             originally_encrypted: arm9_build_config.encrypted,
             dsprot_state: arm9_build_config.dsprot_state,
+            has_footer: arm9_build_config.footer,
         })?;
-        arm9.set_has_footer(arm9_build_config.footer);
         arm9_build_config.build_info.assign_to_raw(arm9.build_info_mut()?);
         arm9.update_overlay_signatures(&arm9_overlays)?;
         if arm9.dsprot_state().is_unencrypted() && options.encrypt {

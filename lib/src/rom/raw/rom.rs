@@ -9,7 +9,7 @@ use super::{
 use crate::{
     io::{FileError, open_file, write_file},
     rom::{
-        Arm7, Arm7Offsets, Arm9, Arm9Offsets, RomConfigAlignment, RomConfigPaddingValues,
+        Arm7, Arm7Offsets, Arm9, Arm9Offsets, Arm9Options, RomConfigAlignment, RomConfigPaddingValues,
         raw::{MultibootSignature, RawMultibootSignatureError},
     },
 };
@@ -128,14 +128,17 @@ impl<'a> Rom<'a> {
             header.arm9_build_info_offset
         };
 
-        let mut arm9 = Arm9::new(Cow::Borrowed(data), Arm9Offsets {
-            base_address: header.arm9.base_addr,
-            entry_function: header.arm9.entry,
-            build_info: build_info_offset,
-            autoload_callback: header.arm9_autoload_callback,
-            overlay_signatures: footer.map_or(0, |footer| footer.overlay_signatures_offset),
-        })?;
-        arm9.set_has_footer(footer.is_some());
+        let arm9 = Arm9::new(
+            Cow::Borrowed(data),
+            Arm9Offsets {
+                base_address: header.arm9.base_addr,
+                entry_function: header.arm9.entry,
+                build_info: build_info_offset,
+                autoload_callback: header.arm9_autoload_callback,
+                overlay_signatures: footer.map_or(0, |footer| footer.overlay_signatures_offset),
+            },
+            Arm9Options { has_footer: footer.is_some() },
+        )?;
         Ok(arm9)
     }
 

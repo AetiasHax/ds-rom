@@ -192,6 +192,12 @@ pub enum Arm9DsProtInfoError {
     },
 }
 
+/// Options for [`Arm9::new`].
+pub struct Arm9Options {
+    /// Whether the program has an [`Arm9Footer`](super::raw::Arm9Footer).
+    pub has_footer: bool,
+}
+
 /// Options for [`Arm9::with_two_tcms`].
 pub struct Arm9WithTcmsOptions {
     /// Whether the program was compressed originally.
@@ -200,18 +206,25 @@ pub struct Arm9WithTcmsOptions {
     pub originally_encrypted: bool,
     /// Current state of DS Protect. Can be absent, encrypted or unencrypted.
     pub dsprot_state: DsProtState,
+    /// Whether the program has an [`Arm9Footer`](super::raw::Arm9Footer).
+    pub has_footer: bool,
 }
 
 impl<'a> Arm9<'a> {
     /// Creates a new ARM9 program from raw data.
-    pub fn new<T: Into<Cow<'a, [u8]>>>(data: T, offsets: Arm9Offsets) -> Result<Self, RawBuildInfoError> {
+    pub fn new<T: Into<Cow<'a, [u8]>>>(
+        data: T,
+        offsets: Arm9Offsets,
+        options: Arm9Options,
+    ) -> Result<Self, RawBuildInfoError> {
+        let Arm9Options { has_footer } = options;
         let mut arm9 = Arm9 {
             data: data.into(),
             offsets,
             originally_compressed: false,
             originally_encrypted: false,
             dsprot_state: DsProtState::None,
-            has_footer: true,
+            has_footer,
         };
         arm9.originally_compressed = arm9.is_compressed()?;
         arm9.originally_encrypted = arm9.is_encrypted();
@@ -244,9 +257,9 @@ impl<'a> Arm9<'a> {
         }
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
-        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state } = options;
+        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state, has_footer } = options;
         let mut arm9 =
-            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer: true };
+            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -279,9 +292,9 @@ impl<'a> Arm9<'a> {
         }
         let autoload_infos_end = data.len() as u32 + offsets.base_address;
 
-        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state } = options;
+        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state, has_footer } = options;
         let mut arm9 =
-            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer: true };
+            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer };
 
         let build_info = arm9.build_info_mut()?;
         build_info.autoload_blocks = autoload_blocks;
@@ -295,11 +308,6 @@ impl<'a> Arm9<'a> {
     /// one, but some (mainly DSi-enhanced ones) put the build info offset in the ROM header instead and have no footer.
     pub fn has_footer(&self) -> bool {
         self.has_footer
-    }
-
-    /// Sets whether this ARM9 program is followed by an [`Arm9Footer`](super::raw::Arm9Footer) in the ROM.
-    pub fn set_has_footer(&mut self, has_footer: bool) {
-        self.has_footer = has_footer;
     }
 
     /// Returns whether the secure area is encrypted. See [`Self::originally_encrypted`] for whether the secure area was
@@ -509,8 +517,7 @@ impl<'a> Arm9<'a> {
     fn get_autoload_info_entries(&self, build_info: &BuildInfo) -> Result<Vec<AutoloadInfoEntry>, Arm9AutoloadError> {
         let start = (build_info.autoload_infos_start - self.base_address()) as usize;
         let end = (build_info.autoload_infos_end - self.base_address()) as usize;
-        // The autoload blocks are stored back to back, ending where the autoload list starts. Their combined size tells the
-        // on-disk layouts of the list apart.
+        // The autoload blocks are located right after the autoload list
         let blocks_size = build_info.autoload_infos_start - build_info.autoload_blocks;
         let autoload_info = AutoloadInfoEntry::parse_list(&self.data[start..end], blocks_size)?;
         Ok(autoload_info)
