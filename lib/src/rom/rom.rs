@@ -209,14 +209,6 @@ pub enum RomExtractError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when a DSi ROM is Modcrypted with the debug key. The debug key scheme is not supported, and leaving the
-    /// programs encrypted would produce an extraction that cannot be rebuilt to match the original, so extraction is
-    /// rejected instead.
-    #[snafu(display("DSi ROM is Modcrypted with the debug key, which is not supported:\n{backtrace}"))]
-    ModcryptDebugKeyUnsupported {
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
     /// See [`RomAlignmentsError`].
     #[snafu(transparent)]
     RomAlignments {
@@ -1070,60 +1062,33 @@ impl<'a> Rom<'a> {
             }
         }
 
-        let modcrypt = if header.dsi_flags.modcrypted() {
-            if header.dsi_flags.modcrypt_debug_key() {
-                // The debug key scheme is unsupported. Leaving the programs encrypted would produce a decrypted digest form
-                // over ciphertext on rebuild, silently mismatching the original, so reject the extraction outright.
-                return ModcryptDebugKeyUnsupportedSnafu {}.fail();
-            }
-            Some(Modcrypt::retail(header.gamecode.0, &header.sha1_hmac_arm9i))
-        } else {
+        let modcrypt = if !header.dsi_flags.modcrypted() {
             None
+        } else if header.dsi_flags.modcrypt_debug_key() || header.dsi_flags_2.developer_app() {
+            let header_start = &bytemuck::bytes_of(header)[0..16];
+            let header_start = <&[u8; 16]>::try_from(header_start).unwrap();
+            Some(Modcrypt::debug(header_start))
+        } else {
+            Some(Modcrypt::retail(header.gamecode.0, &header.sha1_hmac_arm9i))
         };
 
-        // The Modcrypt areas are expected to cover the start of a DSi-exclusive program. Anything else is a layout we cannot
-        // reproduce, so leave the program encrypted rather than mangle it.
-        let modcrypt_size = |area: &TableOffset, program: &ProgramOffset, name: &str| {
-            if area.size == 0 || modcrypt.is_none() {
-                0
-            } else if area.offset == program.offset {
-                area.size
-            } else {
-                log::warn!(
-                    "Modcrypt area at {:#x} does not start at the {name} program at {:#x}, leaving it encrypted",
-                    area.offset,
-                    program.offset
-                );
-                0
-            }
-        };
-
-        let program = |program: &ProgramOffset, build_info_offset: u32, modcrypt_size: u32, counter: &[u8; 0x14]| {
-            let start = program.offset as usize;
-            let end = start + program.size as usize;
-            let mut dsi_program = DsiProgram::new(data[start..end].to_vec(), DsiProgramOffsets {
-                entry_function: program.entry,
-                base_address: program.base_addr,
-                build_info_offset,
-                modcrypt_size,
-            });
-            if let Some(modcrypt) = &modcrypt {
-                dsi_program.apply_modcrypt(modcrypt, Modcrypt::counter(counter));
-            }
-            dsi_program
-        };
-
-        let arm9i = program(
+        let arm9i = Self::extract_dsi_program(
+            data,
+            modcrypt.as_ref(),
             &header.arm9i,
             header.arm9i_build_info_offset,
-            modcrypt_size(&header.modcrypt_area_1, &header.arm9i, "ARM9i"),
+            &header.modcrypt_area_1,
             &header.sha1_hmac_arm9_with_secure_area,
+            "ARM9i",
         );
-        let arm7i = program(
+        let arm7i = Self::extract_dsi_program(
+            data,
+            modcrypt.as_ref(),
             &header.arm7i,
             header.arm7i_build_info_offset,
-            modcrypt_size(&header.modcrypt_area_2, &header.arm7i, "ARM7i"),
+            &header.modcrypt_area_2,
             &header.sha1_hmac_arm7,
+            "ARM7i",
         );
 
         // Everything between the end of the DS region and the ARM9i program is mastering filler that nothing else in the ROM
@@ -1152,6 +1117,44 @@ impl<'a> Rom<'a> {
         };
 
         Ok((DsiArea { arm9i, arm7i, region_padding }, config))
+    }
+
+    fn extract_dsi_program(
+        data: &[u8],
+        modcrypt: Option<&Modcrypt>,
+        program: &ProgramOffset,
+        build_info_offset: u32,
+        modcrypt_area: &TableOffset,
+        counter: &[u8; 0x14],
+        name: &str,
+    ) -> DsiProgram<'a> {
+        // The Modcrypt areas are expected to cover the start of a DSi-exclusive program. Anything else is a layout we cannot
+        // reproduce, so leave the program encrypted rather than mangle it.
+        let modcrypt_size = if modcrypt_area.size == 0 || modcrypt.is_none() {
+            0
+        } else if modcrypt_area.offset == program.offset {
+            modcrypt_area.size
+        } else {
+            log::warn!(
+                "Modcrypt area at {:#x} does not start at the {name} program at {:#x}, leaving it encrypted",
+                modcrypt_area.offset,
+                program.offset
+            );
+            0
+        };
+
+        let start = program.offset as usize;
+        let end = start + program.size as usize;
+        let mut dsi_program = DsiProgram::new(data[start..end].to_vec(), DsiProgramOffsets {
+            entry_function: program.entry,
+            base_address: program.base_addr,
+            build_info_offset,
+            modcrypt_size,
+        });
+        if let Some(modcrypt) = modcrypt {
+            dsi_program.apply_modcrypt(modcrypt, Modcrypt::counter(counter));
+        }
+        dsi_program
     }
 
     /// Builds a raw ROM.

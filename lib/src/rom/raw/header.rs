@@ -412,7 +412,7 @@ pub struct DsiFlags {
     pub disable_debug: bool,
     /// Reserved, zero.
     #[bits(4)]
-    reserved: u8,
+    pub reserved: u8,
 }
 
 macro_rules! write_flag {
@@ -621,17 +621,17 @@ pub struct AccessControl {
 #[derive(Serialize, Deserialize)]
 pub struct DsiFlags2 {
     /// Touchscreen/Sound Controller (TSC) in DSi (true) or DS (false) mode
-    tsc_dsi_mode: bool,
-    require_eula_agreement: bool,
+    pub tsc_dsi_mode: bool,
+    pub require_eula_agreement: bool,
     /// If true, use banner.sav to override default banner icon
-    dynamic_icon: bool,
+    pub dynamic_icon: bool,
     /// If true, show Wi-Fi Connection icon in launcher
-    launcher_wfc_icon: bool,
+    pub launcher_wfc_icon: bool,
     /// If true, show DS Wireless icon in launcher
-    launcher_wireless_icon: bool,
-    has_icon_sha1: bool,
-    has_header_rsa: bool,
-    developer_app: bool,
+    pub launcher_wireless_icon: bool,
+    pub has_icon_sha1: bool,
+    pub has_header_rsa: bool,
+    pub developer_app: bool,
     #[bits(24)]
-    reserved: u32,
+    pub reserved: u32,
 }
