@@ -9,7 +9,7 @@ use snafu::{Backtrace, Snafu};
 
 use super::{
     ImageSize,
-    raw::{self, BannerBitmap, BannerPalette, BannerVersion, Language},
+    raw::{self, BannerAnimation, BannerBitmap, BannerPalette, BannerVersion, Language},
 };
 use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
 
@@ -59,14 +59,20 @@ impl Banner {
     /// Loads from a raw banner.
     pub fn load_raw(banner: &raw::Banner) -> Self {
         let version = banner.version();
-        let mut images = BannerImages::from_bitmap(*banner.bitmap(), *banner.palette());
-        let keyframes = banner.animation().map(|animation| {
-            images.set_animation(animation);
-            // A keyframe with no duration ends the animation, so the trailing empty ones are left out and zero-filled again
-            // when building.
-            let used = animation.keyframes.iter().rposition(|keyframe| keyframe.frame_duration() > 0);
-            animation.keyframes[..used.map_or(0, |i| i + 1)].iter().map(BannerKeyframe::load_raw).collect()
+        let animation = banner.animation();
+        let images = BannerImages::new(BannerImagesOptions {
+            bitmap: *banner.bitmap(),
+            palette: *banner.palette(),
+            animation: animation.copied(),
         });
+        let keyframes = if let Some(animation) = animation {
+            // A keyframe with no duration ends the animation
+            let used = animation.keyframes.iter().rposition(|keyframe| keyframe.frame_duration() > 0);
+            let keyframes = animation.keyframes[..used.map_or(0, |i| i + 1)].iter().map(BannerKeyframe::load_raw).collect();
+            Some(keyframes)
+        } else {
+            None
+        };
         Self {
             version,
             title: BannerTitle {
@@ -221,10 +227,22 @@ pub enum BannerImageError {
     },
 }
 
+/// Options for [`BannerImages::new`].
+pub struct BannerImagesOptions {
+    /// Main bitmap.
+    pub bitmap: BannerBitmap,
+    /// Main palette.
+    pub palette: BannerPalette,
+    /// Animated bitmaps, palettes and keyframes.
+    pub animation: Option<BannerAnimation>,
+}
+
 impl BannerImages {
-    /// Creates a new [`BannerImages`] from a bitmap and palette.
-    pub fn from_bitmap(bitmap: BannerBitmap, palette: BannerPalette) -> Self {
-        Self {
+    /// Creates a new [`BannerImages`].
+    pub fn new(options: BannerImagesOptions) -> Self {
+        let BannerImagesOptions { bitmap, palette, animation } = options;
+
+        let mut banner = Self {
             bitmap,
             palette,
             animation_bitmaps: None,
@@ -232,28 +250,29 @@ impl BannerImages {
             bitmap_path: "bitmap.png".into(),
             palette_path: "palette.png".into(),
             animation_paths: None,
-        }
-    }
-
-    /// Adds the bitmaps and palettes of an animated icon to this [`BannerImages`]. Every bitmap is rendered with the palette
-    /// that the first keyframe showing it uses, so that its colors can be mapped back to palette indices when loading.
-    pub fn set_animation(&mut self, animation: &raw::BannerAnimation) {
-        let palette_of = |bitmap_index: usize| {
-            animation
-                .keyframes
-                .iter()
-                .find(|keyframe| keyframe.frame_duration() > 0 && keyframe.bitmap_index() as usize == bitmap_index)
-                .map_or(0, |keyframe| keyframe.palette_index() as usize)
         };
 
-        self.animation_paths = Some(BannerAnimationPaths {
-            bitmaps: (0..animation.bitmaps.len())
-                .map(|i| BannerAnimationBitmapPath { path: format!("anim_bitmap_{i}.png").into(), palette: palette_of(i) })
-                .collect(),
-            palettes: (0..animation.palettes.len()).map(|i| format!("anim_palette_{i}.png").into()).collect(),
-        });
-        self.animation_bitmaps = Some(animation.bitmaps.into());
-        self.animation_palettes = Some(animation.palettes.into());
+        if let Some(animation) = animation {
+            banner.animation_paths = Some(BannerAnimationPaths {
+                bitmaps: (0..animation.bitmaps.len())
+                    .map(|i| BannerAnimationBitmapPath {
+                        path: format!("anim_bitmap_{i}.png").into(),
+                        palette: animation.palette_of(i),
+                    })
+                    .collect(),
+                palettes: (0..animation.palettes.len()).map(|i| format!("anim_palette_{i}.png").into()).collect(),
+            });
+            banner.animation_bitmaps = Some(animation.bitmaps.into());
+            banner.animation_palettes = Some(animation.palettes.into());
+        }
+
+        banner
+    }
+
+    /// Creates a new [`BannerImages`] from a bitmap and palette.
+    #[deprecated(note = "use BannerImages::new instead")]
+    pub fn from_bitmap(bitmap: BannerBitmap, palette: BannerPalette) -> Self {
+        Self::new(BannerImagesOptions { bitmap, palette, animation: None })
     }
 
     fn load_palette(path: &Path) -> Result<(BannerPalette, DynamicImage), BannerImageError> {
