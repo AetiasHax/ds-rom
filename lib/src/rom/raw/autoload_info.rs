@@ -111,32 +111,15 @@ pub enum RawAutoloadInfoError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input divides evenly into entries but no layout produces a plausible autoload list.
+    /// Occurs when the autoload info entries' `code_size` values don't add up to the combined size of all autoload blocks.
     #[snafu(display(
-        "autoload infos of {size} bytes do not parse into a plausible autoload list in any known layout, expected the code \
-         sizes to add up to {expected_blocks_size:#x} bytes of autoload blocks:\n{backtrace}"
+        "none of the possible total code sizes {total:?} match with the expected total autoload blocks size of {expected}:\n{backtrace}"
     ))]
-    NoMatchingLayout {
-        /// Size of the input.
-        size: usize,
-        /// Combined size of the autoload blocks, which the entries' code sizes should add up to.
-        expected_blocks_size: u32,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
-    /// Occurs when more than one layout parses plausibly and the autoload blocks don't tell them apart, so picking one would
-    /// risk silently misparsing the list.
-    #[snafu(display(
-        "autoload infos of {size} bytes are ambiguous: they parse plausibly in {count} layouts but no layout's code sizes \
-         add up to {expected_blocks_size:#x} bytes of autoload blocks, so the layout cannot be determined:\n{backtrace}"
-    ))]
-    AmbiguousLayout {
-        /// Size of the input.
-        size: usize,
-        /// Number of layouts that parsed plausibly.
-        count: usize,
-        /// Combined size of the autoload blocks, which the entries' code sizes should add up to.
-        expected_blocks_size: u32,
+    TotalSizeMismatch {
+        /// The sum of `code_size` values.
+        total: Vec<u64>,
+        /// The combined size of all autoload blocks.
+        expected: u32,
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
@@ -169,21 +152,14 @@ impl AutoloadInfoEntry {
             return Ok(entries.clone());
         }
 
-        // No layout matches the size of the autoload blocks, which can happen if the blocks aren't packed the way we expect.
-        // Fall back to a plausible layout, but only if exactly one is plausible: when several are (e.g. a 48-byte list that
-        // divides into both three extended and four basic entries), guessing between them risks silently misparsing the
-        // list, so treat that as ambiguous instead.
-        let plausible = candidates.iter().filter(|(_, entries)| entries.iter().all(Self::is_plausible)).collect::<Vec<_>>();
-        match plausible.as_slice() {
-            [(layout, entries)] => {
-                log::warn!(
-                    "Autoload block sizes don't add up to {blocks_size:#x} bytes in any layout, assuming the {layout} layout"
-                );
-                Ok(entries.clone())
-            }
-            [] => NoMatchingLayoutSnafu { size: data.len(), expected_blocks_size: blocks_size }.fail(),
-            _ => AmbiguousLayoutSnafu { size: data.len(), count: plausible.len(), expected_blocks_size: blocks_size }.fail(),
+        TotalSizeMismatchSnafu {
+            total: candidates
+                .iter()
+                .map(|(_, entries)| entries.iter().map(|entry| entry.code_size as u64).sum::<u64>())
+                .collect::<Vec<_>>(),
+            expected: blocks_size,
         }
+        .fail()
     }
 
     fn parse_list_with_layout(data: &'_ [u8], layout: AutoloadInfoLayout) -> Vec<Self> {
@@ -200,14 +176,6 @@ impl AutoloadInfoEntry {
                 Self { base_address: word(0), code_size: word(1), bss_size: word(3), ctor_start: Some(word(2)) }
             }
         }
-    }
-
-    /// Returns whether this entry could plausibly describe an autoload module. Used to rule out layouts when the autoload
-    /// blocks don't tell them apart.
-    fn is_plausible(&self) -> bool {
-        // Every memory region an autoload can be loaded into starts at 0x01000000 (ITCM) or above, and no module comes close
-        // to filling the DSi's 16MB of main RAM.
-        self.base_address >= 0x01000000 && self.code_size < 0x01000000 && self.bss_size < 0x01000000
     }
 
     /// Returns the layout this entry is written back in.
@@ -384,26 +352,5 @@ mod tests {
     fn rejects_sizes_that_are_no_layout() {
         let error = AutoloadInfoEntry::parse_list(&EXTENDED[..20], 0x1480).unwrap_err();
         assert!(matches!(error, RawAutoloadInfoError::InvalidSize { .. }));
-    }
-
-    /// When no layout's code sizes add up to the autoload blocks but exactly one layout parses plausibly, that layout is
-    /// used as a fallback. The 64-byte extended list only divides into extended entries, so a mismatched block size still
-    /// resolves to the same entries as the matching one.
-    #[test]
-    fn falls_back_to_the_only_plausible_layout() {
-        let matched = AutoloadInfoEntry::parse_list(&EXTENDED, 0x1480).unwrap();
-        let fallback = AutoloadInfoEntry::parse_list(&EXTENDED, 0x9999).unwrap();
-        assert_eq!(fallback.len(), 4);
-        assert_eq!(fallback, matched);
-    }
-
-    /// A lone candidate layout that parses to an implausible entry and whose code sizes don't add up is rejected outright
-    /// rather than used as a fallback.
-    #[test]
-    fn rejects_the_only_layout_when_implausible() {
-        // 12 bytes divide only into a single basic entry, whose zero base address is below the 0x01000000 floor, so it is
-        // not a plausible module and there is nothing to fall back to.
-        let error = AutoloadInfoEntry::parse_list(&[0u8; 12], 0x100).unwrap_err();
-        assert!(matches!(error, RawAutoloadInfoError::NoMatchingLayout { .. }));
     }
 }

@@ -517,7 +517,7 @@ impl<'a> Arm9<'a> {
     fn get_autoload_info_entries(&self, build_info: &BuildInfo) -> Result<Vec<AutoloadInfoEntry>, Arm9AutoloadError> {
         let start = (build_info.autoload_infos_start - self.base_address()) as usize;
         let end = (build_info.autoload_infos_end - self.base_address()) as usize;
-        // The autoload blocks are located right after the autoload list
+        // The autoload blocks are located right before the autoload list
         let blocks_size = build_info.autoload_infos_start - build_info.autoload_blocks;
         let autoload_info = AutoloadInfoEntry::parse_list(&self.data[start..end], blocks_size)?;
         Ok(autoload_info)
