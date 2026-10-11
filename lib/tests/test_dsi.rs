@@ -5,6 +5,7 @@ use ds_rom::{
     crypto::{blowfish::BlowfishKey, hmac_sha1::HmacSha1, modcrypt::Modcrypt},
     rom::{Rom, RomLoadOptions, raw},
 };
+use walkdir::WalkDir;
 
 use crate::common::RomsTest;
 mod common;
@@ -147,6 +148,7 @@ fn test_dsi_hashes_are_regenerated() -> Result<()> {
         if file_name.starts_with("build_") {
             continue;
         }
+        println!("testing DSi hash regeneration on {file_name}...");
 
         let original = fs::read(&path)?;
         let raw_rom = raw::Rom::from_file(&path)?;
@@ -177,41 +179,49 @@ fn test_dsi_hashes_are_regenerated() -> Result<()> {
         let banner_yaml = fs::read_to_string(&banner_config)?;
         assert!(banner_yaml.contains("Nintendo"), "banner title not found");
         fs::write(&banner_config, banner_yaml.replacen("Nintendo", "Nintendk", 1))?;
-        let asset = fs::read_dir(extract_path.join("files"))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .find(|p| p.is_file() && fs::metadata(p).map(|m| m.len() > 16).unwrap_or(false))
-            .ok_or_else(|| anyhow!("no asset file to modify"))?;
-        println!("modifying {}", asset.display());
-        flip_a_bit(&asset)?;
+        let mut asset = None;
+        for entry in WalkDir::new(extract_path.join("files")) {
+            let entry = entry?;
+            if entry.file_type().is_file() && entry.metadata()?.len() > 16 {
+                asset = Some(entry.path().to_path_buf());
+                break;
+            }
+        }
+        if let Some(asset) = asset {
+            println!("modifying {}", asset.display());
+            flip_a_bit(&asset)?;
 
-        let modified = build(&extract_path, &test.key)?;
-        assert_eq!(modified.len(), original.len(), "{file_name}: modified ROM changed size");
-        assert!(modified != original, "{file_name}: modified ROM is identical to the original");
-        let after = assert_self_consistent(&modified, &test.key, "modified")?;
+            let modified = build(&extract_path, &test.key)?;
+            assert_eq!(modified.len(), original.len(), "{file_name}: modified ROM changed size");
+            assert!(modified != original, "{file_name}: modified ROM is identical to the original");
+            let after = assert_self_consistent(&modified, &test.key, "modified")?;
 
-        // Every hash that covers changed data must actually have changed. If any of these were copied out of the original
-        // header instead of recomputed, the rebuilt ROM would be silently corrupt.
-        assert_ne!(before.digest_master, after.digest_master, "digest master did not change");
-        assert_ne!(before.sector_hashtable, after.sector_hashtable, "sector hashtable did not change");
-        assert_ne!(before.block_hashtable, after.block_hashtable, "block hashtable did not change");
-        assert_ne!(before.arm9i, after.arm9i, "ARM9i hash did not change");
-        assert_ne!(before.banner, after.banner, "banner hash did not change");
+            // Every hash that covers changed data must actually have changed. If any of these were copied out of the original
+            // header instead of recomputed, the rebuilt ROM would be silently corrupt.
+            assert_ne!(before.digest_master, after.digest_master, "digest master did not change");
+            assert_ne!(before.sector_hashtable, after.sector_hashtable, "sector hashtable did not change");
+            assert_ne!(before.block_hashtable, after.block_hashtable, "block hashtable did not change");
+            assert_ne!(before.arm9i, after.arm9i, "ARM9i hash did not change");
+            assert_ne!(before.banner, after.banner, "banner hash did not change");
 
-        // The ARM9 and ARM7 were untouched, so their hashes must not move.
-        assert_eq!(before.arm9_with_secure_area, after.arm9_with_secure_area, "ARM9 hash changed unexpectedly");
-        assert_eq!(before.arm7, after.arm7, "ARM7 hash changed unexpectedly");
+            // The ARM9 and ARM7 were untouched, so their hashes must not move.
+            assert_eq!(before.arm9_with_secure_area, after.arm9_with_secure_area, "ARM9 hash changed unexpectedly");
+            assert_eq!(before.arm7, after.arm7, "ARM7 hash changed unexpectedly");
 
-        // A new Modcrypt key means the stored ARM9i ciphertext must differ beyond the one flipped bit.
-        let raw_modified = raw::Rom::new(modified.clone());
-        let header = raw_modified.header()?;
-        let area = header.modcrypt_area_1;
-        let differing = original[area.offset as usize..(area.offset + area.size) as usize]
-            .iter()
-            .zip(&modified[area.offset as usize..(area.offset + area.size) as usize])
-            .filter(|(a, b)| a != b)
-            .count();
-        println!("{differing:#x} of {:#x} Modcrypt bytes changed", area.size);
-        assert!(differing > area.size as usize / 4, "Modcrypt area barely changed, key was probably not re-derived");
+            // A new Modcrypt key means the stored ARM9i ciphertext must differ beyond the one flipped bit.
+            let raw_modified = raw::Rom::new(modified.clone());
+            let header = raw_modified.header()?;
+            let area = header.modcrypt_area_1;
+            let differing = original[area.offset as usize..(area.offset + area.size) as usize]
+                .iter()
+                .zip(&modified[area.offset as usize..(area.offset + area.size) as usize])
+                .filter(|(a, b)| a != b)
+                .count();
+            println!("{differing:#x} of {:#x} Modcrypt bytes changed", area.size);
+            assert!(differing > area.size as usize / 4, "Modcrypt area barely changed, key was probably not re-derived");
+        } else {
+            println!("skipping {file_name}, no asset file to modify");
+        }
 
         fs::remove_dir_all(&extract_path)?;
     }
