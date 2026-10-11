@@ -13,23 +13,12 @@ pub struct DsiProgramOffsets {
     pub base_address: u32,
     /// Build info offset, relative to the start of the program.
     pub build_info_offset: u32,
-    /// Number of bytes at the start of the program that are Modcrypted in the ROM, or zero if it is stored in the clear.
+    /// Number of bytes at the start of the program that are Modcrypted in the ROM. Zero means it's unencrypted.
     #[serde(default)]
     pub modcrypt_size: u32,
 }
 
-/// A DSi-exclusive program, either ARM9i or ARM7i. It is stored here as the plain blob the ROM
-/// holds, with no footer or autoloads parsed, but the start of the program may be
-/// [Modcrypted](Modcrypt).
-///
-/// The blob is not necessarily uncompressed. Pokemon Black 2's ARM9i is BLZ-compressed: 0x21c40
-/// bytes decompressing to 0x6aef0, and it runs at 0x02700000 rather than the 0x02400000 the header
-/// loads it at. Its decompressed image ends in a 16-byte autoload info entry, base 0x02700000 and
-/// size 0x6aee0, at exactly the address base plus size names. Note that the decompressed length is
-/// `blob_len - 4 + inc_len` and not the `dec_len + comp_len + inc_len` the usual BLZ formula gives,
-/// which is 6 bytes short and misplaces every byte the backward pass writes.
-///
-/// The data is held *decrypted*, which is the form that the digest tables and the program's own SHA1-HMAC cover.
+/// ARM9i or ARM7i program.
 #[derive(Clone)]
 pub struct DsiProgram<'a> {
     data: Cow<'a, [u8]>,
@@ -57,7 +46,7 @@ impl<'a> DsiProgram<'a> {
         self.offsets.modcrypt_size != 0
     }
 
-    /// Returns the decrypted data of this program.
+    /// Returns the full contents of this program.
     pub fn full_data(&self) -> &[u8] {
         &self.data
     }
