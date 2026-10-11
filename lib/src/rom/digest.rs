@@ -6,8 +6,7 @@ use snafu::{Backtrace, Snafu};
 use super::raw::HmacSha1Signature;
 use crate::crypto::hmac_sha1::HmacSha1;
 
-/// Shape of the digest tables. The sector and block sizes come from the ROM header and are the only parts a rebuild cannot
-/// derive from the ROM layout.
+/// Shape of the digest tables. The sector and block sizes come from the ROM header.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct DigestParams {
     /// Number of bytes covered by one sector hash, normally 0x400.
@@ -59,9 +58,9 @@ pub enum DigestError {
     },
 }
 
-/// The digest tables of a DSi title. Every sector of the NTR and TWL regions gets a SHA1-HMAC in the sector hashtable, every
-/// [`DigestParams::block_sector_count`] entries of that table get one in the block hashtable, and the whole block hashtable
-/// gets one master hash which lives in the ROM header.
+/// The digest tables of a DSi title. Every sector of the NTR and TWL regions gets a SHA1-HMAC in the sector hashtable, each
+/// group of [`DigestParams::block_sector_count`] entries of that table get one in the block hashtable, and the whole block
+/// hashtable gets one master hash which lives in the ROM header.
 pub struct Digest {
     sector_hashtable: Vec<u8>,
     block_hashtable: Vec<u8>,
@@ -85,12 +84,15 @@ impl Digest {
         twl_region: Range<u32>,
     ) -> Result<Self, DigestError> {
         if params.sector_size == 0 || params.block_sector_count == 0 {
-            return ZeroSizedSnafu {}.fail();
+            return ZeroSizedSnafu.fail();
         }
-        let hash_size = size_of::<HmacSha1Signature>();
+        const HASH_SIZE: usize = size_of::<HmacSha1Signature>();
 
-        // --------------------- Sector hashtable ---------------------
-        let mut sector_hashtable = Vec::new();
+        let num_sectors = ntr_region.len() / params.sector_size as usize + twl_region.len() / params.sector_size as usize;
+        let num_blocks = num_sectors.div_ceil(params.block_sector_count as usize);
+        let sector_hashtable_size = num_blocks * params.block_sector_count as usize * HASH_SIZE;
+        let mut sector_hashtable = Vec::with_capacity(sector_hashtable_size);
+
         for region in [&ntr_region, &twl_region] {
             if region.is_empty() {
                 continue;
@@ -108,18 +110,14 @@ impl Digest {
 
         // The sector hashtable is padded with zeroed entries up to a whole number of blocks, and the last block hash covers
         // that padding.
-        let num_sectors = sector_hashtable.len() / hash_size;
-        let num_blocks = num_sectors.div_ceil(params.block_sector_count as usize);
-        sector_hashtable.resize(num_blocks * params.block_sector_count as usize * hash_size, 0);
+        sector_hashtable.resize(sector_hashtable_size, 0);
 
-        // --------------------- Block hashtable ---------------------
-        let block_size = params.block_sector_count as usize * hash_size;
-        let mut block_hashtable = Vec::with_capacity(num_blocks * hash_size);
+        let block_size = params.block_sector_count as usize * HASH_SIZE;
+        let mut block_hashtable = Vec::with_capacity(num_blocks * HASH_SIZE);
         for block in sector_hashtable.chunks(block_size) {
             block_hashtable.extend_from_slice(&hmac_sha1.compute(block));
         }
 
-        // --------------------- Master hash ---------------------
         let master = HmacSha1Signature::from_hmac_sha1(hmac_sha1, &block_hashtable);
 
         Ok(Self { sector_hashtable, block_hashtable, master })
