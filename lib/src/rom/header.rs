@@ -91,9 +91,6 @@ pub struct HeaderDsPostDsi {
 }
 
 /// Values for DSi-enhanced and DSi-exclusive games, [`HeaderVersion::Dsi`].
-///
-/// Everything derived from ROM contents (the ARM9i/ARM7i and digest table offsets, the total DSi ROM size, the Modcrypt
-/// areas and every SHA1-HMAC) is recomputed by [`Header::build`] and therefore absent here.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct HeaderDsi {
     /// DSi-specific flags, including whether the ROM is Modcrypted.
@@ -193,6 +190,13 @@ impl Header {
                 arm7_build_info_offset_is_relative: header.arm7_build_info_offset != 0
                     && header.arm7_build_info_offset <= header.arm7.offset,
             },
+            ds_post_dsi: (version >= HeaderVersion::DsPostDsi).then_some(HeaderDsPostDsi {
+                dsi_flags_2: header.dsi_flags_2,
+                sha1_hmac_banner: header.sha1_hmac_banner,
+                sha1_hmac_unk1: header.sha1_hmac_unk1,
+                sha1_hmac_unk2: header.sha1_hmac_unk2,
+                rsa_sha1: Box::new(header.rsa_sha1),
+            }),
             dsi: (version >= HeaderVersion::Dsi).then_some(HeaderDsi {
                 dsi_flags: header.dsi_flags,
                 memory_banks_wram: header.memory_banks_wram,
@@ -220,13 +224,6 @@ impl Header {
                 file_type: header.file_type,
                 sd_public_sav_size: header.sd_public_sav_size,
                 sd_private_sav_size: header.sd_private_sav_size,
-            }),
-            ds_post_dsi: (version >= HeaderVersion::DsPostDsi).then_some(HeaderDsPostDsi {
-                dsi_flags_2: header.dsi_flags_2,
-                sha1_hmac_banner: header.sha1_hmac_banner,
-                sha1_hmac_unk1: header.sha1_hmac_unk1,
-                sha1_hmac_unk2: header.sha1_hmac_unk2,
-                rsa_sha1: Box::new(header.rsa_sha1),
             }),
         }
     }
