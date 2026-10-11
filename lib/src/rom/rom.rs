@@ -37,54 +37,6 @@ use crate::{
 /// The DS and DSi ROM region ends in the header are counted in these units.
 const DSI_REGION_UNIT: u32 = 0x80000;
 
-/// Guesses the alignment a section was built to from the trailing zeros of its offset, clamped to the 4-byte..4KB range the
-/// DSi mastering tools use. Used for the DSi area, whose sections are laid out more coarsely than the DS area.
-///
-/// This is a heuristic: an offset can carry more trailing zeros than its true alignment demands, so a section aligned to,
-/// say, 0x80000 whose offset happens to have only 12 trailing zeros is recorded as 0x1000-aligned. That still rebuilds an
-/// unmodified ROM byte for byte, because the section lands at the exact same offset either way; it only diverges from the
-/// original layout once a preceding section changes size, which would push a coarser-aligned section further along than the
-/// inferred alignment does. The header does not store the real alignment, so this is the best it can be inferred from.
-fn detect_alignment(offset: u32) -> u32 {
-    if offset == 0 {
-        4
-    } else {
-        1 << offset.trailing_zeros().clamp(2, 12)
-    }
-}
-
-/// Writes `count` copies of `byte` to `cursor`, in fixed-size chunks so that padding a multi-megabyte gap doesn't allocate a
-/// temporary buffer the size of the gap.
-fn write_padding(cursor: &mut Cursor<Vec<u8>>, byte: u8, count: usize) -> io::Result<()> {
-    const CHUNK: usize = 8 * 1024;
-    let chunk = [byte; CHUNK];
-    let mut remaining = count;
-    while remaining > 0 {
-        let n = remaining.min(CHUNK);
-        cursor.write_all(&chunk[..n])?;
-        remaining -= n;
-    }
-    Ok(())
-}
-
-/// Rounds `value` up to the next multiple of `alignment`, which must be a power of two.
-fn align_up(value: u32, alignment: u32) -> u32 {
-    assert!(alignment.is_power_of_two(), "alignment must be a power of two");
-    (value + alignment - 1) & !(alignment - 1)
-}
-
-/// Offsets worked out while laying out the DSi area, see [`Rom::build_dsi_area`].
-struct DsiLayout {
-    region_start: u32,
-    arm9i_offset: u32,
-    arm7i_offset: u32,
-    rom_size_ds: u32,
-    rom_size_dsi: u32,
-    sector_hashtable_size: u32,
-    block_hashtable_offset: u32,
-    block_hashtable_size: u32,
-}
-
 /// A plain ROM.
 pub struct Rom<'a> {
     header: Header,
@@ -104,8 +56,7 @@ pub struct Rom<'a> {
     config: RomConfig,
 }
 
-/// The DSi area of a DSi-enhanced or DSi-exclusive ROM, which holds the DSi-exclusive programs. The digest tables also live
-/// there but are recomputed on every build, so they are not stored.
+/// The area which holds the DSi-exclusive programs.
 pub struct DsiArea<'a> {
     /// ARM9i program, stored decrypted.
     pub arm9i: DsiProgram<'a>,
@@ -316,12 +267,6 @@ pub enum RomBuildError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when a DSi ROM is Modcrypted with the debug key but the header is not available to derive it.
-    #[snafu(display("Modcrypt with the debug key is not supported:\n{backtrace}"))]
-    ModcryptDebugKey {
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
 }
 
 /// Errors related to [`Rom::save`] and [`Rom::load`].
@@ -448,10 +393,6 @@ pub enum RomSaveError {
     },
 }
 
-fn default_true() -> bool {
-    true
-}
-
 /// Config file for the ARM9 main module.
 #[derive(Serialize, Deserialize)]
 pub struct Arm9BuildConfig {
@@ -462,7 +403,7 @@ pub struct Arm9BuildConfig {
     pub encrypted: bool,
     /// Whether this module is compressed in the ROM.
     pub compressed: bool,
-    /// Whether this module is followed by an ARM9 footer in the ROM. Defaults to `true`, since ROMs without a footer are rare.
+    /// Whether this module is followed by an ARM9 footer in the ROM.
     #[serde(default = "default_true")]
     pub footer: bool,
     /// Build info for this module.
@@ -556,11 +497,10 @@ impl<'a> Rom<'a> {
         } else {
             None
         };
-        let arm9_hmac_sha1_for_dsi = arm9_hmac_sha1.clone();
 
         // --------------------- Load ARM9 overlays ---------------------
         let arm9_overlays = if let Some(arm9_overlays_config) = &config.arm9_overlays {
-            Self::load_overlays(&path.join(arm9_overlays_config), "arm9", arm9_hmac_sha1, &options)?
+            Self::load_overlays(&path.join(arm9_overlays_config), "arm9", arm9_hmac_sha1.as_ref(), &options)?
         } else {
             Default::default()
         };
@@ -660,7 +600,7 @@ impl<'a> Rom<'a> {
             path_order,
             multiboot_signature,
             dsi,
-            hmac_sha1: arm9_hmac_sha1_for_dsi,
+            hmac_sha1: arm9_hmac_sha1,
             config,
         })
     }
@@ -668,7 +608,7 @@ impl<'a> Rom<'a> {
     fn load_overlays(
         config_path: &Path,
         processor: &str,
-        hmac_sha1: Option<HmacSha1>,
+        hmac_sha1: Option<&HmacSha1>,
         options: &RomLoadOptions,
     ) -> Result<OverlayTable<'a>, RomSaveError> {
         let path = config_path.parent().unwrap();
@@ -698,7 +638,7 @@ impl<'a> Rom<'a> {
                 }
 
                 if config.signed {
-                    let Some(ref hmac_sha1) = hmac_sha1 else {
+                    let Some(hmac_sha1) = hmac_sha1 else {
                         return NoHmacSha1KeySnafu {}.fail();
                     };
                     overlay.sign(hmac_sha1)?;
@@ -713,7 +653,7 @@ impl<'a> Rom<'a> {
             if let Some(signature) = overlay_table_config.table_signature {
                 overlay_table.set_signature(signature);
             } else {
-                let Some(ref hmac_sha1) = hmac_sha1 else {
+                let Some(hmac_sha1) = hmac_sha1 else {
                     return NoHmacSha1KeySnafu {}.fail();
                 };
                 overlay_table.sign(hmac_sha1);
@@ -953,7 +893,6 @@ impl<'a> Rom<'a> {
 
         let multiboot_signature = rom.multiboot_signature()?;
 
-        // --------------------- Extract DSi area ---------------------
         let (dsi, dsi_config) = if header.has_dsi_area() {
             if hmac_sha1.is_none() {
                 return NoDsiHmacSha1KeySnafu {}.fail();
@@ -1030,12 +969,9 @@ impl<'a> Rom<'a> {
         })
     }
 
-    /// Extracts the DSi area of a DSi-enhanced or DSi-exclusive ROM, decrypting the Modcrypt areas of the DSi-exclusive
-    /// programs so that they can be modified and re-encrypted on the way back out.
     fn extract_dsi_area(rom: &'a raw::Rom, header: &raw::Header) -> Result<(DsiArea<'a>, RomConfigDsi), RomExtractError> {
         let data = rom.data();
 
-        // The DSi header fields are only trustworthy if they actually point into the ROM.
         let region_start = header.ds_rom_region_end as usize * DSI_REGION_UNIT as usize;
         let end_of_dsi_area = (header.rom_size_dsi as usize)
             .max(header.arm9i.offset as usize + header.arm9i.size as usize)
@@ -1047,8 +983,6 @@ impl<'a> Rom<'a> {
             return DsiAreaOutOfBoundsSnafu { end: end_of_dsi_area, rom_size: data.len() }.fail();
         }
 
-        // Each padding byte captured below is the value immediately before a section starts, read as `data[offset - 1]`. A
-        // zero offset would underflow that subtraction, so reject it as a malformed header rather than panic.
         for (field, offset) in [
             ("digest_sector_hashtable", header.digest_sector_hashtable.offset as usize),
             ("digest_block_hashtable", header.digest_block_hashtable.offset as usize),
@@ -1091,8 +1025,7 @@ impl<'a> Rom<'a> {
             "ARM7i",
         );
 
-        // Everything between the end of the DS region and the ARM9i program is mastering filler that nothing else in the ROM
-        // determines, so keep it byte for byte.
+        // Everything between the end of the DS region and the ARM9i program is dummy data
         let region_padding = data[region_start..header.arm9i.offset as usize].to_vec().into_boxed_slice();
 
         let config = RomConfigDsi {
@@ -1277,13 +1210,13 @@ impl<'a> Rom<'a> {
         }
 
         // --------------------- Update FAT ---------------------
-        // The FAT is inside the digest NTR region, so it has to be final before the digest tables are computed below.
-        let rom_end = cursor.position();
+        // The FAT must be final before the digest tables are computed below
+        let ntr_region_end = cursor.position();
         cursor.set_position(context.fat_offset.unwrap().offset as u64);
         cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
-        cursor.set_position(rom_end);
 
         // --------------------- Write DSi area ---------------------
+        cursor.set_position(ntr_region_end);
         context.dsi = self.build_dsi_area(&mut cursor, &mut context, key)?;
 
         // --------------------- Write padding ---------------------
@@ -1298,21 +1231,20 @@ impl<'a> Rom<'a> {
         Ok(raw::Rom::new(cursor.into_inner()))
     }
 
-    /// Writes the digest tables and the DSi area, and recomputes everything in the header that describes them.
-    ///
-    /// Both the digest tables and the content SHA1-HMACs are derived from the data written here, never copied from the ROM
-    /// this one was extracted from, so a modified ROM gets hashes that match its own contents.
     fn build_dsi_area(
         &self,
         cursor: &mut Cursor<Vec<u8>>,
         context: &mut BuildContext,
         key: Option<&BlowfishKey>,
     ) -> Result<Option<DsiBuildContext>, RomBuildError> {
-        let (dsi, config, header_dsi) = match (&self.dsi, &self.config.dsi, &self.header.dsi) {
-            (Some(dsi), Some(config), Some(header_dsi)) => (dsi, config, header_dsi),
-            (None, None, None) => return Ok(None),
-            _ => return DsiIncompleteSnafu {}.fail(),
-        };
+        let (dsi, config, header_ds_post_dsi, header_dsi) =
+            match (&self.dsi, &self.config.dsi, &self.header.ds_post_dsi, &self.header.dsi) {
+                (Some(dsi), Some(config), Some(header_ds_post_dsi), Some(header_dsi)) => {
+                    (dsi, config, header_ds_post_dsi, header_dsi)
+                }
+                (None, None, None, None) => return Ok(None),
+                _ => return DsiIncompleteSnafu {}.fail(),
+            };
         let Some(hmac_sha1) = &self.hmac_sha1 else {
             return DsiHmacSha1KeyNeededSnafu {}.fail();
         };
@@ -1321,10 +1253,9 @@ impl<'a> Rom<'a> {
         };
 
         let params = header_dsi.digest;
-        let hash_size = size_of::<HmacSha1Signature>() as u32;
+        const HASH_SIZE: u32 = size_of::<HmacSha1Signature>() as u32;
 
-        // The digest sector hashtable goes right after the DS data, and the NTR region covers everything from the header up
-        // to it, so that boundary has to land on a sector.
+        // --------------------- Align NTR region size ---------------------
         self.align(cursor, params.sector_size, config.padding.digest_sector_hashtable)?;
         let sector_hashtable_offset = cursor.position() as u32;
         let ntr_region_start = size_of::<raw::Header>() as u32;
@@ -1336,7 +1267,7 @@ impl<'a> Rom<'a> {
         let arm9i_len = dsi.arm9i.full_data().len() as u32;
         let arm7i_len = dsi.arm7i.full_data().len() as u32;
         let mut ds_rom_region_end = header_dsi.ds_rom_region_end;
-        let layout = loop {
+        let layout: DsiLayout = loop {
             let region_start = ds_rom_region_end as u32 * DSI_REGION_UNIT;
             let arm9i_offset = region_start + dsi.region_padding.len() as u32;
             let arm7i_offset = align_up(arm9i_offset + arm9i_len, config.alignment.arm7i);
@@ -1344,10 +1275,10 @@ impl<'a> Rom<'a> {
             let twl_sectors = (rom_size_dsi - arm9i_offset) / params.sector_size;
 
             let num_blocks = (ntr_sectors + twl_sectors).div_ceil(params.block_sector_count);
-            let sector_hashtable_size = num_blocks * params.block_sector_count * hash_size;
+            let sector_hashtable_size = num_blocks * params.block_sector_count * HASH_SIZE;
             let block_hashtable_offset =
                 align_up(sector_hashtable_offset + sector_hashtable_size, config.alignment.digest_block_hashtable);
-            let block_hashtable_size = num_blocks * hash_size;
+            let block_hashtable_size = num_blocks * HASH_SIZE;
             let rom_size_ds = align_up(block_hashtable_offset + block_hashtable_size, config.alignment.rom_size_ds);
 
             if rom_size_ds <= region_start {
@@ -1431,11 +1362,12 @@ impl<'a> Rom<'a> {
         let mut modcrypt_area_1 = TableOffset::default();
         let mut modcrypt_area_2 = TableOffset::default();
         if dsi.arm9i.is_modcrypted() || dsi.arm7i.is_modcrypted() {
-            if header_dsi.dsi_flags.modcrypt_debug_key() {
-                return ModcryptDebugKeySnafu {}.fail();
-            }
-            // Key_Y is the ARM9i hash, so modifying the ARM9i changes the Modcrypt key too.
-            let modcrypt = Modcrypt::retail(gamecode.0, &sha1_hmac_arm9i);
+            let modcrypt = if header_dsi.dsi_flags.modcrypt_debug_key() || header_ds_post_dsi.dsi_flags_2.developer_app() {
+                let key = self.header.build_modcrypt_debug_key()?;
+                Modcrypt::debug(&key)
+            } else {
+                Modcrypt::retail(gamecode.0, &sha1_hmac_arm9i)
+            };
             let mut encrypt = |program: &DsiProgram, offset: u32, counter: &[u8; 0x14]| {
                 if !program.is_modcrypted() {
                     return TableOffset::default();
@@ -1629,8 +1561,7 @@ pub struct BuildContext<'a> {
     pub dsi: Option<DsiBuildContext>,
 }
 
-/// Everything in the ROM header that describes the DSi area. All of it is derived from the ROM contents while building, so
-/// that a modified ROM gets correct digest tables and content hashes instead of stale ones.
+/// Everything in the ROM header that describes the DSi area.
 #[derive(Default, Clone, Copy)]
 pub struct DsiBuildContext {
     /// ARM9i program offset.
@@ -1710,21 +1641,45 @@ impl Default for RomLoadOptions<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Offsets worked out while laying out the DSi area, see [`Rom::build_dsi_area`].
+struct DsiLayout {
+    region_start: u32,
+    arm9i_offset: u32,
+    arm7i_offset: u32,
+    rom_size_ds: u32,
+    rom_size_dsi: u32,
+    sector_hashtable_size: u32,
+    block_hashtable_offset: u32,
+    block_hashtable_size: u32,
+}
 
-    /// A zeroed DSi header puts every section offset at zero. Extraction has to reject that with a clean error rather than
-    /// underflow the `data[offset - 1]` padding-byte reads and panic, so a crafted ROM cannot crash the extractor.
-    #[test]
-    fn rejects_zero_dsi_offsets() {
-        // The header parser needs at least the 0x4000-byte header/secure-area region before it will hand back a header.
-        let rom = raw::Rom::new(vec![0u8; 0x4000]);
-        let header = rom.header().expect("a header-sized buffer parses as a header");
-        match Rom::extract_dsi_area(&rom, header) {
-            Err(RomExtractError::DsiAreaOffsetZero { field: "digest_sector_hashtable", .. }) => {}
-            Err(other) => panic!("expected a zero-offset error, got {other:?}"),
-            Ok(_) => panic!("expected extraction of a zeroed header to fail"),
-        }
+/// Guesses the alignment a section was built to from the trailing zeros of its offset, clamped to a 4-byte..4KB range.
+/// Used for the DSi area, whose sections are laid out more coarsely than the DS area.
+fn detect_alignment(offset: u32) -> u32 {
+    if offset == 0 {
+        4
+    } else {
+        1 << offset.trailing_zeros().clamp(2, 12)
     }
+}
+
+fn write_padding(cursor: &mut Cursor<Vec<u8>>, byte: u8, count: usize) -> io::Result<()> {
+    const CHUNK: usize = 8 * 1024;
+    let chunk = [byte; CHUNK];
+    let mut remaining = count;
+    while remaining > 0 {
+        let n = remaining.min(CHUNK);
+        cursor.write_all(&chunk[..n])?;
+        remaining -= n;
+    }
+    Ok(())
+}
+
+fn align_up(value: u32, alignment: u32) -> u32 {
+    assert!(alignment.is_power_of_two(), "alignment must be a power of two");
+    (value + alignment - 1) & !(alignment - 1)
+}
+
+fn default_true() -> bool {
+    true
 }

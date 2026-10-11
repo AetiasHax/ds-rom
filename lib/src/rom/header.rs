@@ -427,6 +427,15 @@ impl Header {
         Ok(header)
     }
 
+    /// Builds a debug key for the Modcrypt encryption algorithm.
+    pub fn build_modcrypt_debug_key(&self) -> Result<[u8; 16], HeaderBuildError> {
+        let title = AsciiArray::<12>::from_str(&self.original.title)?;
+        let mut key = [0u8; 16];
+        key[0..12].copy_from_slice(&title.0);
+        key[12..16].copy_from_slice(&self.original.gamecode.0);
+        Ok(key)
+    }
+
     /// Returns the version of this [`Header`].
     pub fn version(&self) -> HeaderVersion {
         if self.dsi.is_some() {
