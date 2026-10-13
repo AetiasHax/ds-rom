@@ -1242,7 +1242,7 @@ impl<'a> Rom<'a> {
                 (Some(dsi), Some(config), Some(header_ds_post_dsi), Some(header_dsi)) => {
                     (dsi, config, header_ds_post_dsi, header_dsi)
                 }
-                (None, None, None, None) => return Ok(None),
+                (None, None, _, None) => return Ok(None),
                 _ => return DsiIncompleteSnafu {}.fail(),
             };
         let Some(hmac_sha1) = &self.hmac_sha1 else {
