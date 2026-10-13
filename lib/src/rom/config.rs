@@ -47,11 +47,68 @@ pub struct RomConfig {
     /// Path to multiboot signature YAML
     pub multiboot_signature: Option<PathBuf>,
 
+    /// Paths and layout for the DSi area, present only for DSi-enhanced and DSi-exclusive ROMs.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dsi: Option<RomConfigDsi>,
+
     /// Alignment of ROM sections
     pub alignment: RomConfigAlignment,
 
     /// Padding values for aligning ROM sections
     pub padding: RomConfigPaddingValues,
+}
+
+/// Paths and layout for the DSi area of a DSi-enhanced or DSi-exclusive ROM.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RomConfigDsi {
+    /// Path to ARM9i binary, stored decrypted.
+    pub arm9i_bin: PathBuf,
+    /// Path to ARM9i YAML, deserializes into [`DsiProgramOffsets`](crate::rom::DsiProgramOffsets).
+    pub arm9i_config: PathBuf,
+
+    /// Path to ARM7i binary, stored decrypted.
+    pub arm7i_bin: PathBuf,
+    /// Path to ARM7i YAML, deserializes into [`DsiProgramOffsets`](crate::rom::DsiProgramOffsets).
+    pub arm7i_config: PathBuf,
+
+    /// Path to the filler between the end of the DS area and the ARM9i program. ROM mastering leaves data here that cannot
+    /// be derived from anything else in the ROM, so it is preserved verbatim. Its length also sets the ARM9i offset within
+    /// the DSi area. Not covered by any digest or SHA1-HMAC.
+    pub region_padding: PathBuf,
+
+    /// Alignment of DSi area sections.
+    pub alignment: RomConfigDsiAlignment,
+
+    /// Padding values for aligning DSi area sections.
+    pub padding: RomConfigDsiPaddingValues,
+}
+
+/// Alignment of sections in and around the DSi area.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RomConfigDsiAlignment {
+    /// Alignment of the digest block hashtable.
+    pub digest_block_hashtable: u32,
+    /// Alignment of the total DS ROM size, which ends after the digest tables.
+    pub rom_size_ds: u32,
+    /// Alignment of the ARM7i program.
+    pub arm7i: u32,
+}
+
+/// Byte values to append when aligning sections in and around the DSi area.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RomConfigDsiPaddingValues {
+    /// Before the digest sector hashtable.
+    pub digest_sector_hashtable: u8,
+    /// Before the digest block hashtable.
+    pub digest_block_hashtable: u8,
+    /// After the digest tables, up to the total DS ROM size.
+    pub rom_size_ds: u8,
+    /// After the DS area, up to the start of the DSi area.
+    pub dsi_region: u8,
+    /// Before the ARM7i program.
+    pub arm7i: u8,
+    /// After the ARM7i program, up to the total DSi ROM size.
+    pub rom_size_dsi: u8,
 }
 
 /// Path to autoload files

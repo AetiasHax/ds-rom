@@ -235,11 +235,18 @@ pub enum RawHeaderError {
 impl Header {
     /// Returns the version of this [`Header`].
     pub fn version(&self) -> HeaderVersion {
-        if self.dsi_flags_2.0 != 0 {
+        if self.has_dsi_area() {
+            HeaderVersion::Dsi
+        } else if self.dsi_flags_2.0 != 0 {
             HeaderVersion::DsPostDsi
         } else {
             HeaderVersion::Original
         }
+    }
+
+    /// Returns whether this ROM has a DSi area, which holds the ARM9i/ARM7i programs and the digest tables.
+    pub fn has_dsi_area(&self) -> bool {
+        self.unitcode & 2 != 0 && self.arm9i.size != 0
     }
 
     fn check_size(data: &'_ [u8]) -> Result<(), RawHeaderError> {
@@ -355,6 +362,8 @@ pub enum HeaderVersion {
     Original,
     /// DS game after DSi release but no DSi-specific features used.
     DsPostDsi,
+    /// DSi-enhanced or DSi-exclusive game, which has a DSi area.
+    Dsi,
 }
 
 impl Display for HeaderVersion {
@@ -362,6 +371,7 @@ impl Display for HeaderVersion {
         match self {
             HeaderVersion::Original => write!(f, "Original"),
             HeaderVersion::DsPostDsi => write!(f, "DS after DSi release"),
+            HeaderVersion::Dsi => write!(f, "DSi"),
         }
     }
 }
@@ -389,18 +399,19 @@ impl Display for Capacity {
 
 /// DSi-specific flags.
 #[bitfield(u8)]
+#[derive(Serialize, Deserialize)]
 pub struct DsiFlags {
     /// If `true`, the ROM has a DSi area.
-    dsi_title: bool,
+    pub dsi_title: bool,
     /// If `true`, the ROM is modcrypted.
-    modcrypted: bool,
+    pub modcrypted: bool,
     /// If `true`, use debug key, otherwise retail key.
-    modcrypt_debug_key: bool,
+    pub modcrypt_debug_key: bool,
     /// Disable debug?
-    disable_debug: bool,
+    pub disable_debug: bool,
     /// Reserved, zero.
     #[bits(4)]
-    reserved: u8,
+    pub reserved: u8,
 }
 
 macro_rules! write_flag {
@@ -547,6 +558,7 @@ impl Display for Delay {
 
 /// Region flags, only used in DSi titles.
 #[bitfield(u32)]
+#[derive(Serialize, Deserialize)]
 pub struct RegionFlags {
     japan: bool,
     usa: bool,
@@ -579,6 +591,7 @@ impl Display for RegionFlags {
 
 /// Access control flags.
 #[bitfield(u32)]
+#[derive(Serialize, Deserialize)]
 pub struct AccessControl {
     common_client_key: bool,
     aes_slot_b: bool,
@@ -607,17 +620,17 @@ pub struct AccessControl {
 #[derive(Serialize, Deserialize)]
 pub struct DsiFlags2 {
     /// Touchscreen/Sound Controller (TSC) in DSi (true) or DS (false) mode
-    tsc_dsi_mode: bool,
-    require_eula_agreement: bool,
+    pub tsc_dsi_mode: bool,
+    pub require_eula_agreement: bool,
     /// If true, use banner.sav to override default banner icon
-    dynamic_icon: bool,
+    pub dynamic_icon: bool,
     /// If true, show Wi-Fi Connection icon in launcher
-    launcher_wfc_icon: bool,
+    pub launcher_wfc_icon: bool,
     /// If true, show DS Wireless icon in launcher
-    launcher_wireless_icon: bool,
-    has_icon_sha1: bool,
-    has_header_rsa: bool,
-    developer_app: bool,
+    pub launcher_wireless_icon: bool,
+    pub has_icon_sha1: bool,
+    pub has_header_rsa: bool,
+    pub developer_app: bool,
     #[bits(24)]
-    reserved: u32,
+    pub reserved: u32,
 }

@@ -9,6 +9,7 @@ readme = "../README.md"
 description = "Library for extracting/building Nintendo DS ROMs."
 
 [dependencies]
+aes = "0.9"
 bitfield-struct = "0.12"
 bitreader = "0.3"
 bytemuck = { version = "1.25", features = ["derive"] }
@@ -26,6 +27,7 @@ snafu = { version = "0.8", features = ["backtrace"] }
 [dev-dependencies]
 anyhow = "1.0"
 env_logger = "0.11"
+walkdir = "2.5"
 
 [lints.clippy]
 needless_range_loop = "allow"

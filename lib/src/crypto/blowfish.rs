@@ -61,7 +61,7 @@ impl Blowfish {
         if !data.len().is_multiple_of(8) {
             OddBlockCountSnafu {}.fail()?;
         }
-        for chunk in data.chunks_exact_mut(8) {
+        for chunk in data.as_chunks_mut::<8>().0 {
             let mut left = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let mut right = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
             self.encrypt_block(&mut left, &mut right);

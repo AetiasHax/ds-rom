@@ -508,6 +508,16 @@ pub struct BannerAnimation {
     pub keyframes: [BannerKeyframe; 64],
 }
 
+impl BannerAnimation {
+    /// Finds the first palette used by the given bitmap.
+    pub fn palette_of(&self, bitmap_index: usize) -> usize {
+        self.keyframes
+            .iter()
+            .find(|keyframe| keyframe.frame_duration() > 0 && keyframe.bitmap_index() as usize == bitmap_index)
+            .map_or(0, |keyframe| keyframe.palette_index() as usize)
+    }
+}
+
 /// A keyframe for [`BannerAnimation`].
 #[bitfield(u16)]
 pub struct BannerKeyframe {

@@ -446,8 +446,11 @@ struct DumpArm9Footer {}
 
 impl DumpArm9Footer {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
-        let arm9_footer = rom.arm9_footer()?;
-        println!("ARM9 footer:\n{}", arm9_footer.display(2));
+        if let Some(arm9_footer) = rom.arm9_footer()? {
+            println!("ARM9 footer:\n{}", arm9_footer.display(2));
+        } else {
+            println!("No ARM9 footer");
+        }
 
         Ok(())
     }
