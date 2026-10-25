@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use ds_rom::{
     compress::lz77::Lz77,
-    crypto::{blowfish::BlowfishKey, dsprot::DsProtDecryptOptions, hmac_sha1::HmacSha1},
+    crypto::{blowfish::BlowfishKey, dsprot::DsProtDecryptOptions, hmac_sha1::HmacSha1, modcrypt::Modcrypt},
     rom::{self, Arm9, Logo, Overlay, Rom, raw},
 };
 
@@ -81,6 +81,8 @@ impl Dump {
             DumpCommand::MultibootSignature(dump_multiboot_signature) => dump_multiboot_signature.run(&rom),
             DumpCommand::Libraries(dump_libraries) => dump_libraries.run(&rom),
             DumpCommand::DsProt(dump_dsprot) => dump_dsprot.run(&rom),
+            DumpCommand::Arm9i(dump_arm9i) => dump_arm9i.run(&rom),
+            DumpCommand::Arm7i(dump_arm7i) => dump_arm7i.run(&rom),
         }
     }
 }
@@ -115,6 +117,10 @@ enum DumpCommand {
     Libraries(DumpLibraries),
     #[command(name = "dsprot")]
     DsProt(DumpDsProt),
+    #[command(name = "arm9i")]
+    Arm9i(DumpArm9i),
+    #[command(name = "arm7i")]
+    Arm7i(DumpArm7i),
 }
 
 /// Shows the contents of the ROM header.
@@ -591,6 +597,60 @@ impl DumpDsProt {
             }
             serde_saphyr::to_io_writer(&mut std::io::stdout().lock(), &details_list)?;
         }
+
+        Ok(())
+    }
+}
+
+/// Prints the contents of the ARM9i program.
+#[derive(Args)]
+struct DumpArm9i {
+    /// Do not decrypt before printing.
+    #[arg(long)]
+    no_decrypt: bool,
+
+    /// Prints contents as raw bytes.
+    #[arg(long, short = 'R')]
+    raw: bool,
+}
+
+impl DumpArm9i {
+    pub fn run(&self, rom: &raw::Rom) -> Result<()> {
+        let mut arm9i = rom.arm9i()?;
+        let header = rom.header()?;
+        if !self.no_decrypt
+            && let Some(modcrypt) = header.modcrypt()
+        {
+            arm9i.apply_modcrypt(&modcrypt, Modcrypt::counter(&header.sha1_hmac_arm9_with_secure_area));
+        }
+        print_hex(arm9i.full_data(), self.raw, arm9i.offsets().base_address)?;
+
+        Ok(())
+    }
+}
+
+/// Prints the contents of the ARM7i program.
+#[derive(Args)]
+struct DumpArm7i {
+    /// Do not decrypt before printing.
+    #[arg(long)]
+    no_decrypt: bool,
+
+    /// Prints contents as raw bytes.
+    #[arg(long, short = 'R')]
+    raw: bool,
+}
+
+impl DumpArm7i {
+    pub fn run(&self, rom: &raw::Rom) -> Result<()> {
+        let mut arm7i = rom.arm7i()?;
+        let header = rom.header()?;
+        if !self.no_decrypt
+            && let Some(modcrypt) = header.modcrypt()
+        {
+            arm7i.apply_modcrypt(&modcrypt, Modcrypt::counter(&header.sha1_hmac_arm7));
+        }
+        print_hex(arm7i.full_data(), self.raw, arm7i.offsets().base_address)?;
 
         Ok(())
     }
