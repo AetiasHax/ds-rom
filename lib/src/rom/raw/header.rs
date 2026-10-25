@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use crate::{
+    crypto::modcrypt::Modcrypt,
     rom::Logo,
     str::{AsciiArray, BlobSize},
 };
@@ -247,6 +248,19 @@ impl Header {
     /// Returns whether this ROM has a DSi area, which holds the ARM9i/ARM7i programs and the digest tables.
     pub fn has_dsi_area(&self) -> bool {
         self.unitcode & 2 != 0 && self.arm9i.size != 0
+    }
+
+    /// Returns a [`Modcrypt`] instance using values from this [`Header`].
+    pub fn modcrypt(&self) -> Option<Modcrypt> {
+        if !self.dsi_flags.modcrypted() {
+            None
+        } else if self.dsi_flags.modcrypt_debug_key() || self.dsi_flags_2.developer_app() {
+            let header_start = &bytemuck::bytes_of(self)[0..16];
+            let header_start = <&[u8; 16]>::try_from(header_start).unwrap();
+            Some(Modcrypt::debug(header_start))
+        } else {
+            Some(Modcrypt::retail(self.gamecode.0, &self.sha1_hmac_arm9i))
+        }
     }
 
     fn check_size(data: &'_ [u8]) -> Result<(), RawHeaderError> {
