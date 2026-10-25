@@ -9,8 +9,9 @@ use super::{
 use crate::{
     io::{FileError, open_file, write_file},
     rom::{
-        Arm7, Arm7Offsets, Arm9, Arm9Offsets, Arm9Options, RomConfigAlignment, RomConfigPaddingValues,
-        raw::{MultibootSignature, RawMultibootSignatureError},
+        Arm7, Arm7Offsets, Arm9, Arm9Offsets, Arm9Options, DsiProgram, DsiProgramOffsets, RomConfigAlignment,
+        RomConfigPaddingValues,
+        raw::{MultibootSignature, ProgramOffset, RawMultibootSignatureError, TableOffset},
     },
 };
 
@@ -45,6 +46,23 @@ pub enum RawArm9Error {
     NoBuildInfo {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
+    },
+}
+
+/// Errors related to [`Rom::arm9i`] and [`Rom::arm7i`].
+#[derive(Debug, Snafu)]
+pub enum RawDsiProgramError {
+    /// Occurs when the ROM has no DSi area.
+    #[snafu(display("ROM does not have a DSi area"))]
+    NoDsiArea {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`RawHeaderError`].
+    #[snafu(transparent)]
+    RawHeader {
+        /// Source error.
+        source: RawHeaderError,
     },
 }
 
@@ -509,6 +527,65 @@ impl<'a> Rom<'a> {
             file_image_block,
             file,
         })
+    }
+
+    fn dsi_program(
+        &'a self,
+        header: &Header,
+        program: &ProgramOffset,
+        build_info_offset: u32,
+        modcrypt_area: &TableOffset,
+        name: &str,
+    ) -> DsiProgram<'a> {
+        debug_assert!(header.has_dsi_area());
+
+        let modcrypt_size = if modcrypt_area.size == 0 || !header.dsi_flags.modcrypted() {
+            0
+        } else if modcrypt_area.offset == program.offset {
+            modcrypt_area.size
+        } else {
+            log::warn!(
+                "Modcrypt area at {:#x} does not start at the {name} program at {:#x}, leaving it encrypted",
+                modcrypt_area.offset,
+                program.offset
+            );
+            0
+        };
+
+        let start = program.offset as usize;
+        let end = start + program.size as usize;
+        DsiProgram::new(&self.data[start..end], DsiProgramOffsets {
+            entry_function: program.entry,
+            base_address: program.base_addr,
+            build_info_offset,
+            modcrypt_size,
+        })
+    }
+
+    /// Returns the ARM9i program of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
+    pub fn arm9i(&'a self) -> Result<DsiProgram<'a>, RawDsiProgramError> {
+        let header = self.header()?;
+        if !header.has_dsi_area() {
+            return NoDsiAreaSnafu.fail();
+        }
+        Ok(self.dsi_program(header, &header.arm9i, header.arm9i_build_info_offset, &header.modcrypt_area_1, "ARM9i"))
+    }
+
+    /// Returns the ARM7i program of this [`Rom`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::header`].
+    pub fn arm7i(&'a self) -> Result<DsiProgram<'a>, RawDsiProgramError> {
+        let header = self.header()?;
+        if !header.has_dsi_area() {
+            return NoDsiAreaSnafu.fail();
+        }
+        Ok(self.dsi_program(header, &header.arm7i, header.arm7i_build_info_offset, &header.modcrypt_area_2, "ARM7i"))
     }
 }
 

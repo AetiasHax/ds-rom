@@ -10,10 +10,10 @@ use snafu::Snafu;
 
 use super::{
     Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9HmacSha1KeyError, Arm9Offsets, Arm9OverlaySignaturesError, Autoload, Banner,
-    BannerError, BannerImageError, BuildInfo, Digest, DigestError, DsiProgram, DsiProgramOffsets, FileBuildError,
-    FileParseError, FileSystem, Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError, Overlay,
-    OverlayError, OverlayInfo, OverlayOptions, OverlayTable, RomConfigAutoload, RomConfigDsi, RomConfigDsiAlignment,
-    RomConfigDsiPaddingValues, RomConfigUnknownAutoload,
+    BannerError, BannerImageError, BuildInfo, Digest, DigestError, DsiProgram, FileBuildError, FileParseError, FileSystem,
+    Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError, Overlay, OverlayError, OverlayInfo,
+    OverlayOptions, OverlayTable, RomConfigAutoload, RomConfigDsi, RomConfigDsiAlignment, RomConfigDsiPaddingValues,
+    RomConfigUnknownAutoload,
     raw::{
         self, Arm9Footer, HmacSha1Signature, ProgramOffset, RawArm9Error, RawBannerError, RawBuildInfoError, RawFatError,
         RawFntError, RawHeaderError, RawOverlayError, RomAlignmentsError, TableOffset,
@@ -30,7 +30,7 @@ use crate::{
     io::{FileError, create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string},
     rom::{
         Arm9DsProtInfoError, Arm9WithTcmsOptions, OverlayDsProtError, RomConfig,
-        raw::{FileAlloc, MultibootSignature, RawMultibootSignatureError},
+        raw::{FileAlloc, MultibootSignature, RawDsiProgramError, RawMultibootSignatureError},
     },
 };
 
@@ -201,6 +201,12 @@ pub enum RomExtractError {
     Lz77Decompress {
         /// Source error.
         source: Lz77DecompressError,
+    },
+    /// See [`RawDsiProgramError`].
+    #[snafu(transparent)]
+    RawDsiProgram {
+        /// Source error.
+        source: RawDsiProgramError,
     },
 }
 
@@ -996,34 +1002,12 @@ impl<'a> Rom<'a> {
             }
         }
 
-        let modcrypt = if !header.dsi_flags.modcrypted() {
-            None
-        } else if header.dsi_flags.modcrypt_debug_key() || header.dsi_flags_2.developer_app() {
-            let header_start = &bytemuck::bytes_of(header)[0..16];
-            let header_start = <&[u8; 16]>::try_from(header_start).unwrap();
-            Some(Modcrypt::debug(header_start))
-        } else {
-            Some(Modcrypt::retail(header.gamecode.0, &header.sha1_hmac_arm9i))
-        };
-
-        let arm9i = Self::extract_dsi_program(
-            data,
-            modcrypt.as_ref(),
-            &header.arm9i,
-            header.arm9i_build_info_offset,
-            &header.modcrypt_area_1,
-            &header.sha1_hmac_arm9_with_secure_area,
-            "ARM9i",
-        );
-        let arm7i = Self::extract_dsi_program(
-            data,
-            modcrypt.as_ref(),
-            &header.arm7i,
-            header.arm7i_build_info_offset,
-            &header.modcrypt_area_2,
-            &header.sha1_hmac_arm7,
-            "ARM7i",
-        );
+        let mut arm9i = rom.arm9i()?;
+        let mut arm7i = rom.arm7i()?;
+        if let Some(modcrypt) = header.modcrypt() {
+            arm9i.apply_modcrypt(&modcrypt, Modcrypt::counter(&header.sha1_hmac_arm9_with_secure_area));
+            arm7i.apply_modcrypt(&modcrypt, Modcrypt::counter(&header.sha1_hmac_arm7));
+        }
 
         // Everything between the end of the DS region and the ARM9i program is dummy data
         let region_padding = data[region_start..header.arm9i.offset as usize].to_vec().into_boxed_slice();
@@ -1050,44 +1034,6 @@ impl<'a> Rom<'a> {
         };
 
         Ok((DsiArea { arm9i, arm7i, region_padding }, config))
-    }
-
-    fn extract_dsi_program(
-        data: &[u8],
-        modcrypt: Option<&Modcrypt>,
-        program: &ProgramOffset,
-        build_info_offset: u32,
-        modcrypt_area: &TableOffset,
-        counter: &[u8; 0x14],
-        name: &str,
-    ) -> DsiProgram<'a> {
-        // The Modcrypt areas are expected to cover the start of a DSi-exclusive program. Anything else is a layout we cannot
-        // reproduce, so leave the program encrypted rather than mangle it.
-        let modcrypt_size = if modcrypt_area.size == 0 || modcrypt.is_none() {
-            0
-        } else if modcrypt_area.offset == program.offset {
-            modcrypt_area.size
-        } else {
-            log::warn!(
-                "Modcrypt area at {:#x} does not start at the {name} program at {:#x}, leaving it encrypted",
-                modcrypt_area.offset,
-                program.offset
-            );
-            0
-        };
-
-        let start = program.offset as usize;
-        let end = start + program.size as usize;
-        let mut dsi_program = DsiProgram::new(data[start..end].to_vec(), DsiProgramOffsets {
-            entry_function: program.entry,
-            base_address: program.base_addr,
-            build_info_offset,
-            modcrypt_size,
-        });
-        if let Some(modcrypt) = modcrypt {
-            dsi_program.apply_modcrypt(modcrypt, Modcrypt::counter(counter));
-        }
-        dsi_program
     }
 
     /// Builds a raw ROM.
@@ -1523,6 +1469,16 @@ impl<'a> Rom<'a> {
     /// Returns the [`MultibootSignature`] of this [`Rom`].
     pub fn multiboot_signature(&self) -> Option<&MultibootSignature> {
         self.multiboot_signature.as_ref()
+    }
+
+    /// Returns the ARM9i program of this [`Rom`].
+    pub fn arm9i(&'a self) -> Option<&'a DsiProgram<'a>> {
+        self.dsi.as_ref().map(|dsi| &dsi.arm9i)
+    }
+
+    /// Returns the ARM9i program of this [`Rom`].
+    pub fn arm7i(&'a self) -> Option<&'a DsiProgram<'a>> {
+        self.dsi.as_ref().map(|dsi| &dsi.arm7i)
     }
 }
 

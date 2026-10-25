@@ -13,7 +13,6 @@ fn test_extract_build() -> Result<()> {
 
     let test = RomsTest::new()?;
     for path in test.roms()? {
-        let path = path?;
         let file_name = path.file_name().unwrap().to_string_lossy();
         if file_name.starts_with("build_") {
             continue;

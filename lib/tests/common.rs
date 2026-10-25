@@ -22,19 +22,24 @@ impl RomsTest {
         Ok(Self { roms_dir, key })
     }
 
-    pub fn roms(&self) -> Result<impl Iterator<Item = Result<PathBuf>>> {
-        let iter = self.roms_dir.read_dir()?.filter_map(|entry| {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) => return Some(Err(anyhow!(e))),
-            };
-            let path = entry.path();
-            if path.extension() != Some(OsStr::new("nds")) {
-                None
-            } else {
-                Some(Ok(path))
-            }
-        });
+    pub fn roms(&self) -> Result<Vec<PathBuf>> {
+        let mut iter = self
+            .roms_dir
+            .read_dir()?
+            .filter_map(|entry| {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(e) => return Some(Err(anyhow!(e))),
+                };
+                let path = entry.path();
+                if path.extension() != Some(OsStr::new("nds")) {
+                    None
+                } else {
+                    Some(Ok(path))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        iter.sort_unstable();
         Ok(iter)
     }
 }

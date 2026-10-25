@@ -143,7 +143,6 @@ fn flip_a_bit(path: &Path) -> Result<()> {
 fn test_dsi_hashes_are_regenerated() -> Result<()> {
     let test = RomsTest::new()?;
     for path in test.roms()? {
-        let path = path?;
         let file_name = path.file_name().unwrap().to_string_lossy().to_string();
         if file_name.starts_with("build_") {
             continue;
