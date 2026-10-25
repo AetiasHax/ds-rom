@@ -15,7 +15,6 @@ fn test_dsprot_decrypt_encrypt() -> Result<()> {
 
     let test = RomsTest::new()?;
     for path in test.roms()? {
-        let path = path?;
         log::info!("Decrypting and re-encrypting {}", path.display());
 
         // Extract
