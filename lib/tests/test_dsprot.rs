@@ -1,3 +1,5 @@
+#![allow(clippy::panic_in_result_fn)]
+
 use anyhow::Result;
 use ds_rom::{
     crypto::dsprot::{DsProtDecryptOptions, DsProtEncryptOptions},

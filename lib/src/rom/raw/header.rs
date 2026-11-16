@@ -1,18 +1,19 @@
-use std::{
-    fmt::Display,
-    mem::{align_of, size_of},
-};
+use std::{fmt::Display, mem::size_of};
 
 use bitfield_struct::bitfield;
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use crate::{
     crypto::modcrypt::Modcrypt,
+    error::{DataOutOfBoundsError, OverflowError, SliceCastError, handle_pod_cast},
     rom::Logo,
     str::{AsciiArray, BlobSize},
 };
+
+/// The DS and DSi ROM region ends in the header are counted in these units.
+pub const DSI_REGION_UNIT: u32 = 0x80000;
 
 /// ROM header.
 #[repr(C)]
@@ -221,15 +222,23 @@ pub enum RawHeaderError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`Header`].
-    #[snafu(display("expected {expected}-alignment for header but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
     },
 }
 
@@ -255,12 +264,20 @@ impl Header {
         if !self.dsi_flags.modcrypted() {
             None
         } else if self.dsi_flags.modcrypt_debug_key() || self.dsi_flags_2.developer_app() {
-            let header_start = &bytemuck::bytes_of(self)[0..16];
-            let header_start = <&[u8; 16]>::try_from(header_start).unwrap();
+            #[allow(clippy::indexing_slicing)] // header is more than 16 bytes
+            #[allow(clippy::unwrap_used, clippy::unwrap_in_result)] // as_array will never return None
+            let header_start = bytemuck::bytes_of(self)[0..16].as_array().unwrap();
             Some(Modcrypt::debug(header_start))
         } else {
             Some(Modcrypt::retail(self.gamecode.0, &self.sha1_hmac_arm9i))
         }
+    }
+
+    /// Returns the DSi region start offset.
+    pub fn dsi_region_start(&self) -> Result<u32, RawHeaderError> {
+        #[allow(clippy::arithmetic_side_effects)] // 16x20-bit multiplication fits in 64 bits
+        Ok(u32::try_from(self.ds_rom_region_end as u64 * DSI_REGION_UNIT as u64)
+            .map_err(|_| OverflowError::new("DSi region start"))?)
     }
 
     fn check_size(data: &'_ [u8]) -> Result<(), RawHeaderError> {
@@ -269,18 +286,6 @@ impl Header {
             DataTooSmallSnafu { expected: size, actual: data.len() }.fail()
         } else {
             Ok(())
-        }
-    }
-
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, RawHeaderError> {
-        match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
         }
     }
 
@@ -293,7 +298,8 @@ impl Header {
         let size = size_of::<Self>();
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes(&data[..size]), addr)
+        #[allow(clippy::indexing_slicing)] // checked by check_size
+        Ok(handle_pod_cast(bytemuck::try_from_bytes(&data[..size]), addr)?)
     }
 
     /// Reinterprets a `&mut [u8]` as a mutable reference to [`Header`].
@@ -305,7 +311,8 @@ impl Header {
         let size = size_of::<Self>();
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(&mut data[..size]), addr)
+        #[allow(clippy::indexing_slicing)] // checked by check_size
+        Ok(handle_pod_cast(bytemuck::try_from_bytes_mut(&mut data[..size]), addr)?)
     }
 
     /// Creates a [`DisplayHeader`] which implements [`Display`].
@@ -334,14 +341,14 @@ impl Display for DisplayHeader<'_> {
         writeln!(f, "{i}Capacity ................ : {}", header.capacity)?;
         writeln!(f, "{i}ROM size (DS) ........... : {} ({:#x})", BlobSize(header.rom_size_ds as usize), header.rom_size_ds)?;
         writeln!(f, "{i}ROM version ............. : {}", header.rom_version)?;
-        write!(f, "{i}ARM9 program\n{}", header.arm9.display(self.indent + 2))?;
+        write!(f, "{i}ARM9 program\n{}", header.arm9.display(self.indent.saturating_add(2)))?;
         writeln!(f, "{i}ARM9 autoload callback .. : {:#x}", header.arm9_autoload_callback)?;
         writeln!(f, "{i}ARM9 build info offset .. : {:#x}", header.arm9_build_info_offset)?;
-        write!(f, "{i}ARM7 program\n{}", header.arm7.display(self.indent + 2))?;
+        write!(f, "{i}ARM7 program\n{}", header.arm7.display(self.indent.saturating_add(2)))?;
         writeln!(f, "{i}ARM7 autoload callback .. : {:#x}", header.arm7_autoload_callback)?;
         writeln!(f, "{i}ARM7 build info offset .. : {:#x}", header.arm7_build_info_offset)?;
-        write!(f, "{i}File name table\n{}", header.file_names.display(self.indent + 2))?;
-        write!(f, "{i}File allocation table\n{}", header.file_allocs.display(self.indent + 2))?;
+        write!(f, "{i}File name table\n{}", header.file_names.display(self.indent.saturating_add(2)))?;
+        write!(f, "{i}File allocation table\n{}", header.file_allocs.display(self.indent.saturating_add(2)))?;
         writeln!(f, "{i}Banner\n{i}  Offset: {:#x}", header.banner_offset)?;
         writeln!(f, "{i}Normal cmd setting ...... : {:#x}", header.normal_cmd_setting)?;
         writeln!(f, "{i}KEY1 cmd setting ........ : {:#x}", header.key1_cmd_setting)?;
@@ -397,6 +404,7 @@ pub struct Capacity(pub u8);
 impl Capacity {
     /// Calculates the needed capacity from a given ROM size.
     pub fn from_size(size: u32) -> Self {
+        #[allow(clippy::arithmetic_side_effects)] // u32::leading_zeros returns at most 32
         let bits = 32 - size.leading_zeros() as u8;
         Self(bits.saturating_sub(17))
     }
@@ -406,7 +414,11 @@ impl Display for Capacity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
             0..=2 => write!(f, "{}kB", 128 << self.0),
-            3.. => write!(f, "{}MB", 1 << (self.0 - 3)),
+            #[allow(clippy::arithmetic_side_effects)] // self.0 is at least 3
+            3.. => match 1u64.checked_shl(u32::from(self.0 - 3)) {
+                Some(megabytes) => write!(f, "{megabytes}MB"),
+                None => write!(f, "invalid ({:#x})", self.0),
+            },
         }
     }
 }
@@ -647,4 +659,20 @@ pub struct DsiFlags2 {
     pub developer_app: bool,
     #[bits(24)]
     pub reserved: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capacity_display() {
+        assert_eq!(Capacity(0).to_string(), "128kB");
+        assert_eq!(Capacity(2).to_string(), "512kB");
+        assert_eq!(Capacity(3).to_string(), "1MB");
+        assert_eq!(Capacity(12).to_string(), "512MB");
+        assert_eq!(Capacity(66).to_string(), "9223372036854775808MB");
+        assert_eq!(Capacity(67).to_string(), "invalid (0x43)");
+        assert_eq!(Capacity(0xff).to_string(), "invalid (0xff)");
+    }
 }

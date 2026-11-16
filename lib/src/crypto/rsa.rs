@@ -69,6 +69,7 @@ impl Display for DisplayRsaSignature<'_> {
         for row in 0..8 {
             write!(f, "{i}")?;
             for col in 0..16 {
+                #[allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
                 write!(f, "{:02x} ", bytes[row * 16 + col])?;
             }
             writeln!(f)?;

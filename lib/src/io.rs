@@ -61,7 +61,9 @@ pub fn create_file<P: AsRef<Path>>(path: P) -> Result<File, FileError> {
 /// Creates a file using [`create_file`] and its parent directories using [`create_dir_all`].
 pub fn create_file_and_dirs<P: AsRef<Path>>(path: P) -> Result<File, FileError> {
     let path = path.as_ref();
-    create_dir_all(path.parent().unwrap())?;
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)?;
+    }
     create_file(path)
 }
 
@@ -75,7 +77,7 @@ pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, FileError> {
             match err.kind() {
                 io::ErrorKind::NotFound => return FileNotFoundSnafu { path }.fail(),
                 io::ErrorKind::OutOfMemory => return FileOutOfMemorySnafu { path }.fail(),
-                _ => todo!(),
+                _ => Err(err)?,
             }
         }
     };

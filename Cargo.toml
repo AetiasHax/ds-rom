@@ -8,3 +8,22 @@ lto = true
 [profile.release-fast]
 inherits = "release"
 lto = false
+
+[profile.release-debug]
+inherits = "release-fast"
+debug = true
+
+[workspace.lints.clippy]
+needless_range_loop = "allow"
+module_inception = "allow"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
+arithmetic_side_effects = "warn"
+panic_in_result_fn = "warn"
+unwrap_in_result = "warn"

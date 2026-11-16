@@ -1,3 +1,6 @@
+#![allow(clippy::panic_in_result_fn)]
+#![allow(clippy::unwrap_used)]
+
 use std::fs;
 
 use anyhow::Result;

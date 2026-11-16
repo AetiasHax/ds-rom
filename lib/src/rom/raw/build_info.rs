@@ -1,12 +1,10 @@
-use std::{
-    fmt::Display,
-    mem::{align_of, size_of},
-};
+use std::{fmt::Display, mem::size_of};
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use snafu::{Backtrace, Snafu};
 
 use super::{NITROCODE, RawHeaderError};
+use crate::error::{SliceCastError, handle_pod_cast};
 
 /// Build info for the ARM9 module. This is the raw version, see the plain one [here](super::super::BuildInfo).
 #[repr(C)]
@@ -49,15 +47,11 @@ pub enum RawBuildInfoError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`BuildInfo`].
-    #[snafu(display("expected {expected}-alignment for build info but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
     },
     /// Occurs when the input does not contain the nitrocode.
     #[snafu(display("expected nitrocode {expected:#x} at the end of build info but got {actual:#x}:\n{backtrace}"))]
@@ -81,18 +75,6 @@ impl BuildInfo {
         }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, RawBuildInfoError> {
-        match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
-    }
-
     fn check_nitrocode(&self) -> Result<(), RawBuildInfoError> {
         if self.nitrocode != NITROCODE {
             NoNitrocodeSnafu { expected: NITROCODE, actual: self.nitrocode }.fail()
@@ -112,7 +94,8 @@ impl BuildInfo {
         let size = size_of::<Self>();
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        let build_info: &Self = Self::handle_pod_cast(bytemuck::try_from_bytes(&data[..size]), addr)?;
+        #[allow(clippy::indexing_slicing)] // checked by check_size
+        let build_info: &Self = handle_pod_cast(bytemuck::try_from_bytes(&data[..size]), addr)?;
         build_info.check_nitrocode()?;
         Ok(build_info)
     }
@@ -126,7 +109,8 @@ impl BuildInfo {
         let size = size_of::<Self>();
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        let build_info: &mut Self = Self::handle_pod_cast(bytemuck::try_from_bytes_mut(&mut data[..size]), addr)?;
+        #[allow(clippy::indexing_slicing)] // checked by check_size
+        let build_info: &mut Self = handle_pod_cast(bytemuck::try_from_bytes_mut(&mut data[..size]), addr)?;
         build_info.check_nitrocode()?;
         Ok(build_info)
     }

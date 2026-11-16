@@ -1,12 +1,12 @@
 use std::{borrow::Cow, fmt::Display, ops::Range};
 
 use bitfield_struct::bitfield;
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::RawHeaderError;
-use crate::str::Unicode16Array;
+use crate::{error::DataOutOfBoundsError, str::Unicode16Array};
 
 /// Banner for displaying an icon and title on the home menu. This is the raw struct, see the plain one [here](super::super::Banner).
 pub struct Banner<'a> {
@@ -54,6 +54,12 @@ pub enum RawBannerError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
 impl<'a> Banner<'a> {
@@ -61,18 +67,9 @@ impl<'a> Banner<'a> {
     pub fn new(version: BannerVersion) -> Self {
         let size = version.banner_size();
         let mut data = vec![0u8; size];
+        #[allow(clippy::indexing_slicing)] // banner is at least 0x840 bytes
         data[0..2].copy_from_slice(&(version as u16).to_le_bytes());
         Self { version, data: data.into() }
-    }
-
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>) -> T {
-        match result {
-            Ok(build_info) => build_info,
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => unreachable!(),
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
     }
 
     /// Reinterprets a `&[u8]` as a reference to [`Banner`].
@@ -87,20 +84,28 @@ impl<'a> Banner<'a> {
             return MisalignedSnafu { expected: 2usize, actual: 1usize << addr.trailing_zeros() as usize }.fail();
         }
 
+        let min_size = BannerVersion::Original.banner_size();
+        if data.len() < min_size {
+            return InvalidSizeSnafu { version: BannerVersion::Original as u16, expected: min_size, actual: data.len() }
+                .fail();
+        }
+
+        #[allow(clippy::indexing_slicing)] // data has the minimum size
         let version_value = u16::from_le_bytes([data[0], data[1]]);
         let Some(version) = BannerVersion::from_u16(version_value) else {
             return UnknownVersionSnafu { version: version_value }.fail();
         };
         let size = version.banner_size();
-        if data.len() < size {
+        let Some(data) = data.get(..size) else {
             return InvalidSizeSnafu { version: version_value, expected: size, actual: data.len() }.fail();
-        }
-        let data = &data[..size];
+        };
 
         let mut bitmap = [0u8; 0x200];
+        #[allow(clippy::indexing_slicing)] // banner is at least 0x840 bytes
         bitmap.copy_from_slice(&data[0x20..0x220]);
 
         let mut palette = [0u16; 16];
+        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // banner is at least 0x840 bytes
         for i in 0..16 {
             palette[i] = u16::from_le_bytes([data[0x220 + i * 2], data[0x221 + i * 2]]);
         }
@@ -114,83 +119,98 @@ impl<'a> Banner<'a> {
     }
 
     /// Returns the CRC checksum at the given index.
-    pub fn crc(&self, index: usize) -> u16 {
-        u16::from_le_bytes([self.data[2 + index * 2], self.data[3 + index * 2]])
+    pub fn crc(&self, index: usize) -> Option<u16> {
+        if index > 15 {
+            None
+        } else {
+            #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // always in bounds
+            Some(u16::from_le_bytes([self.data[2 + index * 2], self.data[3 + index * 2]]))
+        }
     }
 
-    /// Returns a mutable CRC checksum at the given index.
-    pub fn crc_mut(&mut self, index: usize) -> &mut u16 {
-        let start = 2 + index * 2;
-        let end = start + 2;
-        let data = &mut self.data.to_mut()[start..end];
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data))
+    /// Sets the CRC checksum at the given index.
+    pub fn set_crc(&mut self, index: usize, value: u16) {
+        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // always in bounds
+        if index <= 15 {
+            let start = 2 + index * 2;
+            let end = start + 2;
+            self.data.to_mut()[start..end].copy_from_slice(&value.to_le_bytes());
+        }
     }
 
     /// Returns a reference to the bitmap of this [`Banner`].
     pub fn bitmap(&self) -> &BannerBitmap {
+        #[allow(clippy::indexing_slicing)] // banner is at least 0x840 bytes
         let data = &self.data[0x20..0x220];
-        Self::handle_pod_cast(bytemuck::try_from_bytes(data))
+        bytemuck::from_bytes(data)
     }
 
     /// Returns a mutable reference to the bitmap of this [`Banner`].
     pub fn bitmap_mut(&mut self) -> &mut BannerBitmap {
+        #[allow(clippy::indexing_slicing)] // banner is at least 0x840 bytes
         let data = &mut self.data.to_mut()[0x20..0x220];
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data))
+        bytemuck::from_bytes_mut(data)
     }
 
     /// Returns a reference to the palette of this [`Banner`].
     pub fn palette(&self) -> &BannerPalette {
+        #[allow(clippy::indexing_slicing)] // banner is at least 0x840 bytes
         let data = &self.data[0x220..0x240];
-        Self::handle_pod_cast(bytemuck::try_from_bytes(data))
+        bytemuck::from_bytes(data)
     }
 
     /// Returns a mutable reference to the palette of this [`Banner`].
     pub fn palette_mut(&mut self) -> &mut BannerPalette {
+        #[allow(clippy::indexing_slicing)] // banner is at least 0x840 bytes
         let data = &mut self.data.to_mut()[0x220..0x240];
-        Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data))
+        bytemuck::from_bytes_mut(data)
     }
 
     /// Returns a title for the given language, or `None` the language is not supported by this banner version.
     pub fn title(&self, language: Language) -> Option<&Unicode16Array<0x80>> {
+        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // language support is checked
         if !self.version.supports_language(language) {
             None
         } else {
             let start = 0x240 + language as usize * 0x100;
             let end = start + 0x100;
             let data = &self.data[start..end];
-            Some(Self::handle_pod_cast(bytemuck::try_from_bytes(data)))
+            Some(bytemuck::from_bytes(data))
         }
     }
 
     /// Returns a mutable title for the given language, or `None` the language is not supported by this banner version.
     pub fn title_mut(&mut self, language: Language) -> Option<&mut Unicode16Array<0x80>> {
+        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // language support is checked
         if !self.version.supports_language(language) {
             None
         } else {
             let start = 0x240 + language as usize * 0x100;
             let end = start + 0x100;
             let data = &mut self.data.to_mut()[start..end];
-            Some(Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data)))
+            Some(bytemuck::from_bytes_mut(data))
         }
     }
 
     /// Returns a reference to the animation of this [`Banner`], if it exists in this banner version.
     pub fn animation(&self) -> Option<&BannerAnimation> {
+        #[allow(clippy::indexing_slicing)] // animation support is checked
         if !self.version.has_animation() {
             None
         } else {
             let data = &self.data[0x1240..0x23c0];
-            Some(Self::handle_pod_cast(bytemuck::try_from_bytes(data)))
+            Some(bytemuck::from_bytes(data))
         }
     }
 
     /// Returns a mutable reference to the animation of this [`Banner`], if it exists in this banner version.
     pub fn animation_mut(&mut self) -> Option<&mut BannerAnimation> {
+        #[allow(clippy::indexing_slicing)] // animation support is checked
         if !self.version.has_animation() {
             None
         } else {
             let data = &mut self.data.to_mut()[0x1240..0x23c0];
-            Some(Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data)))
+            Some(bytemuck::from_bytes_mut(data))
         }
     }
 
@@ -226,7 +246,7 @@ impl Display for DisplayBanner<'_> {
         let i = " ".repeat(self.indent);
         let banner = &self.banner;
         writeln!(f, "{i}Version ......... : {}", banner.version)?;
-        writeln!(f, "{i}Original CRC .... : {:#x}", banner.crc(BannerVersion::Original.crc_index()))?;
+        writeln!(f, "{i}Original CRC .... : {:#x}", banner.crc(BannerVersion::Original.crc_index()).unwrap_or_default())?;
         write_title!(f, "{i}Japanese Title .. : {}{}{}", banner, Language::Japanese)?;
         write_title!(f, "{i}English Title ... : {}{}{}", banner, Language::English)?;
         write_title!(f, "{i}French Title .... : {}{}{}", banner, Language::French)?;
@@ -234,15 +254,15 @@ impl Display for DisplayBanner<'_> {
         write_title!(f, "{i}Italian Title ... : {}{}{}", banner, Language::Italian)?;
         write_title!(f, "{i}Spanish Title ... : {}{}{}", banner, Language::Spanish)?;
         if banner.version >= BannerVersion::China {
-            writeln!(f, "{i}China CRC ....... : {:#x}", banner.crc(BannerVersion::China.crc_index()))?;
+            writeln!(f, "{i}China CRC ....... : {:#x}", banner.crc(BannerVersion::China.crc_index()).unwrap_or_default())?;
             write_title!(f, "{i}Chinese Title ... : {}{}{}", banner, Language::Chinese)?;
         }
         if banner.version >= BannerVersion::Korea {
-            writeln!(f, "{i}Korea CRC ....... : {:#x}", banner.crc(BannerVersion::Korea.crc_index()))?;
+            writeln!(f, "{i}Korea CRC ....... : {:#x}", banner.crc(BannerVersion::Korea.crc_index()).unwrap_or_default())?;
             write_title!(f, "{i}Korean Title .... : {}{}{}", banner, Language::Korean)?;
         }
         if banner.version >= BannerVersion::Animated {
-            writeln!(f, "{i}Animation CRC ... : {:#x}", banner.crc(BannerVersion::Animated.crc_index()))?;
+            writeln!(f, "{i}Animation CRC ... : {:#x}", banner.crc(BannerVersion::Animated.crc_index()).unwrap_or_default())?;
         }
         writeln!(f, "{i}Palette ......... :\n{}", banner.palette())?;
         writeln!(f, "{i}Bitmap .......... :\n{}", banner.bitmap().display(banner.palette()))?;
@@ -291,6 +311,7 @@ impl BannerVersion {
     }
 
     /// Returns whether this version supports the given language.
+    #[inline(always)]
     pub fn supports_language(self, language: Language) -> bool {
         match language {
             Language::Japanese => true,
@@ -315,7 +336,7 @@ impl BannerVersion {
     }
 
     /// Returns the CRC checksum range of this version.
-    pub fn crc_range(self) -> Range<usize> {
+    pub fn crc_range(self) -> Range<u32> {
         match self {
             BannerVersion::Original => 0x20..0x840,
             BannerVersion::China => 0x20..0x940,
@@ -390,8 +411,7 @@ pub struct BannerPalette(pub [u16; 16]);
 impl BannerPalette {
     /// Returns the color from 32-bit `[r, g, b, a]` at the given index.
     pub fn get_color(&self, index: usize) -> [u8; 4] {
-        if index < self.0.len() {
-            let color = self.0[index];
+        if let Some(color) = self.0.get(index) {
             let b = (((color >> 10) & 31) << 3) as u8;
             let g = (((color >> 5) & 31) << 3) as u8;
             let r = ((color & 31) << 3) as u8;
@@ -404,11 +424,13 @@ impl BannerPalette {
 
     /// Sets the color from 24-bit `(r, g, b)` at the given index.
     pub fn set_color(&mut self, index: usize, r: u8, g: u8, b: u8) {
-        let r = r as u16 >> 3;
-        let g = g as u16 >> 3;
-        let b = b as u16 >> 3;
-        let color = r | (g << 5) | (b << 10);
-        self.0[index] = color;
+        if let Some(dest) = self.0.get_mut(index) {
+            let r = r as u16 >> 3;
+            let g = g as u16 >> 3;
+            let b = b as u16 >> 3;
+            let color = r | (g << 5) | (b << 10);
+            *dest = color;
+        }
     }
 }
 
@@ -437,6 +459,7 @@ impl BannerBitmap {
         DisplayBannerBitmap { bitmap: self, palette }
     }
 
+    #[allow(clippy::arithmetic_side_effects)] // small numbers
     fn get_index(x: usize, y: usize) -> (usize, usize) {
         // 8x8 pixel tiles in a 4x4 grid
         let index = (y / 8 * 0x80) + (x / 8 * 0x20) + (y % 8 * 4) + (x / 2 % 4);
@@ -447,9 +470,12 @@ impl BannerBitmap {
 
     /// Gets a palette index at the given coordinates.
     pub fn get_pixel(&self, x: usize, y: usize) -> usize {
+        if x >= 32 || y >= 32 {
+            return 0;
+        }
         let (index, offset) = Self::get_index(x, y);
-        if index < self.0.len() {
-            (self.0[index] as usize >> offset) & 0xf
+        if let Some(&palette) = self.0.get(index) {
+            (palette as usize >> offset) & 0xf
         } else {
             0
         }
@@ -457,9 +483,12 @@ impl BannerBitmap {
 
     /// Sets a palette index at the given coordinates.
     pub fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
+        if x >= 32 || y >= 32 {
+            return;
+        }
         let (index, offset) = Self::get_index(x, y);
-        if index < self.0.len() {
-            self.0[index] = (self.0[index] & !(0xf << offset)) | (value << offset);
+        if let Some(palette) = self.0.get_mut(index) {
+            *palette = (*palette & !(0xf << offset)) | (value << offset);
         }
     }
 }
@@ -477,6 +506,7 @@ pub struct DisplayBannerBitmap<'a> {
 }
 
 impl Display for DisplayBannerBitmap<'_> {
+    #[allow(clippy::arithmetic_side_effects)] // y + 1 cannot overflow
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for y in (0..32).step_by(2) {
             for x in 0..32 {

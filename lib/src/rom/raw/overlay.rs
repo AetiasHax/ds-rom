@@ -1,14 +1,14 @@
-use std::{
-    fmt::Display,
-    mem::{align_of, size_of},
-};
+use std::{fmt::Display, mem::size_of};
 
 use bitfield_struct::bitfield;
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use snafu::{Backtrace, Snafu};
 
 use super::{RawArm9Error, RawHeaderError};
-use crate::rom::Arm9OverlaySignaturesError;
+use crate::{
+    error::{DataOutOfBoundsError, OverflowError, SliceCastError, handle_pod_cast},
+    rom::Arm9OverlaySignaturesError,
+};
 
 /// An entry in an overlay table. This is the raw struct, see the plain one [here](super::super::Overlay).
 #[repr(C)]
@@ -59,15 +59,23 @@ pub enum RawOverlayError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`Overlay`].
-    #[snafu(display("expected {expected}-alignment for overlay table but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
     },
 }
 
@@ -81,18 +89,6 @@ impl Overlay {
         }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, RawOverlayError> {
-        match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
-    }
-
     /// Reinterprets a `&[u8]` as a reference to [`Overlay`].
     ///
     /// # Errors
@@ -101,7 +97,7 @@ impl Overlay {
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawOverlayError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
+        Ok(handle_pod_cast(bytemuck::try_cast_slice(data), addr)?)
     }
 
     /// Creates a [`DisplayOverlay`] which implements [`Display`].

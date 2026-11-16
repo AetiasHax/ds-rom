@@ -78,7 +78,7 @@ impl Display for DisplayOverlayTable<'_> {
         writeln!(f, "{i}Overlays:")?;
 
         for overlay in overlays {
-            writeln!(f, "{}", overlay.display(self.indent + 2))?;
+            writeln!(f, "{}", overlay.display(self.indent.saturating_add(2)))?;
         }
 
         Ok(())

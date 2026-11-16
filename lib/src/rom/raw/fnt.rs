@@ -4,17 +4,18 @@ use std::{
     mem::size_of,
 };
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use encoding_rs::SHIFT_JIS;
 use snafu::{Backtrace, Snafu};
 
 use super::RawHeaderError;
+use crate::error::{DataOutOfBoundsError, OverflowError, SliceCastError, handle_pod_cast};
 
 /// File Name Table or FNT for short. Contains the names of every file and directory in the ROM. This is the raw struct, see
-/// the plain one [here](super::super::Files).
+/// the plain one [here](super::super::FileSystem).
 pub struct Fnt<'a> {
     /// Every directory has one subtable, indexed by `dir_id & 0xfff`
-    pub subtables: Box<[FntSubtable<'a>]>,
+    subtables: Box<[FntSubtable<'a>]>,
 }
 
 /// A directory entry in the FNT's directory list.
@@ -48,64 +49,95 @@ pub enum RawFntError {
         source: RawHeaderError,
     },
     /// Occurs when the input it too small to fit an FNT.
-    #[snafu(display("file name table must be at least {} bytes long:\n{backtrace}", size_of::<FntDirectory>()))]
+    #[snafu(display("file name table is too small:\n{backtrace}"))]
     InvalidSize {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is not aligned enough.
-    #[snafu(display("expected {expected}-alignment but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
+    },
+    /// Occurs when a subtable offset points outside the FNT.
+    #[snafu(display("subtable at {offset} goes outside FNT of size {size}:\n{backtrace}"))]
+    InvalidSubtableOffset {
+        /// Subtable offset.
+        offset: usize,
+        /// FNT size.
+        size: usize,
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// Occurs when more than 4096 subtables were provided.
+    #[snafu(display("FNT cannot have more than 4096 subtables, but {count} were provided:\n{backtrace}"))]
+    TooManySubtables {
+        /// Provided number of subtables.
+        count: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
+/// Maximum number of subtables supported by the FNT.
+pub const MAX_SUBTABLES: u16 = 0x1000;
+
 impl<'a> Fnt<'a> {
-    fn check_size(data: &'_ [u8]) -> Result<(), RawFntError> {
-        let size = size_of::<FntDirectory>();
-        if data.len() < size { InvalidSizeSnafu {}.fail() } else { Ok(()) }
-    }
-
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>) -> T {
-        match result {
-            Ok(x) => x,
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => unreachable!(),
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
-    }
-
     /// Reinterprets a `&[u8]` as an [`Fnt`].
     ///
     /// # Errors
     ///
     /// This function will return an error if the input is too small or not aligned enough.
     pub fn borrow_from_slice(data: &'a [u8]) -> Result<Self, RawFntError> {
-        Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        if !addr.is_multiple_of(4) {
-            return MisalignedSnafu { expected: 4usize, actual: 1usize << addr.trailing_zeros() as usize }.fail();
-        }
 
-        let size = size_of::<FntDirectory>();
-        let root_dir: &FntDirectory = Self::handle_pod_cast(bytemuck::try_from_bytes(&data[..size]));
+        let dir_size = size_of::<FntDirectory>();
+        let root_dir: &FntDirectory =
+            handle_pod_cast(bytemuck::try_from_bytes(data.get(..dir_size).ok_or_else(|| InvalidSizeSnafu {}.build())?), addr)?;
 
         // the root entry has no parent, so `parent_id` is instead the number of directories
-        let num_dirs = root_dir.parent_id as usize;
-        let directories: &[FntDirectory] = Self::handle_pod_cast(bytemuck::try_cast_slice(&data[..size * num_dirs]));
+        let num_dirs = root_dir.parent_id;
+        if num_dirs > MAX_SUBTABLES {
+            return TooManySubtablesSnafu { count: num_dirs as usize }.fail();
+        }
+
+        #[allow(clippy::arithmetic_side_effects)] // 3x15-bit multiplication
+        let size = dir_size * num_dirs as usize;
+        let directories: &[FntDirectory] =
+            handle_pod_cast(bytemuck::try_cast_slice(data.get(..size).ok_or_else(|| InvalidSizeSnafu {}.build())?), addr)?;
 
         let mut subtables = Vec::with_capacity(directories.len());
         for directory in directories {
             let start = directory.subtable_offset as usize;
-            subtables.push(FntSubtable { directory: Cow::Borrowed(directory), data: Cow::Borrowed(&data[start..]) });
+            let data = data.get(start..).ok_or_else(|| InvalidSubtableOffsetSnafu { offset: start, size }.build())?;
+            subtables.push(FntSubtable { directory: Cow::Borrowed(directory), data: Cow::Borrowed(data) });
         }
 
+        Ok(Self { subtables: subtables.into_boxed_slice() })
+    }
+
+    /// Creates a new [`Fnt`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if there are more than [`MAX_SUBTABLES`] subtables.
+    pub fn new(subtables: Vec<FntSubtable<'a>>) -> Result<Self, RawFntError> {
+        if subtables.len() > MAX_SUBTABLES as usize {
+            return TooManySubtablesSnafu { count: subtables.len() }.fail();
+        }
         Ok(Self { subtables: subtables.into_boxed_slice() })
     }
 
@@ -116,6 +148,7 @@ impl<'a> Fnt<'a> {
     /// This function will return an error if an I/O operation fails.
     pub fn build(mut self) -> Result<Box<[u8]>, io::Error> {
         let mut bytes = vec![];
+        #[allow(clippy::arithmetic_side_effects)] // 15x3-bit multiplication
         let mut subtable_offset = (self.subtables.len() * size_of::<FntDirectory>()) as u32;
 
         let num_directories = self.subtables.len() as u16;
@@ -128,7 +161,10 @@ impl<'a> Fnt<'a> {
         for subtable in self.subtables.iter_mut() {
             subtable.directory.to_mut().subtable_offset = subtable_offset;
             bytes.write_all(bytemuck::bytes_of(subtable.directory.as_ref()))?;
-            subtable_offset += subtable.data.len() as u32 + 1; // +1 for 0-byte terminator, see loop below
+            #[allow(clippy::arithmetic_side_effects)] // small numbers
+            {
+                subtable_offset += subtable.data.len() as u32 + 1; // +1 for 0-byte terminator, see loop below
+            }
         }
 
         for subtable in self.subtables.iter() {
@@ -137,6 +173,11 @@ impl<'a> Fnt<'a> {
         }
 
         Ok(bytes.into_boxed_slice())
+    }
+
+    /// Returns a reference to the subtables of this [`Fnt`].
+    pub fn subtables(&self) -> &[FntSubtable<'a>] {
+        &self.subtables
     }
 }
 
@@ -156,6 +197,7 @@ pub struct IterFntSubtable<'a> {
 impl<'a> Iterator for IterFntSubtable<'a> {
     type Item = FntFile<'a>;
 
+    #[allow(clippy::indexing_slicing)] // all checked
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() || self.data[0] == 0 {
             return None;
@@ -165,6 +207,11 @@ impl<'a> Iterator for IterFntSubtable<'a> {
         let subdir = self.data[0] & 0x80 != 0;
         self.data = &self.data[1..];
 
+        if length > self.data.len() {
+            log::warn!("Name of file with ID {} goes outside FNT subtable", self.id);
+            return None;
+        }
+
         let (name, _, had_errors) = SHIFT_JIS.decode(&self.data[..length]);
         if had_errors {
             log::warn!("The file name '{name}' contains a malformed byte sequence");
@@ -173,13 +220,20 @@ impl<'a> Iterator for IterFntSubtable<'a> {
         self.data = &self.data[length..];
 
         let id = if subdir {
+            if self.data.len() < 2 {
+                log::warn!("Can't read ID of subdirectory '{name}' due to FNT subtable ending too soon");
+                return None;
+            }
             let id = u16::from_le_bytes([self.data[0], self.data[1]]);
             self.data = &self.data[2..];
             id
-        } else {
+        } else if self.id < 0xf000 {
             let id = self.id;
-            self.id += 1;
+            self.id = self.id.wrapping_add(1);
             id
+        } else {
+            // Ran out of file IDs
+            return None;
         };
 
         Some(FntFile { id, name })

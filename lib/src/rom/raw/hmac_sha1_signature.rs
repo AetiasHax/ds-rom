@@ -1,10 +1,13 @@
 use std::{backtrace::Backtrace, fmt::Display, num::ParseIntError, str::FromStr};
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Deserializer, Serialize};
 use snafu::Snafu;
 
-use crate::crypto::hmac_sha1::HmacSha1;
+use crate::{
+    crypto::hmac_sha1::HmacSha1,
+    error::{SliceCastError, handle_pod_cast},
+};
 
 /// HMAC-SHA1 signature, used for overlays and overlay tables.
 #[repr(C)]
@@ -23,15 +26,11 @@ pub enum HmacSha1SignatureError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`HmacSha1Signature`].
-    #[snafu(display("expected {expected}-alignment for HMAC-SHA1 signature table but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
     },
 }
 
@@ -56,18 +55,6 @@ impl HmacSha1Signature {
         }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, HmacSha1SignatureError> {
-        match result {
-            Ok(signatures) => Ok(signatures),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: size_of::<Self>(), actual: addr }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
-    }
-
     /// Reinterprets a `&[u8]` as a slice of [`HmacSha1Signature`].
     ///
     /// # Errors
@@ -76,7 +63,7 @@ impl HmacSha1Signature {
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], HmacSha1SignatureError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
+        Ok(handle_pod_cast(bytemuck::try_cast_slice(data), addr)?)
     }
 
     /// Reinterprets a `&mut [u8]` as a mutable slice of [`HmacSha1Signature`].
@@ -87,7 +74,7 @@ impl HmacSha1Signature {
     pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut [Self], HmacSha1SignatureError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_cast_slice_mut(data), addr)
+        Ok(handle_pod_cast(bytemuck::try_cast_slice_mut(data), addr)?)
     }
 }
 
@@ -108,6 +95,12 @@ pub enum HmacSha1SignatureParseError {
     InvalidLength {
         /// The invalid length.
         length: usize,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// Occurs when the input contains multi-byte characters and not hexadecimal nibbles.
+    #[snafu(display("string contains multi-byte characters:\n{backtrace}"))]
+    WideChars {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
@@ -132,8 +125,10 @@ impl FromStr for HmacSha1Signature {
         }
 
         let mut hash = [0u8; 20];
+        #[allow(clippy::indexing_slicing)] // always in bounds
         for i in 0..20 {
-            let byte_str = &s[i * 2..i * 2 + 2];
+            #[allow(clippy::arithmetic_side_effects)] // small numbers
+            let byte_str = s.get(i * 2..i * 2 + 2).ok_or_else(|| WideCharsSnafu.build())?;
             hash[i] = u8::from_str_radix(byte_str, 16)
                 .map_err(|error| ParseIntSnafu { error, string: byte_str.to_string() }.build())?;
         }

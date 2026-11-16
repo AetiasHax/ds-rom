@@ -4,7 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::{crypto::rsa::RsaSignature, rom::raw::RawHeaderError};
+use crate::{crypto::rsa::RsaSignature, error::DataOutOfBoundsError, rom::raw::RawHeaderError};
 
 /// Contains the RSA signature used to verify the integrity of the ROM header and the ARM9 and ARM7
 /// programs, after it is transferred for Download Play.
@@ -48,6 +48,12 @@ pub enum RawMultibootSignatureError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
 impl MultibootSignature {
@@ -71,6 +77,7 @@ impl MultibootSignature {
 
         let mut multiboot_signature = Self::zeroed();
         let signature_bytes = bytemuck::bytes_of_mut(&mut multiboot_signature);
+        #[allow(clippy::indexing_slicing)] // checked by check_size
         signature_bytes.copy_from_slice(&data[..size]);
 
         if multiboot_signature.magic != MULTIBOOT_SIGNATURE_MAGIC {
@@ -112,7 +119,7 @@ impl Display for DisplayMultibootSignature<'_> {
         let multiboot_signature = &self.multiboot_signature;
         writeln!(f, "{i}Magic number ... : {:#010x}", multiboot_signature.magic)?;
         writeln!(f, "{i}RSA key seed ... : {:#010x}", multiboot_signature.key_seed)?;
-        writeln!(f, "{i}RSA signature .. :\n{}", multiboot_signature.rsa_signature.display(self.indent + 2))?;
+        writeln!(f, "{i}RSA signature .. :\n{}", multiboot_signature.rsa_signature.display(self.indent.saturating_add(2)))?;
         Ok(())
     }
 }

@@ -1,12 +1,10 @@
-use std::{
-    mem::{align_of, size_of},
-    ops::Range,
-};
+use std::{mem::size_of, ops::Range};
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use snafu::{Backtrace, Snafu};
 
 use super::RawHeaderError;
+use crate::error::{DataOutOfBoundsError, OverflowError, SliceCastError, handle_pod_cast, slice_data};
 
 /// A file allocation which tells where a file starts and ends in the ROM.
 #[repr(C)]
@@ -33,15 +31,23 @@ pub enum RawFatError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the input is less aligned than [`FileAlloc`].
-    #[snafu(display("expected {expected}-alignment for autoload infos but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
+    },
+    #[snafu(transparent)]
+    /// Source error.
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
     },
 }
 
@@ -55,18 +61,6 @@ impl FileAlloc {
         }
     }
 
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, RawFatError> {
-        match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
-        }
-    }
-
     /// Reinterprets a `&[u8]` as a reference to [`FileAlloc`].
     ///
     /// # Errors
@@ -75,16 +69,16 @@ impl FileAlloc {
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ [Self], RawFatError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        Self::handle_pod_cast(bytemuck::try_cast_slice(data), addr)
+        Ok(handle_pod_cast(bytemuck::try_cast_slice(data), addr)?)
     }
 
     /// Returns the contents of this file taken directly from the ROM.
-    pub fn into_file(self, rom: &[u8]) -> &[u8] {
-        &rom[self.start as usize..self.end as usize]
+    pub fn into_file(self, rom: &[u8]) -> Result<&[u8], DataOutOfBoundsError> {
+        slice_data(rom, self.start..self.end, || "file contents")
     }
 
     /// Returns a ROM offset [`Range`] for this file.
-    pub fn range(self) -> Range<usize> {
-        self.start as usize..self.end as usize
+    pub fn range(self) -> Range<u32> {
+        self.start..self.end
     }
 }

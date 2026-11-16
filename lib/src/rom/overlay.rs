@@ -1,4 +1,4 @@
-use std::{backtrace::Backtrace, borrow::Cow, io};
+use std::{backtrace::Backtrace, borrow::Cow};
 
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
@@ -8,12 +8,13 @@ use super::{
     raw::{self, HmacSha1Signature, OverlayFlags, RawFatError, RawHeaderError},
 };
 use crate::{
-    compress::lz77::{Lz77, Lz77DecompressError},
+    compress::lz77::{Lz77, Lz77CompressError, Lz77DecompressError},
     crypto::{
         dsprot::{DsProtDecryptOptions, DsProtDecryptResult, DsProtEncryptOptions, DsProtError, DsProtInfo, DsProtState},
         hmac_sha1::HmacSha1,
     },
-    rom::Arm9HmacSha1KeyError,
+    error::{DataOutOfBoundsError, OverflowError, slice_data},
+    rom::{Arm9HmacSha1KeyError, raw::FileAlloc},
 };
 
 /// An overlay module for ARM9/ARM7.
@@ -80,6 +81,30 @@ pub enum OverlayError {
         /// Source error.
         source: Arm9HmacSha1KeyError,
     },
+    /// Occurs when constructing a new [`Overlay`] but the overlay file is not in the FAT.
+    #[snafu(display("overlay {overlay_id} with file ID {file_id} is not in the FAT:\n{backtrace}"))]
+    NotInFat {
+        /// The overlay's ID.
+        overlay_id: u32,
+        /// The overlay's file ID.
+        file_id: u32,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
+    /// Occurs when trying to access the overlay's [code](Overlay::code) while it is compressed.
+    #[snafu(display("cannot access the code of overlay {overlay_id} while it is compressed:\n{backtrace}"))]
+    Compressed {
+        /// The overlay's ID.
+        overlay_id: u16,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
 }
 
 /// Errors related to [`Overlay::decrypt_dsprot`] and [`Overlay::encrypt_dsprot`].
@@ -117,8 +142,10 @@ impl<'a> Overlay<'a> {
     pub fn parse_arm9(overlay: &raw::Overlay, rom: &'a raw::Rom, arm9: &Arm9) -> Result<Self, OverlayError> {
         let fat = rom.fat()?;
 
-        let alloc = fat[overlay.file_id as usize];
-        let data = &rom.data()[alloc.range()];
+        let alloc: &FileAlloc = fat
+            .get(overlay.file_id as usize)
+            .ok_or_else(|| NotInFatSnafu { overlay_id: overlay.id, file_id: overlay.file_id }.build())?;
+        let data = slice_data(rom.data(), alloc.range(), || format!("file offset range of ARM9 overlay {}", overlay.id))?;
 
         let mut parsed_overlay = Self {
             originally_compressed: overlay.flags.is_compressed(),
@@ -133,7 +160,7 @@ impl<'a> Overlay<'a> {
             let num_overlays = rom.num_arm9_overlays()?;
             let signatures = arm9.overlay_signatures(num_overlays)?;
             if let Some(signatures) = signatures {
-                parsed_overlay.signature = Some(signatures[overlay.id as usize]);
+                parsed_overlay.signature = signatures.get(overlay.id as usize).copied();
             } else if let Some(key) = arm9.hmac_sha1_key()? {
                 // Compute the signature if it's missing
                 parsed_overlay.sign(&HmacSha1::new(key))?;
@@ -156,8 +183,10 @@ impl<'a> Overlay<'a> {
     pub fn parse_arm7(overlay: &raw::Overlay, rom: &'a raw::Rom) -> Result<Self, OverlayError> {
         let fat = rom.fat()?;
 
-        let alloc = fat[overlay.file_id as usize];
-        let data = &rom.data()[alloc.range()];
+        let alloc: &FileAlloc = fat
+            .get(overlay.file_id as usize)
+            .ok_or_else(|| NotInFatSnafu { overlay_id: overlay.id, file_id: overlay.file_id }.build())?;
+        let data = slice_data(rom.data(), alloc.range(), || format!("file offset range of ARM7 overlay {}", overlay.id))?;
 
         if overlay.flags.is_signed() {
             return SignedArm7OverlaySnafu {}.fail();
@@ -207,8 +236,17 @@ impl<'a> Overlay<'a> {
     }
 
     /// Returns the end address of this [`Overlay`].
-    pub fn end_address(&self) -> u32 {
-        self.info.base_address + self.info.code_size + self.info.bss_size
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the base address, code size and .bss size add up to more than 32 bits, which
+    /// can happen if the overlay table is malformed.
+    pub fn end_address(&self) -> Result<u32, OverflowError> {
+        self.info
+            .base_address
+            .checked_add(self.info.code_size)
+            .and_then(|address| address.checked_add(self.info.bss_size))
+            .ok_or_else(|| OverflowError::new(format!("end address of overlay {}", self.info.id)))
     }
 
     /// Returns the size of initialized data in this [`Overlay`].
@@ -253,7 +291,7 @@ impl<'a> Overlay<'a> {
         if !self.is_compressed() {
             return Ok(());
         }
-        self.data = LZ77.decompress(&self.data)?.into_vec().into();
+        self.data = LZ77.decompress(&self.data)?.decompressed.into();
         self.info.compressed = false;
         Ok(())
     }
@@ -263,7 +301,7 @@ impl<'a> Overlay<'a> {
     /// # Errors
     ///
     /// This function will return an error if an I/O operation fails.
-    pub fn compress(&mut self) -> Result<(), io::Error> {
+    pub fn compress(&mut self) -> Result<(), Lz77CompressError> {
         if self.is_compressed() {
             return Ok(());
         }
@@ -273,8 +311,16 @@ impl<'a> Overlay<'a> {
     }
 
     /// Returns a reference to the code of this [`Overlay`].
-    pub fn code(&self) -> &[u8] {
-        &self.data[..self.code_size() as usize]
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the overlay is compressed or if [`Self::code_size`] is
+    /// larger than the actual size of the overlay's contents.
+    pub fn code(&self) -> Result<&[u8], OverlayError> {
+        if self.is_compressed() {
+            return CompressedSnafu { overlay_id: self.id() }.fail();
+        }
+        Ok(slice_data(&self.data, ..self.code_size(), || format!("code of overlay {}", self.id()))?)
     }
 
     /// Returns a reference to the full data of this [`Overlay`].
@@ -333,6 +379,7 @@ impl<'a> Overlay<'a> {
     /// # Errors
     ///
     /// This function will return an error if [`DsProtInfo::decrypt`] fails.
+    #[allow(clippy::unreachable)] // borrow checker limitation
     pub fn decrypt_dsprot(
         &mut self,
         options: &DsProtDecryptOptions,
@@ -426,5 +473,40 @@ impl OverlayInfo {
             file_id: overlay.file_id,
             compressed: overlay.flags.is_compressed(),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn make_overlay(base_address: u32, code_size: u32, bss_size: u32) -> Overlay<'static> {
+        let info = OverlayInfo {
+            id: 0,
+            base_address,
+            code_size,
+            bss_size,
+            ctor_start: 0,
+            ctor_end: 0,
+            file_id: 0,
+            compressed: false,
+        };
+        let options =
+            OverlayOptions { originally_compressed: false, originally_signed: false, info, dsprot_state: DsProtState::None };
+        Overlay::new(vec![], options).unwrap()
+    }
+
+    #[test]
+    fn end_address() {
+        assert_eq!(make_overlay(0x02000000, 0x100, 0x20).end_address().unwrap(), 0x02000120);
+        assert_eq!(make_overlay(0xffffffe0, 0x10, 0xf).end_address().unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn end_address_overflow_is_error() {
+        assert!(make_overlay(0xfffffff0, 0x10, 0).end_address().is_err());
+        assert!(make_overlay(0xfffffff0, 0x8, 0x8).end_address().is_err());
+        assert!(make_overlay(0x02000000, 0, u32::MAX).end_address().is_err());
     }
 }

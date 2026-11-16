@@ -2,12 +2,12 @@
 // https://github.com/taxicat1/dsprot
 // https://github.com/taxicat1/dsdetect
 
-use std::{backtrace::Backtrace, fmt::Display};
+use std::{backtrace::Backtrace, borrow::Cow, fmt::Display};
 
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::crypto::rc4::Rc4;
+use crate::{crypto::rc4::Rc4, error::OverflowError, util::slice::SliceExt as _};
 
 struct DsProtVersion {
     number: DsProtVersionNumber,
@@ -306,6 +306,12 @@ pub enum DsProtError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
 }
 
 /// Options for [`DsProtInfo::decrypt`].
@@ -328,11 +334,15 @@ impl DsProtInfo {
     /// Searches for DS Protect usage in the provided module.
     pub fn detect(data: &[u8]) -> Option<Self> {
         // Make 32-bit chunks
-        let words: &[u32] = bytemuck::cast_slice(&data[..data.len() & !3]);
+        let (chunks, _) = data.as_chunks::<4>();
+        let words: Cow<[u32]> = match bytemuck::try_cast_slice(chunks) {
+            Ok(words) => Cow::Borrowed(words),
+            Err(_) => Cow::Owned(chunks.iter().map(|chunk| u32::from_ne_bytes(*chunk)).collect()),
+        };
 
         for version in DSPROT_VERSIONS {
             // Identify if DS Protect might exist
-            if !words.windows(6).any(|window| window == version.detect_signature) {
+            if !words.array_windows::<6>().any(|window| window == &version.detect_signature) {
                 continue;
             }
 
@@ -353,17 +363,15 @@ impl DsProtInfo {
         base_address: u32,
         options: &DsProtDecryptOptions,
     ) -> Result<DsProtDecryptResult, DsProtError> {
-        let end_address = base_address + data.len() as u32;
-
-        // Make 32-bit chunks
-        let words: &mut [u32] = bytemuck::cast_slice_mut(data);
-
-        let DsProtDecryptOptions { decode_relocations } = options.clone();
-        self.version.algo.decrypt(words, &AlgoDecryptOptions {
-            base_address,
-            end_address,
-            version: self.version.number,
-            decode_relocations,
+        with_words_mut(data, |words| {
+            let end_address = module_end_address(base_address, words)?;
+            let DsProtDecryptOptions { decode_relocations } = options.clone();
+            self.version.algo.decrypt(words, &AlgoDecryptOptions {
+                base_address,
+                end_address,
+                version: self.version.number,
+                decode_relocations,
+            })
         })
     }
 
@@ -436,7 +444,9 @@ trait DsProtAlgo {
     fn unkeyed_decrypt_instruction(&self, ins: u32, xor: u32) -> (u32, u32);
     fn decrypt_instruction(&self, rc4: &mut Rc4, ins: u32, prev_ins: u32) -> u32;
     fn encrypt_instruction(&self, rc4: &mut Rc4, ins: u32, prev_ins: u32) -> u32;
-    fn precalculated_seed_key(&self) -> Option<u32>;
+    fn precalculated_seed_key(&self) -> Option<u32> {
+        None
+    }
     fn init_rc4(&self, seed_key: u32, func_size: u32) -> Rc4;
 
     // The below default implementations are for version 1.23 onwards (DsProtAlgoV2 and up), as
@@ -481,13 +491,14 @@ trait DsProtAlgo {
     ) -> Result<(), DsProtError> {
         // Encrypt whole functions
         for function in &decrypt_result.functions {
-            let start_offset = (function.address - options.base_address) as usize / 4;
-            let end_offset = start_offset + function.size as usize / 4;
+            let start_offset = function.offset(options.base_address)? / 4;
+            let end_offset = function.end_offset(options.base_address)? / 4;
+            let function_end_address = function.end_address()?;
             let instructions = words.get_mut(start_offset..end_offset).ok_or_else(|| {
                 RangeOutOfBoundsSnafu {
                     what: "function to encrypt",
                     start: function.address,
-                    end: function.address + function.size,
+                    end: function_end_address,
                     base_address: options.base_address,
                     end_address: options.end_address,
                 }
@@ -516,8 +527,8 @@ trait DsProtAlgo {
 
         // Encrypt function ranges
         for range in &decrypt_result.encrypted_ranges {
-            let start_offset = (range.start_address - options.base_address) as usize / 4;
-            let end_offset = (range.end_address - options.base_address) as usize / 4;
+            let start_offset = range.start_offset(options.base_address)? / 4;
+            let end_offset = range.end_offset(options.base_address)? / 4;
             let instructions = words.get_mut(start_offset..end_offset).ok_or_else(|| {
                 RangeOutOfBoundsSnafu {
                     what: "range to encrypt",
@@ -528,7 +539,7 @@ trait DsProtAlgo {
                 }
                 .build()
             })?;
-            let mut rc4 = self.init_rc4(range.seed_key, range.end_address - range.start_address);
+            let mut rc4 = self.init_rc4(range.seed_key, range.size()?);
             let mut prev_ins = 0;
             for ins in instructions {
                 *ins = self.encrypt_instruction(&mut rc4, *ins, prev_ins);
@@ -539,8 +550,7 @@ trait DsProtAlgo {
         // Encode relocations
         if options.encode_relocations {
             for relocation in &decrypt_result.relocations {
-                let Some(relocated_value) = words.get_mut((relocation.from_address - options.base_address) as usize / 4)
-                else {
+                let Some(relocated_value) = words.get_mut(relocation.from_offset(options.base_address)? / 4) else {
                     return OutOfBoundsSnafu {
                         what: "relocation",
                         address: relocation.from_address,
@@ -549,7 +559,7 @@ trait DsProtAlgo {
                     }
                     .fail();
                 };
-                *relocated_value += relocation.addend;
+                *relocated_value = relocated_value.wrapping_add(relocation.addend);
             }
         }
 
@@ -568,7 +578,7 @@ trait DsProtAlgo {
         let signature_3 = self.unkeyed_encrypt_decryption_wrapper(&mut signature_3);
         let signature_4 = self.unkeyed_encrypt_decryption_wrapper(&mut signature_4);
 
-        for (i, window) in words.windows(4).enumerate() {
+        for (i, window) in words.array_windows::<4>().enumerate() {
             let func_size = if &window[0..3] == signature_1 {
                 0x68
             } else if window == signature_2 {
@@ -580,11 +590,21 @@ trait DsProtAlgo {
             } else {
                 continue;
             };
-            let decryption_wrapper_address = base_address + i as u32 * 4;
-            let pool_address = decryption_wrapper_address + func_size;
+            let Some(offset) = (i as u32).checked_mul(4) else {
+                break;
+            };
+            let Some(decryption_wrapper_address) = base_address.checked_add(offset) else {
+                break;
+            };
+            let Some(pool_address) = decryption_wrapper_address.checked_add(func_size) else {
+                continue;
+            };
 
+            #[allow(clippy::arithmetic_side_effects)] // pool_address is always greater than base_address
             let pool_offset = (pool_address - base_address) as usize / 4;
-            let bss = words[pool_offset] - 1;
+            let Some(bss) = words.get(pool_offset).and_then(|word| word.checked_sub(1)) else {
+                continue;
+            };
             log::debug!(
                 "Found BSS variable address at {:#010x} from decryption wrapper at {:#010x}",
                 bss,
@@ -615,11 +635,18 @@ trait DsProtAlgo {
         let AlgoDecryptOptions { base_address, .. } = *options;
 
         let mut function_tables = Vec::new();
-        for (i, window) in words.windows(4).enumerate() {
-            let address = base_address + i as u32 * 4;
+        for (i, window) in words.array_windows::<4>().enumerate() {
+            let Some(offset) = (i as u32).checked_mul(4) else {
+                break;
+            };
+            let Some(address) = base_address.checked_add(offset) else {
+                break;
+            };
             let (pool_offset, fn_offset, primary_decoder) =
                 if window[0..2] == [0xe38f0000, 0xe2900004] && window[2] >> 24 == 0x1a {
-                    let (fn_offset, primary_decoder) = if words[i - 1] == 0xe8a007fe {
+                    #[allow(clippy::indexing_slicing)] // i is always less than words.len()
+                    #[allow(clippy::arithmetic_side_effects)] // i is always at least 1
+                    let (fn_offset, primary_decoder) = if i >= 1 && words[i - 1] == 0xe8a007fe {
                         let fn_offset = words[..=i]
                             .iter()
                             .rev()
@@ -637,25 +664,48 @@ trait DsProtAlgo {
                     continue;
                 };
 
-            let pool_address = address + pool_offset;
+            let Some(fn_address) = address.checked_sub(fn_offset) else {
+                continue;
+            };
+            let Some(fn_size) = fn_offset.checked_add(pool_offset) else {
+                continue;
+            };
+
+            let Some(pool_address) = address.checked_add(pool_offset) else {
+                continue;
+            };
+            #[allow(clippy::arithmetic_side_effects)] // pool_address is always greater than base_address
             let pool_position = (pool_address - base_address) as usize / 4;
-            let mut pool_iter = words[pool_position..].iter().copied().enumerate();
-            let table_end_address = loop {
-                let Some((i, word)) = pool_iter.next() else {
-                    return DecoderTableEndNotFoundSnafu { decoder_address: address - fn_offset }.fail();
+            let Some(pool_words) = words.get(pool_position..) else {
+                continue;
+            };
+            let mut pool_iter = pool_words.iter().copied().enumerate();
+            let pool_end_offset = loop {
+                let Some((j, word)) = pool_iter.next() else {
+                    return DecoderTableEndNotFoundSnafu { decoder_address: fn_address }.fail();
                 };
                 if word == 0
                     && let Some((_, 0)) = pool_iter.next()
                 {
-                    break pool_address + i as u32 * 4 + 8;
+                    let Some(pool_offset) = (j as u32).checked_mul(4) else {
+                        continue;
+                    };
+                    break pool_offset;
                 }
             };
+            let Some(table_end_address) = pool_address.checked_add(pool_end_offset).and_then(|x| x.checked_add(8)) else {
+                continue;
+            };
+
+            #[allow(clippy::arithmetic_side_effects)] // table_end_address is always greater than base_address
+            let table_end_offset = (table_end_address - base_address) as usize / 4;
 
             // Get up to 2 trailing addresses after the decoded function table
-            let trailing_address_1 =
-                words.get((table_end_address - base_address) as usize / 4).copied().filter(|&addr| addr >> 24 == 0x02);
-            let trailing_address_2 = if trailing_address_1.is_some() {
-                words.get((table_end_address + 4 - base_address) as usize / 4).copied().filter(|&addr| addr >> 24 == 0x02)
+            let trailing_address_1 = words.get(table_end_offset).copied().filter(|&addr| addr >> 24 == 0x02);
+            let trailing_address_2 = if trailing_address_1.is_some()
+                && let Some(second_offset) = table_end_offset.checked_add(4)
+            {
+                words.get(second_offset).copied().filter(|&addr| addr >> 24 == 0x02)
             } else {
                 None
             };
@@ -663,11 +713,11 @@ trait DsProtAlgo {
             let (garbage_address, overwrite_address) = match (primary_decoder, trailing_address_1, trailing_address_2) {
                 // No trailing addresses
                 (_, None, None) => (None, None),
-                // Second trailing address is always None if first trailing address is None
-                (_, None, Some(_)) => unreachable!(),
+                // Unreachable, second trailing address is always None if first trailing address is None
+                (_, None, Some(_)) => (None, None),
                 // Not primary but has a garbage address
                 (false, Some(garbage_address), _) => {
-                    if garbage_address - self.reference_offset() > address {
+                    if garbage_address.saturating_sub(self.reference_offset()) > address {
                         // Points to .data which is always after .text
                         (Some(garbage_address), None)
                     } else {
@@ -679,7 +729,7 @@ trait DsProtAlgo {
                 (true, Some(overwrite_address), None) => (None, Some(overwrite_address)),
                 // Primary with garbage address
                 (true, Some(garbage_address), Some(overwrite_address)) => {
-                    if garbage_address - self.reference_offset() > address {
+                    if garbage_address.saturating_sub(self.reference_offset()) > address {
                         // Points to .data which is always after .text
                         (Some(garbage_address), Some(overwrite_address))
                     } else {
@@ -691,18 +741,20 @@ trait DsProtAlgo {
 
             // Primary decoder always overwrites itself after it runs
             if primary_decoder && overwrite_address.is_none() {
-                return DecoderOverwriteAddressNotFoundSnafu { decoder_address: address - fn_offset }.fail();
+                return DecoderOverwriteAddressNotFoundSnafu { decoder_address: fn_address }.fail();
             }
 
+            #[allow(clippy::arithmetic_side_effects)] // table_end_address is always greater than pool_address
             let length = (table_end_address - pool_address) / 8;
             let has_garbage = garbage_address.is_some();
             let has_overwrite = overwrite_address.is_some();
 
             function_tables.push(DsProtFunction {
-                address: address - fn_offset,
-                size: pool_offset + fn_offset,
+                address: fn_address,
+                size: fn_size,
                 // has_overwrite is 8 bytes because 4 bytes for overwrite address and 4 bytes for
                 // return instruction literal (0xe12fff1e <bx lr>)
+                #[allow(clippy::arithmetic_side_effects)] // small number
                 pool_size: Some(length * 8 + has_garbage as u32 * 4 + has_overwrite as u32 * 8),
                 encryption: EncryptionType::None,
                 function_table: Some(FunctionTable { length, has_garbage, has_overwrite }),
@@ -726,20 +778,21 @@ trait DsProtAlgo {
         for function in unkeyed_encrypted_functions {
             let EncryptionType::Unkeyed = function.encryption else { continue };
 
-            let func_offset = ((function.address - base_address) / 4) as usize;
-            let function_end_address = function.address + function.size;
-            let func_end_offset = ((function_end_address - base_address) / 4) as usize;
+            let func_offset = function.offset(options.base_address)? / 4;
+            let func_end_offset = function.end_offset(options.base_address)? / 4;
+            let function_end_address = function.end_address()?;
 
             let Some(func_words) = words.get_mut(func_offset..func_end_offset) else {
                 return RangeOutOfBoundsSnafu {
                     what: "unkeyed encrypted function",
                     start: function.address,
-                    end: function.address + function.size,
+                    end: function_end_address,
                     base_address,
                     end_address,
                 }
                 .fail();
             };
+            let func_words: &mut [u32] = func_words;
 
             let mut xor_value = self.unkeyed_encryption_xor();
 
@@ -753,15 +806,15 @@ trait DsProtAlgo {
 
             let reference_offset = self.reference_offset();
 
-            if func_words.len() >= 3 && func_words[0..3] == DECRYPTION_WRAPPER_SIGNATURE_1 {
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 5)?;
+            if func_words.starts_with(&DECRYPTION_WRAPPER_SIGNATURE_1) {
+                let pool_words = get_constant_pool::<5>(base_address, end_address, words, function)?;
 
-                let bss = pool_words[0] - 1;
+                let bss = pool_words[0].wrapping_sub(1);
                 debug_assert_eq!(bss, dsprot_bss);
-                let dest_func_size = pool_words[1] - dsprot_bss - reference_offset;
-                let seed_key = pool_words[2] - dsprot_bss - reference_offset;
-                let dest_func_address = pool_words[3] - reference_offset;
-                let garbage_address = pool_words[4] - reference_offset;
+                let dest_func_size = pool_words[1].wrapping_sub(dsprot_bss).wrapping_sub(reference_offset);
+                let seed_key = pool_words[2].wrapping_sub(dsprot_bss).wrapping_sub(reference_offset);
+                let dest_func_address = pool_words[3].wrapping_sub(reference_offset);
+                let garbage_address = pool_words[4].wrapping_sub(reference_offset);
 
                 // Check that this looks like a RAM address
                 let has_garbage = garbage_address >> 24 == 0x02;
@@ -770,31 +823,34 @@ trait DsProtAlgo {
                 relocations.push(DsProtRelocation { from_address: function_end_address, to_address: dsprot_bss, addend: 1 });
                 // Destination function size
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: dsprot_bss,
-                    addend: dest_func_size + reference_offset,
+                    addend: dest_func_size.wrapping_add(reference_offset),
                 });
                 // Seed key
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x8,
+                    from_address: function_end_address.wrapping_add(0x8),
                     to_address: dsprot_bss,
-                    addend: seed_key + reference_offset,
+                    addend: seed_key.wrapping_add(reference_offset),
                 });
                 // Destination function address
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0xc,
+                    from_address: function_end_address.wrapping_add(0xc),
                     to_address: dest_func_address,
                     addend: reference_offset,
                 });
                 if has_garbage {
                     // Pointer to garbage code
                     relocations.push(DsProtRelocation {
-                        from_address: function_end_address + 0x10,
+                        from_address: function_end_address.wrapping_add(0x10),
                         to_address: garbage_address,
                         addend: reference_offset,
                     });
                 }
-                function.pool_size = Some(0x10 + has_garbage as u32 * 4);
+                #[allow(clippy::arithmetic_side_effects)] // small number
+                {
+                    function.pool_size = Some(0x10 + has_garbage as u32 * 4);
+                }
 
                 log::debug!(
                     "Found decryption wrapper (type 1) at {:#010x} which targets {:#010x}",
@@ -808,16 +864,16 @@ trait DsProtAlgo {
                     encryption: EncryptionType::Keyed(seed_key),
                     function_table: None,
                 });
-            } else if func_words.len() >= 4 && func_words[0..4] == DECRYPTION_WRAPPER_SIGNATURE_2 {
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 7)?;
+            } else if func_words.starts_with(&DECRYPTION_WRAPPER_SIGNATURE_2) {
+                let pool_words = get_constant_pool::<7>(base_address, end_address, words, function)?;
 
-                let bss = pool_words[0] - 1;
+                let bss = pool_words[0].wrapping_sub(1);
                 debug_assert_eq!(bss, dsprot_bss);
-                let seed_key = pool_words[1] - dsprot_bss - reference_offset;
-                let dest_func_address = pool_words[2] - reference_offset;
-                let dest_func_size = pool_words[3] - dsprot_bss - reference_offset;
-                let wrapper_fragment = pool_words[5] - reference_offset;
-                let garbage_address = pool_words[6] - reference_offset;
+                let seed_key = pool_words[1].wrapping_sub(dsprot_bss).wrapping_sub(reference_offset);
+                let dest_func_address = pool_words[2].wrapping_sub(reference_offset);
+                let dest_func_size = pool_words[3].wrapping_sub(dsprot_bss).wrapping_sub(reference_offset);
+                let wrapper_fragment = pool_words[5].wrapping_sub(reference_offset);
+                let garbage_address = pool_words[6].wrapping_sub(reference_offset);
 
                 // Check that this looks like a RAM address
                 let has_garbage = garbage_address >> 24 == 0x02;
@@ -826,37 +882,40 @@ trait DsProtAlgo {
                 relocations.push(DsProtRelocation { from_address: function_end_address, to_address: dsprot_bss, addend: 1 });
                 // Seed key
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: dsprot_bss,
-                    addend: seed_key + reference_offset,
+                    addend: seed_key.wrapping_add(reference_offset),
                 });
                 // Destination function address
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x8,
+                    from_address: function_end_address.wrapping_add(0x8),
                     to_address: dest_func_address,
                     addend: reference_offset,
                 });
                 // Destination function size
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0xc,
+                    from_address: function_end_address.wrapping_add(0xc),
                     to_address: dsprot_bss,
-                    addend: dest_func_size + reference_offset,
+                    addend: dest_func_size.wrapping_add(reference_offset),
                 });
                 // Decryption wrapper fragment address
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x14,
+                    from_address: function_end_address.wrapping_add(0x14),
                     to_address: wrapper_fragment,
                     addend: reference_offset,
                 });
                 if has_garbage {
                     // Pointer to garbage code
                     relocations.push(DsProtRelocation {
-                        from_address: function_end_address + 0x18,
+                        from_address: function_end_address.wrapping_add(0x18),
                         to_address: garbage_address,
                         addend: reference_offset,
                     });
                 }
-                function.pool_size = Some(0x18 + has_garbage as u32 * 4);
+                #[allow(clippy::arithmetic_side_effects)] // small number
+                {
+                    function.pool_size = Some(0x18 + has_garbage as u32 * 4);
+                }
 
                 log::debug!(
                     "Found decryption wrapper (type 2) at {:#010x} which targets {:#010x}",
@@ -870,19 +929,20 @@ trait DsProtAlgo {
                     encryption: EncryptionType::Keyed(seed_key),
                     function_table: None,
                 });
-            } else if func_words.len() >= 4
-                && (func_words[0..4] == DECRYPTION_WRAPPER_SIGNATURE_3 || func_words[0..4] == DECRYPTION_WRAPPER_SIGNATURE_4)
+            } else if func_words.starts_with(&DECRYPTION_WRAPPER_SIGNATURE_3)
+                || func_words.starts_with(&DECRYPTION_WRAPPER_SIGNATURE_4)
             {
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 7)?;
+                let pool_words = get_constant_pool::<7>(base_address, end_address, words, function)?;
 
-                let bss = pool_words[0] - 1;
+                let bss = pool_words[0].wrapping_sub(1);
                 debug_assert_eq!(bss, dsprot_bss);
-                let dest_func_address = pool_words[2] - reference_offset;
-                let dest_func_size = pool_words[3] - dsprot_bss - reference_offset;
+                let dest_func_address = pool_words[2].wrapping_sub(reference_offset);
+                let dest_func_size = pool_words[3].wrapping_sub(dsprot_bss).wrapping_sub(reference_offset);
                 let wrapper_fragment = pool_words[5] & 0x03ffffff;
-                let garbage_address = pool_words[6] - reference_offset;
+                let garbage_address = pool_words[6].wrapping_sub(reference_offset);
 
-                let wrapper_fragment_size = pool_words[5] >> 26;
+                #[allow(clippy::arithmetic_side_effects)] // small number
+                let wrapper_fragment_size = (pool_words[5] >> 26) * 4;
 
                 // Check that this looks like a RAM address
                 let has_garbage = garbage_address >> 24 == 0x02;
@@ -891,39 +951,42 @@ trait DsProtAlgo {
                 relocations.push(DsProtRelocation { from_address: function_end_address, to_address: dsprot_bss, addend: 1 });
                 // Seed key placeholder (BSS + 3 initially)
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: dsprot_bss,
                     addend: 3,
                 });
                 // Destination function address
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x8,
+                    from_address: function_end_address.wrapping_add(0x8),
                     to_address: dest_func_address,
                     addend: reference_offset,
                 });
                 // Destination function size
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0xc,
+                    from_address: function_end_address.wrapping_add(0xc),
                     to_address: dsprot_bss,
-                    addend: dest_func_size + reference_offset,
+                    addend: dest_func_size.wrapping_add(reference_offset),
                 });
                 // Decryption wrapper fragment address
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x14,
+                    from_address: function_end_address.wrapping_add(0x14),
                     to_address: wrapper_fragment,
                     addend: pool_words[5] & 0xfc000000,
                 });
                 if has_garbage {
                     // Pointer to garbage code
                     relocations.push(DsProtRelocation {
-                        from_address: function_end_address + 0x18,
+                        from_address: function_end_address.wrapping_add(0x18),
                         to_address: garbage_address,
                         addend: reference_offset,
                     });
                 }
-                function.pool_size = Some(0x18 + has_garbage as u32 * 4);
+                #[allow(clippy::arithmetic_side_effects)] // small number
+                {
+                    function.pool_size = Some(0x18 + has_garbage as u32 * 4);
+                }
 
-                let seed_key = self.precalculated_seed_key().unwrap();
+                let seed_key = self.precalculated_seed_key().unwrap_or(0);
 
                 log::debug!(
                     "Found decryption wrapper (type 3) at {:#010x} which targets {:#010x}. \
@@ -932,7 +995,7 @@ trait DsProtAlgo {
                     dest_func_address,
                     seed_key,
                     wrapper_fragment,
-                    wrapper_fragment_size * 4,
+                    wrapper_fragment_size,
                 );
                 decryption_wrappers.push(DsProtFunction {
                     address: dest_func_address,
@@ -941,38 +1004,61 @@ trait DsProtAlgo {
                     encryption: EncryptionType::Keyed(seed_key),
                     function_table: None,
                 });
-            } else if func_words.len() >= 4 && func_words[0..4] == [0xe92d4070, 0xe24dd010, 0xe59f40ac, 0xe59fc0ac] {
+            } else if func_words.starts_with(&[0xe92d4070, 0xe24dd010, 0xe59f40ac, 0xe59fc0ac]) {
                 // Decryption proxy
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 2)?;
+                let pool_words = get_constant_pool::<2>(base_address, end_address, words, function)?;
                 relocations.push(proxy_relocation(pool_words[1], words, base_address, end_address, reference_offset)?);
                 log::debug!("Decrypted decryption proxy function");
-            } else if func_words.len() >= 4 && func_words[0..4] == [0xe92d41f0, 0xe24dd010, 0xe1a05000, 0xe59f00c0] {
+            } else if func_words.starts_with(&[0xe92d41f0, 0xe24dd010, 0xe1a05000, 0xe59f00c0]) {
                 // Encryption proxy
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 1)?;
+                let pool_words = get_constant_pool::<1>(base_address, end_address, words, function)?;
                 relocations.push(proxy_relocation(pool_words[0], words, base_address, end_address, reference_offset)?);
                 log::debug!("Decrypted encryption proxy function");
-            } else if func_words.len() >= 4 && func_words[0..4] == [0xe92d000f, 0xe58ca010, 0xe1a0a00c, 0xe59fc054] {
+            } else if func_words.starts_with(&[0xe92d000f, 0xe58ca010, 0xe1a0a00c, 0xe59fc054]) {
                 // Decryption wrapper proxy
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 2)?;
+                let pool_words = get_constant_pool::<2>(base_address, end_address, words, function)?;
                 relocations.push(proxy_relocation(pool_words[0], words, base_address, end_address, reference_offset)?);
                 relocations.push(proxy_relocation(pool_words[1], words, base_address, end_address, reference_offset)?);
                 log::debug!("Decrypted decryption wrapper proxy function");
-            } else if func_words.len() >= 4
-                && (func_words[0..4] == [0xe92d4ff8, 0xe24dd008, 0xe1a0b003, 0xe1a0a000]
-                    || func_words[0..4] == [0xe92d4ff8, 0xe24dd010, 0xe1a0a000, 0xe1a00003])
+            } else if func_words.starts_with(&[0xe92d4ff8, 0xe24dd008, 0xe1a0b003, 0xe1a0a000])
+                || func_words.starts_with(&[0xe92d4ff8, 0xe24dd010, 0xe1a0a000, 0xe1a00003])
             {
                 // RC4 encryptor/decryptor
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 1)?;
+                let pool_words = get_constant_pool::<1>(base_address, end_address, words, function)?;
                 relocations.push(proxy_relocation(pool_words[0], words, base_address, end_address, reference_offset)?);
-                relocations.push(proxy_relocation(pool_words[0] + 0xc, words, base_address, end_address, reference_offset)?);
+                relocations.push(proxy_relocation(
+                    pool_words[0].wrapping_add(0xc),
+                    words,
+                    base_address,
+                    end_address,
+                    reference_offset,
+                )?);
                 log::debug!("Found RC4 encryptor/decryptor");
-            } else if func_words.len() >= 4 && func_words[0..4] == [0xe92d43f0, 0xe24ddf43, 0xe59f7064, 0xe28d8000] {
+            } else if func_words.starts_with(&[0xe92d43f0, 0xe24ddf43, 0xe59f7064, 0xe28d8000]) {
                 // RC4 encrypt/decrypt function
-                let pool_words = get_constant_pool(base_address, end_address, words, function.address, function.size, 1)?;
+                let pool_words = get_constant_pool::<1>(base_address, end_address, words, function)?;
                 relocations.push(proxy_relocation(pool_words[0], words, base_address, end_address, reference_offset)?);
-                relocations.push(proxy_relocation(pool_words[0] + 0x4, words, base_address, end_address, reference_offset)?);
-                relocations.push(proxy_relocation(pool_words[0] + 0x8, words, base_address, end_address, reference_offset)?);
-                relocations.push(proxy_relocation(pool_words[0] + 0x10, words, base_address, end_address, reference_offset)?);
+                relocations.push(proxy_relocation(
+                    pool_words[0].wrapping_add(0x4),
+                    words,
+                    base_address,
+                    end_address,
+                    reference_offset,
+                )?);
+                relocations.push(proxy_relocation(
+                    pool_words[0].wrapping_add(0x8),
+                    words,
+                    base_address,
+                    end_address,
+                    reference_offset,
+                )?);
+                relocations.push(proxy_relocation(
+                    pool_words[0].wrapping_add(0x10),
+                    words,
+                    base_address,
+                    end_address,
+                    reference_offset,
+                )?);
                 log::debug!("Found RC4 encrypt/decrypt function");
             }
         }
@@ -995,11 +1081,11 @@ trait DsProtAlgo {
                 continue;
             };
 
-            let function_table_address = function.address + function.size;
+            let function_table_address = function.end_address()?;
 
             log::debug!("Obfuscated function table found at {:#010x}", function_table_address);
 
-            let pool_offset = ((function_table_address - base_address) / 4) as usize;
+            let pool_offset = function.end_offset(base_address)? / 4;
             let Some(pool_words) = words.get_mut(pool_offset..) else {
                 return OutOfBoundsSnafu {
                     what: "function table",
@@ -1022,21 +1108,23 @@ trait DsProtAlgo {
                     break;
                 }
 
-                let func_address = *first - self.reference_offset();
-                let func_size = *second - dsprot_bss - self.reference_offset();
+                let func_address = (*first).wrapping_sub(self.reference_offset());
+                let func_size = (*second).wrapping_sub(dsprot_bss).wrapping_sub(self.reference_offset());
                 log::debug!("Found unkeyed encrypted function at {:#010x}, size {:#x}", func_address, func_size);
 
                 // Function address
+                #[allow(clippy::arithmetic_side_effects)] // the pool words were found within the module's address range
                 relocations.push(DsProtRelocation {
                     from_address: function_table_address + i * 8,
                     to_address: func_address,
                     addend: self.reference_offset(),
                 });
                 // Function size
+                #[allow(clippy::arithmetic_side_effects)] // the pool words were found within the module's address range
                 relocations.push(DsProtRelocation {
                     from_address: function_table_address + i * 8 + 4,
                     to_address: dsprot_bss,
-                    addend: func_size + self.reference_offset(),
+                    addend: func_size.wrapping_add(self.reference_offset()),
                 });
 
                 functions.push(DsProtFunction {
@@ -1048,18 +1136,22 @@ trait DsProtAlgo {
                 });
             }
 
+            #[allow(clippy::arithmetic_side_effects)] // small number
             let mut current_address = function_table_address + length * 8;
             if has_garbage && let Some(pool_word) = pool_iter.next() {
-                let garbage_address = pool_word - self.reference_offset();
+                let garbage_address = pool_word.wrapping_sub(self.reference_offset());
                 relocations.push(DsProtRelocation {
                     from_address: current_address,
                     to_address: garbage_address,
                     addend: self.reference_offset(),
                 });
-                current_address += 4;
+                #[allow(clippy::arithmetic_side_effects)] // small number
+                {
+                    current_address += 4;
+                }
             }
             if has_overwrite && let Some(pool_word) = pool_iter.next() {
-                let overwrite_address = pool_word - self.reference_offset();
+                let overwrite_address = pool_word.wrapping_sub(self.reference_offset());
                 relocations.push(DsProtRelocation {
                     from_address: current_address,
                     to_address: overwrite_address,
@@ -1094,14 +1186,14 @@ trait DsProtAlgo {
             let mut rc4 = self.init_rc4(seed_key, function.size);
 
             // Decrypt instructions
-            let func_offset = ((function.address - base_address) / 4) as usize;
-            let function_end_address = function.address + function.size;
-            let func_end_offset = ((function_end_address - base_address) / 4) as usize;
+            let func_offset = function.offset(base_address)? / 4;
+            let func_end_offset = function.end_offset(base_address)? / 4;
+            let function_end_address = function.end_address()?;
             let Some(func_words) = words.get_mut(func_offset..func_end_offset) else {
                 return RangeOutOfBoundsSnafu {
                     what: "encrypted function",
                     start: function.address,
-                    end: function.address + function.size,
+                    end: function_end_address,
                     base_address,
                     end_address,
                 }
@@ -1117,12 +1209,13 @@ trait DsProtAlgo {
             // Decrypt constant pools based on function signature
             let mut func_start = [0; 7];
             let limit = func_start.len().min(func_words.len());
+            #[allow(clippy::indexing_slicing)] // limit is not more than both slice's lengths
             func_start[0..limit].copy_from_slice(&func_words[0..limit]);
 
             let Some(pool_words) = words.get(func_end_offset..) else {
                 return OutOfBoundsSnafu {
                     what: "encrypted function constant pool",
-                    address: function.address + function.size,
+                    address: function_end_address,
                     base_address,
                     end_address,
                 }
@@ -1131,99 +1224,106 @@ trait DsProtAlgo {
 
             let reference_offset = self.reference_offset();
 
-            if func_start[0..4] == [0xe92d4ff8, 0xe24dd080, 0xe59f209c, 0xe59f109c]
-                || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f3080, 0xe59f2080]
-                || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f308c, 0xe59f208c]
-                || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f307c, 0xe59f207c]
+            if (func_start.starts_with(&[0xe92d4ff8, 0xe24dd080, 0xe59f209c, 0xe59f109c])
+                || func_start.starts_with(&[0xe92d41f0, 0xe24dd080, 0xe59f3080, 0xe59f2080])
+                || func_start.starts_with(&[0xe92d41f0, 0xe24dd080, 0xe59f308c, 0xe59f208c])
+                || func_start.starts_with(&[0xe92d41f0, 0xe24dd080, 0xe59f307c, 0xe59f207c]))
+                && let Some(pool_words) = pool_words.head_array::<2>()
             {
                 log::debug!("Decrypted flashcart/emulator detector (type 1)");
 
-                let test_fn_addr = pool_words[0] - reference_offset;
+                let test_fn_addr = pool_words[0].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
                     from_address: function_end_address,
                     to_address: test_fn_addr,
                     addend: reference_offset,
                 });
 
-                let integrity_fn_addr = pool_words[1] - reference_offset;
+                let integrity_fn_addr = pool_words[1].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: integrity_fn_addr,
                     addend: reference_offset,
                 });
-            } else if func_start[0..4] == [0xe92d4ff8, 0xe24dd098, 0xe59f2170, 0xe59f4170]
-                || func_start[0..4] == [0xe92d4ff8, 0xe24dd098, 0xe59f2174, 0xe59f4174]
+            } else if (func_start.starts_with(&[0xe92d4ff8, 0xe24dd098, 0xe59f2170, 0xe59f4170])
+                || func_start.starts_with(&[0xe92d4ff8, 0xe24dd098, 0xe59f2174, 0xe59f4174]))
+                && let Some(pool_words) = pool_words.head_array::<4>()
             {
                 log::debug!("Decrypted flashcart/emulator detector (type 2)");
 
-                let callback_index_addr = pool_words[0] - reference_offset;
+                let callback_index_addr = pool_words[0].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
                     from_address: function_end_address,
                     to_address: callback_index_addr,
                     addend: reference_offset,
                 });
 
-                let callback_table_addr = pool_words[1] - reference_offset;
+                let callback_table_addr = pool_words[1].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: callback_table_addr,
                     addend: reference_offset,
                 });
 
-                let test_fn_addr = pool_words[2] - reference_offset;
+                let test_fn_addr = pool_words[2].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x8,
+                    from_address: function_end_address.wrapping_add(0x8),
                     to_address: test_fn_addr,
                     addend: reference_offset,
                 });
 
-                let integrity_fn_addr = pool_words[3] - reference_offset;
+                let integrity_fn_addr = pool_words[3].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0xc,
+                    from_address: function_end_address.wrapping_add(0xc),
                     to_address: integrity_fn_addr,
                     addend: reference_offset,
                 });
-            } else if func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f3070, 0xe3a02000]
-                || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f3074, 0xe3a02000]
-                || func_start[0..4] == [0xe92d41f0, 0xe24dd080, 0xe59f3080, 0xe3a02000]
+            } else if (func_start.starts_with(&[0xe92d41f0, 0xe24dd080, 0xe59f3070, 0xe3a02000])
+                || func_start.starts_with(&[0xe92d41f0, 0xe24dd080, 0xe59f3074, 0xe3a02000])
+                || func_start.starts_with(&[0xe92d41f0, 0xe24dd080, 0xe59f3080, 0xe3a02000]))
+                && let Some(pool_words) = pool_words.head_array::<1>()
             {
                 log::debug!("Decrypted dummy detector");
 
-                let test_fn_addr = pool_words[0] - reference_offset;
+                let test_fn_addr = pool_words[0].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
                     from_address: function_end_address,
                     to_address: test_fn_addr,
                     addend: reference_offset,
                 });
-            } else if func_start[0..4] == [0xe92d4ff8, 0xe24dd018, 0xe59fa100, 0xe59f6100] {
+            } else if func_start.starts_with(&[0xe92d4ff8, 0xe24dd018, 0xe59fa100, 0xe59f6100])
+                && let Some(pool_words) = pool_words.head_array::<4>()
+            {
                 log::debug!("Decrypted MAC and ROM integrity checkers");
 
-                let mac_integrity_fn_addr = pool_words[0] - reference_offset;
+                let mac_integrity_fn_addr = pool_words[0].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
                     from_address: function_end_address,
                     to_address: mac_integrity_fn_addr,
                     addend: reference_offset,
                 });
-                let mac_test_fn_addr = pool_words[1] - reference_offset;
+                let mac_test_fn_addr = pool_words[1].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: mac_test_fn_addr,
                     addend: reference_offset,
                 });
-                let rom_integrity_fn_addr = pool_words[2] - reference_offset;
+                let rom_integrity_fn_addr = pool_words[2].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x8,
+                    from_address: function_end_address.wrapping_add(0x8),
                     to_address: rom_integrity_fn_addr,
                     addend: reference_offset,
                 });
-                let rom_test_fn_addr = pool_words[3] - reference_offset;
+                let rom_test_fn_addr = pool_words[3].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0xc,
+                    from_address: function_end_address.wrapping_add(0xc),
                     to_address: rom_test_fn_addr,
                     addend: reference_offset,
                 });
-            } else if func_start[6] == 0x112fff1e {
-                let checked_fn_addr = pool_words[0] - reference_offset;
+            } else if func_start[6] == 0x112fff1e
+                && let Some(pool_words) = pool_words.head_array::<1>()
+            {
+                let checked_fn_addr = pool_words[0].wrapping_sub(reference_offset);
                 log::debug!("Decrypted integrity checker for {:#010x}", checked_fn_addr);
 
                 relocations.push(DsProtRelocation {
@@ -1231,18 +1331,20 @@ trait DsProtAlgo {
                     to_address: checked_fn_addr,
                     addend: reference_offset,
                 });
-            } else if func_start[0..4] == [0xe1a0a00f, 0xe19aa00a, 0x102ee00e, 0xe25aa008] {
+            } else if func_start.starts_with(&[0xe1a0a00f, 0xe19aa00a, 0x102ee00e, 0xe25aa008])
+                && let Some(pool_words) = pool_words.head_array::<2>()
+            {
                 log::debug!("Decrypted crash function");
 
-                let clear_fn_addr = pool_words[0] - reference_offset;
+                let clear_fn_addr = pool_words[0].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
                     from_address: function_end_address,
                     to_address: clear_fn_addr,
                     addend: reference_offset,
                 });
-                let terminate_fn_addr = pool_words[1] - reference_offset;
+                let terminate_fn_addr = pool_words[1].wrapping_sub(reference_offset);
                 relocations.push(DsProtRelocation {
-                    from_address: function_end_address + 0x4,
+                    from_address: function_end_address.wrapping_add(0x4),
                     to_address: terminate_fn_addr,
                     addend: reference_offset,
                 });
@@ -1260,37 +1362,37 @@ trait DsProtAlgo {
     ) -> Result<(), DsProtError> {
         let &AlgoDecryptOptions { base_address, end_address, .. } = options;
         for relocation in relocations.iter() {
-            let Some(relocated_value) = words.get_mut((relocation.from_address - base_address) as usize / 4) else {
+            let Some(relocated_value) = words.get_mut(relocation.from_offset(base_address)? / 4) else {
                 return OutOfBoundsSnafu { what: "relocation", address: relocation.from_address, base_address, end_address }
                     .fail();
             };
-            *relocated_value -= relocation.addend;
+            *relocated_value = (*relocated_value).wrapping_sub(relocation.addend);
         }
         Ok(())
     }
 }
 
-fn get_constant_pool(
+fn get_constant_pool<'a, const N: usize>(
     base_address: u32,
     end_address: u32,
-    words: &[u32],
-    func_address: u32,
-    func_size: u32,
-    pool_size: u32,
-) -> Result<&[u32], DsProtError> {
-    let pool_offset = ((func_address + func_size - base_address) / 4) as usize;
-    let wrapper_end_offset = pool_offset + pool_size as usize;
+    words: &'a [u32],
+    function: &DsProtFunction,
+) -> Result<&'a [u32; N], DsProtError> {
+    let pool_offset = function.end_offset(base_address)? / 4;
+    let wrapper_end_offset = pool_offset.checked_add(N).ok_or_else(|| OverflowError::new("decryption wrapper end offset"))?;
+    let function_end_address = function.end_address()?;
     let Some(pool_words) = words.get(pool_offset..wrapper_end_offset) else {
         return RangeOutOfBoundsSnafu {
             what: "decryption wrapper constant pool",
-            start: func_address + func_size,
-            end: func_address + pool_size * 4,
+            start: function_end_address,
+            end: function_end_address.wrapping_add((N as u32).saturating_mul(4)),
             base_address,
             end_address,
         }
         .fail();
     };
-    Ok(pool_words)
+    #[allow(clippy::unwrap_used)] // pool_words is always N elements
+    Ok(pool_words.as_array::<N>().unwrap())
 }
 
 fn proxy_relocation(
@@ -1300,12 +1402,15 @@ fn proxy_relocation(
     end_address: u32,
     reference_offset: u32,
 ) -> Result<DsProtRelocation, DsProtError> {
-    let offset = (proxy_ptr_address - base_address) as usize / 4;
+    let offset =
+        proxy_ptr_address.checked_sub(base_address).ok_or_else(|| OverflowError::new("proxy function pointer offset"))?;
+    let offset = offset as usize / 4;
     let Some(proxy_fn) = words.get(offset) else {
         return OutOfBoundsSnafu { what: "proxy function pointer", address: proxy_ptr_address, base_address, end_address }
             .fail();
     };
-    Ok(DsProtRelocation { from_address: proxy_ptr_address, to_address: proxy_fn - reference_offset, addend: reference_offset })
+    let to_address = proxy_fn.wrapping_sub(reference_offset);
+    Ok(DsProtRelocation { from_address: proxy_ptr_address, to_address, addend: reference_offset })
 }
 
 fn encrypt_branch_1(reference_offset: u32, ins: u32) -> u32 {
@@ -1318,7 +1423,7 @@ fn encrypt_branch_1(reference_offset: u32, ins: u32) -> u32 {
 fn encrypt_branch_2(reference_offset: u32, ins: u32) -> u32 {
     // Flip link bit and add branch destination
     let opcode = (ins & 0xff000000) ^ 0x01000000;
-    let offset = (reference_offset + 8) >> 2;
+    let offset = reference_offset.wrapping_add(8) >> 2;
     let operands = (ins & 0x00ffffff).wrapping_add(offset) & 0x00ffffff;
     opcode | operands
 }
@@ -1333,7 +1438,7 @@ fn decrypt_branch_1(reference_offset: u32, ins: u32) -> u32 {
 fn decrypt_branch_2(reference_offset: u32, ins: u32) -> u32 {
     // Flip link bit and subtract branch destination
     let opcode = (ins & 0xff000000) ^ 0x01000000;
-    let offset = (reference_offset + 8) >> 2;
+    let offset = reference_offset.wrapping_add(8) >> 2;
     let operands = (ins & 0x00ffffff).wrapping_sub(offset) & 0x00ffffff;
     opcode | operands
 }
@@ -1441,10 +1546,6 @@ impl DsProtAlgo for DsProtAlgoV1 {
         u32::from_le_bytes([rc4.encrypt_byte(bytes[0]), rc4.encrypt_byte(bytes[1]), bytes[2] ^ 0x01, bytes[3]])
     }
 
-    fn precalculated_seed_key(&self) -> Option<u32> {
-        None
-    }
-
     fn init_rc4(&self, seed_key: u32, _func_size: u32) -> Rc4 {
         let expanded_key = expand_seed_key_old(seed_key);
         Rc4::new(&expanded_key, None)
@@ -1454,16 +1555,19 @@ impl DsProtAlgo for DsProtAlgoV1 {
         let AlgoDecryptOptions { base_address, version, .. } = *options;
 
         // Find the starts and keys of all encrypted code ranges
-        let encrypted_range_starts: Vec<(u32, u32)> = words
-            .windows(7)
+        let encrypted_range_starts = words
+            .array_windows::<7>()
             .enumerate()
             .filter(|(_i, word)| [word[0], word[1], word[2], word[4], word[5]] == self.encrypted_range_start_signature)
-            .map(|(i, word)| {
-                let start_address = base_address + i as u32 * 4 + 0x1c;
+            .map(|(i, word)| -> Result<_, DsProtError> {
+                #[allow(clippy::arithmetic_side_effects)] // small number
+                let start_address = base_address
+                    .checked_add(i as u32 * 4 + 0x1c)
+                    .ok_or_else(|| OverflowError::new("encrypted range start address"))?;
                 let seed_key = word[6];
-                (start_address, seed_key)
+                Ok((start_address, seed_key))
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut encrypted_ranges = Vec::new();
         for (start_address, seed_key) in encrypted_range_starts {
@@ -1472,14 +1576,23 @@ impl DsProtAlgo for DsProtAlgoV1 {
             let mut rc4 = self.init_rc4(seed_key, 0); // function size not needed
 
             for address in (start_address..).step_by(4) {
+                #[allow(clippy::arithmetic_side_effects)] // address is always greater than base_address
                 let offset = ((address - base_address) / 4) as usize;
-                let instruction = words[offset];
-                if instruction == seed_key {
+                let instruction = words.get_mut(offset).ok_or_else(|| {
+                    OutOfBoundsSnafu {
+                        what: "encrypted range start instruction",
+                        address,
+                        base_address,
+                        end_address: options.end_address,
+                    }
+                    .build()
+                })?;
+                if *instruction == seed_key {
                     encrypted_ranges.push(EncryptedRange { start_address, end_address: address, seed_key });
                     break;
                 }
                 let prev_ins = 0; // unused
-                words[offset] = self.decrypt_instruction(&mut rc4, instruction, prev_ins);
+                *instruction = self.decrypt_instruction(&mut rc4, *instruction, prev_ins);
             }
         }
         encrypted_ranges.sort_unstable_by_key(|r| r.start_address);
@@ -1541,10 +1654,6 @@ impl DsProtAlgo for DsProtAlgoV2 {
                 u32::from_le_bytes([rc4.encrypt_byte(bytes[0]), rc4.encrypt_byte(bytes[1]), bytes[2] ^ 1, bytes[3]])
             }
         }
-    }
-
-    fn precalculated_seed_key(&self) -> Option<u32> {
-        None
     }
 
     fn init_rc4(&self, seed_key: u32, func_size: u32) -> Rc4 {
@@ -1632,10 +1741,6 @@ impl DsProtAlgo for DsProtAlgoV3 {
                 ])
             }
         }
-    }
-
-    fn precalculated_seed_key(&self) -> Option<u32> {
-        None
     }
 
     fn init_rc4(&self, seed_key: u32, func_size: u32) -> Rc4 {
@@ -1737,10 +1842,6 @@ impl DsProtAlgo for DsProtAlgoV4 {
         }
     }
 
-    fn precalculated_seed_key(&self) -> Option<u32> {
-        None
-    }
-
     fn init_rc4(&self, seed_key: u32, func_size: u32) -> Rc4 {
         let expanded_key = expand_seed_key(seed_key, func_size);
         Rc4::new(bytemuck::cast_slice(&expanded_key), Some(0xaa))
@@ -1816,10 +1917,6 @@ impl DsProtAlgo for DsProtAlgoV5 {
                 result
             }
         }
-    }
-
-    fn precalculated_seed_key(&self) -> Option<u32> {
-        None
     }
 
     fn init_rc4(&self, seed_key: u32, func_size: u32) -> Rc4 {
@@ -1947,17 +2044,37 @@ impl DsProtDecryptResult {
             return Ok(());
         };
 
-        let end_address = base_address + data.len() as u32;
-
-        // Make 32-bit chunks
-        let words: &mut [u32] = bytemuck::cast_slice_mut(data);
-
-        dsprot_version.algo.encrypt(words, self, &AlgoEncryptOptions {
-            base_address,
-            end_address,
-            encode_relocations: options.encode_relocations,
+        with_words_mut(data, |words| {
+            let end_address = module_end_address(base_address, words)?;
+            dsprot_version.algo.encrypt(words, self, &AlgoEncryptOptions {
+                base_address,
+                end_address,
+                encode_relocations: options.encode_relocations,
+            })
         })
     }
+}
+
+/// Runs `f` on `data` as 32-bit words, ignoring trailing bytes that don't fill a whole word. If `data` is not 4-aligned, the
+/// words are copied to a temporary buffer and written back to `data` afterwards.
+fn with_words_mut<R>(data: &mut [u8], f: impl FnOnce(&mut [u32]) -> R) -> R {
+    let (chunks, _) = data.as_chunks_mut::<4>();
+    if let Ok(words) = bytemuck::try_cast_slice_mut(chunks) {
+        return f(words);
+    }
+    let mut words: Vec<u32> = chunks.iter().map(|chunk| u32::from_ne_bytes(*chunk)).collect();
+    let result = f(&mut words);
+    for (chunk, word) in chunks.iter_mut().zip(words) {
+        *chunk = word.to_ne_bytes();
+    }
+    result
+}
+
+fn module_end_address(base_address: u32, words: &[u32]) -> Result<u32, OverflowError> {
+    u32::try_from(size_of_val(words))
+        .ok()
+        .and_then(|size| base_address.checked_add(size))
+        .ok_or_else(|| OverflowError::new("module end address"))
 }
 
 /// Can be used to display values inside [`DsProtDecryptResult`].
@@ -2041,6 +2158,23 @@ impl EncryptedRange {
     pub fn end_address(&self) -> u32 {
         self.end_address
     }
+
+    /// Returns the size of this [`EncryptedRange`].
+    pub fn size(&self) -> Result<u32, OverflowError> {
+        self.end_address.checked_sub(self.start_address).ok_or_else(|| OverflowError::new("encrypted range size"))
+    }
+
+    #[inline(always)]
+    fn start_offset(&self, base_address: u32) -> Result<usize, OverflowError> {
+        Ok(self.start_address.checked_sub(base_address).ok_or_else(|| OverflowError::new("encrypted range start offset"))?
+            as usize)
+    }
+
+    #[inline(always)]
+    fn end_offset(&self, base_address: u32) -> Result<usize, OverflowError> {
+        Ok(self.end_address.checked_sub(base_address).ok_or_else(|| OverflowError::new("encrypted range end offset"))?
+            as usize)
+    }
 }
 
 /// Contains information about a DS Protect function.
@@ -2057,6 +2191,24 @@ pub struct DsProtFunction {
     /// If this function is a decoder which performs unkeyed decryption on a list of functions, then
     /// `function_table` will be `Some`.
     pub function_table: Option<FunctionTable>,
+}
+
+impl DsProtFunction {
+    #[inline(always)]
+    fn end_address(&self) -> Result<u32, OverflowError> {
+        self.address.checked_add(self.size).ok_or_else(|| OverflowError::new("dsprot function end address"))
+    }
+
+    #[inline(always)]
+    fn offset(&self, base_address: u32) -> Result<usize, OverflowError> {
+        Ok(self.address.checked_sub(base_address).ok_or_else(|| OverflowError::new("dsprot function offset"))? as usize)
+    }
+
+    #[inline(always)]
+    fn end_offset(&self, base_address: u32) -> Result<usize, OverflowError> {
+        Ok(self.end_address()?.checked_sub(base_address).ok_or_else(|| OverflowError::new("dsprot function end offset"))?
+            as usize)
+    }
 }
 
 /// The type of encryption used on a [`DsProtFunction`].
@@ -2094,6 +2246,13 @@ pub struct DsProtRelocation {
     pub to_address: u32,
     /// Offset to add to the resolved address.
     pub addend: u32,
+}
+
+impl DsProtRelocation {
+    #[allow(clippy::wrong_self_convention)]
+    fn from_offset(&self, base_address: u32) -> Result<usize, OverflowError> {
+        Ok(self.from_address.checked_sub(base_address).ok_or_else(|| OverflowError::new("relocation from offset"))? as usize)
+    }
 }
 
 /// Defines whether DS Protect is present in the ARM9 program or an ARM9 overlay, and whether it
@@ -2147,5 +2306,113 @@ impl DsProtState {
             DsProtState::None => None,
             DsProtState::Unencrypted(result) | DsProtState::Encrypted(result) => Some(result),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    #[repr(C, align(4))]
+    struct Aligned([u8; 16]);
+
+    fn increment_words(data: &mut [u8]) -> usize {
+        with_words_mut(data, |words| {
+            words.iter_mut().for_each(|word| *word = word.wrapping_add(1));
+            words.len()
+        })
+    }
+
+    #[test]
+    fn with_words_mut_aligned() {
+        let mut buf = Aligned([0; 16]);
+        let num_words = increment_words(&mut buf.0[..11]);
+        assert_eq!(num_words, 2);
+        let one = 1u32.to_ne_bytes();
+        assert_eq!(&buf.0[0..4], &one);
+        assert_eq!(&buf.0[4..8], &one);
+        assert_eq!(&buf.0[8..], &[0; 8], "trailing bytes must be untouched");
+    }
+
+    #[test]
+    fn with_words_mut_misaligned() {
+        let mut buf = Aligned([0; 16]);
+        let num_words = increment_words(&mut buf.0[1..12]);
+        assert_eq!(num_words, 2);
+        let one = 1u32.to_ne_bytes();
+        assert_eq!(buf.0[0], 0);
+        assert_eq!(&buf.0[1..5], &one);
+        assert_eq!(&buf.0[5..9], &one);
+        assert_eq!(&buf.0[9..], &[0; 7], "trailing bytes must be untouched");
+    }
+
+    #[test]
+    fn find_bss_variable_pool_out_of_bounds() {
+        for version in DSPROT_VERSIONS {
+            // Decryption wrapper signature at the very end, so its constant pool is out of bounds
+            let mut signature = DECRYPTION_WRAPPER_SIGNATURE_2;
+            let signature = version.algo.unkeyed_encrypt_decryption_wrapper(&mut signature);
+            let mut words = vec![0u32; 8];
+            words.extend_from_slice(signature);
+
+            let options = AlgoDecryptOptions {
+                base_address: 0x02000000,
+                end_address: 0x02000000 + words.len() as u32 * 4,
+                version: version.number,
+                decode_relocations: false,
+            };
+            let result = version.algo.find_bss_variable(&words, &options);
+            assert!(matches!(result, Err(DsProtError::BssNotFound { .. })));
+        }
+    }
+
+    #[test]
+    fn decode_function_tables_size_addend_wraps() {
+        const BASE_ADDRESS: u32 = 0x02000000;
+        const DSPROT_BSS: u32 = 0x02100000;
+        for version in DSPROT_VERSIONS {
+            // Function table with one entry whose size word is less than `DSPROT_BSS + reference_offset`, so `func_size`
+            // wraps around
+            let mut words = vec![0u32; 4];
+            words[0] = 0x02000100; // function address
+            words[1] = DSPROT_BSS; // function size
+
+            let decoder = DsProtFunction {
+                address: BASE_ADDRESS,
+                size: 0,
+                pool_size: None,
+                encryption: EncryptionType::None,
+                function_table: Some(FunctionTable { length: 1, has_garbage: false, has_overwrite: false }),
+            };
+            let options = AlgoDecryptOptions {
+                base_address: BASE_ADDRESS,
+                end_address: BASE_ADDRESS + words.len() as u32 * 4,
+                version: version.number,
+                decode_relocations: false,
+            };
+            let mut relocations = vec![];
+            let functions =
+                version.algo.decode_function_tables(&options, &mut words, DSPROT_BSS, &[decoder], &mut relocations).unwrap();
+            assert_eq!(functions.len(), 1);
+            assert_eq!(functions[0].size, 0u32.wrapping_sub(version.algo.reference_offset()));
+            let size_relocation = relocations.iter().find(|r| r.from_address == BASE_ADDRESS + 4).unwrap();
+            assert_eq!(size_relocation.to_address, DSPROT_BSS);
+            assert_eq!(size_relocation.addend, 0);
+        }
+    }
+
+    #[test]
+    fn detect_misaligned() {
+        let version = &DSPROT_VERSIONS[0];
+        let signature: &[u8] = bytemuck::cast_slice(&version.detect_signature);
+        let mut buf = vec![0u32; 16];
+        let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut buf);
+        bytes[5..5 + signature.len()].copy_from_slice(signature);
+
+        let misaligned = &bytes[1..bytes.len() - 2];
+        let info = DsProtInfo::detect(misaligned).unwrap();
+        assert_eq!(info.version.number, version.number);
+        assert!(DsProtInfo::detect(&bytes[2..]).is_none(), "signature is not word-aligned within the module");
     }
 }
