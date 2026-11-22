@@ -1,9 +1,14 @@
+#![allow(clippy::panic_in_result_fn)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::unwrap_used)]
+
 use std::{fs, path::Path};
 
 use anyhow::{Result, anyhow};
 use ds_rom::{
     crypto::{blowfish::BlowfishKey, hmac_sha1::HmacSha1, modcrypt::Modcrypt},
-    rom::{Rom, RomLoadOptions, raw},
+    rom::{DigestError, DigestParams, Rom, RomBuildError, RomLoadOptions, raw},
 };
 use walkdir::WalkDir;
 
@@ -32,7 +37,7 @@ fn digest_form(rom: &[u8], key: &BlowfishKey) -> Result<Vec<u8>> {
     let mut form = rom.to_vec();
 
     let arm9 = raw_rom.arm9()?;
-    let encrypted = arm9.encrypted_secure_area(key, header.gamecode.to_le_u32());
+    let encrypted = arm9.encrypted_secure_area(key, header.gamecode.to_le_u32())?;
     let start = header.arm9.offset as usize;
     form[start..start + encrypted.len()].copy_from_slice(&encrypted);
 
@@ -224,5 +229,34 @@ fn test_dsi_hashes_are_regenerated() -> Result<()> {
 
         fs::remove_dir_all(&extract_path)?;
     }
+    Ok(())
+}
+
+#[test]
+fn test_dsi_invalid_digest_params() -> Result<()> {
+    let test = RomsTest::new()?;
+    let Some(path) = test
+        .roms()?
+        .into_iter()
+        .find(|path| raw::Rom::from_file(path).is_ok_and(|rom| rom.header().is_ok_and(|header| header.has_dsi_area())))
+    else {
+        println!("skipping, no DSi ROM found");
+        return Ok(());
+    };
+    println!("testing invalid digest parameters on {}...", path.display());
+    let raw_rom = raw::Rom::from_file(&path)?;
+
+    let build_with = |set_params: &dyn Fn(&mut DigestParams)| -> Result<Result<raw::Rom<'_>, RomBuildError>> {
+        let mut rom = Rom::extract(&raw_rom)?;
+        set_params(&mut rom.header_mut().dsi.as_mut().ok_or_else(|| anyhow!("no DSi header"))?.digest);
+        Ok(rom.build(Some(&test.key)))
+    };
+
+    let result = build_with(&|params| params.sector_size = 0)?;
+    assert!(matches!(result, Err(RomBuildError::Digest { source: DigestError::ZeroSized { .. } })));
+    let result = build_with(&|params| params.block_sector_count = 0)?;
+    assert!(matches!(result, Err(RomBuildError::Digest { source: DigestError::ZeroSized { .. } })));
+    let result = build_with(&|params| params.block_sector_count = u32::MAX)?;
+    assert!(matches!(result, Err(RomBuildError::Overflow { .. })));
     Ok(())
 }

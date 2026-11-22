@@ -31,6 +31,7 @@ impl<const N: usize> FromStr for AsciiArray<N> {
     /// This function will return an error if the string contains a non-ASCII character.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut chars = [0u8; N];
+        #[allow(clippy::indexing_slicing)] // `i` is always in bounds
         for (i, ch) in s.chars().take(N).enumerate() {
             if !ch.is_ascii() {
                 return NotAsciiSnafu { string: s.to_string() }.fail();
@@ -95,7 +96,8 @@ unsafe impl<const N: usize> Pod for Unicode16Array<N> {}
 impl<const N: usize> From<&str> for Unicode16Array<N> {
     fn from(string: &str) -> Self {
         let mut chars = [0u16; N];
-        let mut i = 0;
+        let mut i: usize = 0;
+        #[allow(clippy::arithmetic_side_effects)] // `N` always has values far below usize::MAX
         for ch in string.chars() {
             let mut codepoints = [0u16; 2];
             ch.encode_utf16(&mut codepoints);
@@ -105,6 +107,7 @@ impl<const N: usize> From<&str> for Unicode16Array<N> {
                 break;
             }
 
+            #[allow(clippy::indexing_slicing)] // `i` was manually bounds checked
             for j in 0..len {
                 chars[i] = codepoints[j];
                 i += 1;

@@ -1,12 +1,10 @@
-use std::{
-    fmt::Display,
-    mem::{align_of, size_of},
-};
+use std::{fmt::Display, mem::size_of};
 
-use bytemuck::{Pod, PodCastError, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use snafu::{Backtrace, Snafu};
 
 use super::{NITROCODE, RawHeaderError};
+use crate::error::{DataOutOfBoundsError, OverflowError, SliceCastError, handle_pod_cast};
 
 /// Footer of the ARM9 program.
 #[repr(C)]
@@ -38,15 +36,11 @@ pub enum Arm9FooterError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
-    /// Occurs when the given input less aligned than [Arm9Footer].
-    #[snafu(display("expected {expected}-alignment for ARM9 footer but got {actual}-alignment:\n{backtrace}"))]
-    Misaligned {
-        /// Expected alignment.
-        expected: usize,
-        /// Actual input alignment.
-        actual: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
+    /// See [`SliceCastError`].
+    #[snafu(transparent)]
+    SliceCast {
+        /// Source error.
+        source: SliceCastError,
     },
     /// Occurs when nitrocode was not found in the input.
     #[snafu(display("expected nitrocode {expected:#x} in ARM9 footer but got {actual:#x}:\n{backtrace}"))]
@@ -57,6 +51,18 @@ pub enum Arm9FooterError {
         actual: u32,
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
     },
 }
 
@@ -71,18 +77,6 @@ impl Arm9Footer {
             WrongSizeSnafu { expected: size_of::<Self>(), actual: data.len() }.fail()
         } else {
             Ok(())
-        }
-    }
-
-    fn handle_pod_cast<T>(result: Result<T, PodCastError>, addr: usize) -> Result<T, Arm9FooterError> {
-        match result {
-            Ok(build_info) => Ok(build_info),
-            Err(PodCastError::TargetAlignmentGreaterAndInputNotAligned) => {
-                MisalignedSnafu { expected: align_of::<Self>(), actual: 1usize << addr.trailing_zeros() }.fail()
-            }
-            Err(PodCastError::AlignmentMismatch) => panic!(),
-            Err(PodCastError::OutputSliceWouldHaveSlop) => panic!(),
-            Err(PodCastError::SizeMismatch) => unreachable!(),
         }
     }
 
@@ -102,7 +96,7 @@ impl Arm9Footer {
     pub fn borrow_from_slice(data: &'_ [u8]) -> Result<&'_ Self, Arm9FooterError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        let footer: &Self = Self::handle_pod_cast(bytemuck::try_from_bytes(data), addr)?;
+        let footer: &Self = handle_pod_cast(bytemuck::try_from_bytes(data), addr)?;
         footer.check_nitrocode()?;
         Ok(footer)
     }
@@ -115,7 +109,7 @@ impl Arm9Footer {
     pub fn borrow_from_slice_mut(data: &'_ mut [u8]) -> Result<&'_ mut Self, Arm9FooterError> {
         Self::check_size(data)?;
         let addr = data as *const [u8] as *const () as usize;
-        let footer: &mut Self = Self::handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr)?;
+        let footer: &mut Self = handle_pod_cast(bytemuck::try_from_bytes_mut(data), addr)?;
         footer.check_nitrocode()?;
         Ok(footer)
     }

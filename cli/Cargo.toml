@@ -20,3 +20,6 @@ ds-rom = { path = "../lib" }
 env_logger = "0.11.5"
 log = "0.4.22"
 serde-saphyr = "0.0"
+
+[lints]
+workspace = true

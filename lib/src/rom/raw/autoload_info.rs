@@ -163,17 +163,19 @@ impl AutoloadInfoEntry {
     }
 
     fn parse_list_with_layout(data: &'_ [u8], layout: AutoloadInfoLayout) -> Vec<Self> {
-        data.chunks_exact(layout.entry_size()).map(|chunk| Self::parse_entry(chunk, layout)).collect()
+        data.chunks_exact(layout.entry_size()).filter_map(|chunk| Self::parse_entry(chunk, layout)).collect()
     }
 
-    fn parse_entry(data: &'_ [u8], layout: AutoloadInfoLayout) -> Self {
-        let word = |index: usize| u32::from_le_bytes(data[index * 4..index * 4 + 4].try_into().unwrap());
+    fn parse_entry(data: &'_ [u8], layout: AutoloadInfoLayout) -> Option<Self> {
+        #[allow(clippy::unwrap_used)] // slice is always 4 bytes long
+        #[allow(clippy::arithmetic_side_effects)] // index is small
+        let word = |index: usize| Some(u32::from_le_bytes(data.get(index * 4..index * 4 + 4)?.try_into().unwrap()));
         match layout {
             AutoloadInfoLayout::Basic => {
-                Self { base_address: word(0), code_size: word(1), bss_size: word(2), ctor_start: None }
+                Some(Self { base_address: word(0)?, code_size: word(1)?, bss_size: word(2)?, ctor_start: None })
             }
             AutoloadInfoLayout::Extended => {
-                Self { base_address: word(0), code_size: word(1), bss_size: word(3), ctor_start: Some(word(2)) }
+                Some(Self { base_address: word(0)?, code_size: word(1)?, bss_size: word(3)?, ctor_start: Some(word(2)?) })
             }
         }
     }
@@ -281,6 +283,7 @@ impl Display for AutoloadKind {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

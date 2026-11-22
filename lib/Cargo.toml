@@ -14,7 +14,7 @@ bitfield-struct = "0.12"
 bitreader = "0.3"
 bytemuck = { version = "1.25", features = ["derive"] }
 crc = "3.4"
-derive_more = { version = "2.1", features = ["display"] }
+derive_more = { version = "2.1", features = ["display", "from"] }
 encoding_rs = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
@@ -29,6 +29,5 @@ anyhow = "1.0"
 env_logger = "0.11"
 walkdir = "2.5"
 
-[lints.clippy]
-needless_range_loop = "allow"
-module_inception = "allow"
+[lints]
+workspace = true

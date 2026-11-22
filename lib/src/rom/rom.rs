@@ -1,6 +1,7 @@
 use std::{
     backtrace::Backtrace,
-    io::{self, Cursor, Write},
+    borrow::Cow,
+    io::{self, Write},
     mem::size_of,
     path::Path,
 };
@@ -12,30 +13,32 @@ use super::{
     Arm7, Arm9, Arm9AutoloadError, Arm9Error, Arm9HmacSha1KeyError, Arm9Offsets, Arm9OverlaySignaturesError, Autoload, Banner,
     BannerError, BannerImageError, BuildInfo, Digest, DigestError, DsiProgram, FileBuildError, FileParseError, FileSystem,
     Header, HeaderBuildError, Logo, LogoError, LogoLoadError, LogoSaveError, Overlay, OverlayError, OverlayInfo,
-    OverlayOptions, OverlayTable, RomConfigAutoload, RomConfigDsi, RomConfigDsiAlignment, RomConfigDsiPaddingValues,
-    RomConfigUnknownAutoload,
+    OverlayOptions, OverlayTable, RomConfigAutoload, RomConfigDsi, RomConfigUnknownAutoload,
     raw::{
         self, Arm9Footer, HmacSha1Signature, ProgramOffset, RawArm9Error, RawBannerError, RawBuildInfoError, RawFatError,
-        RawFntError, RawHeaderError, RawOverlayError, RomAlignmentsError, TableOffset,
+        RawFntError, RawHeaderError, RomAlignmentsError, TableOffset,
     },
 };
 use crate::{
-    compress::lz77::Lz77DecompressError,
+    compress::lz77::{Lz77CompressError, Lz77DecompressError},
     crypto::{
         blowfish::BlowfishKey,
         dsprot::{DsProtDecryptOptions, DsProtEncryptOptions, DsProtState},
         hmac_sha1::{HmacSha1, HmacSha1FromBytesError},
         modcrypt::Modcrypt,
     },
+    error::OverflowError,
     io::{FileError, create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string},
     rom::{
-        Arm9DsProtInfoError, Arm9WithTcmsOptions, OverlayDsProtError, RomConfig,
-        raw::{FileAlloc, MultibootSignature, RawDsiProgramError, RawMultibootSignatureError},
+        Arm9DsProtInfoError, Arm9WithTcmsOptions, AutoloadError, FileSystemLoadError, FileSystemPathOrderError,
+        FileSystemTraverseError, OverlayDsProtError, RomConfig,
+        raw::{
+            DSI_REGION_UNIT, FileAlloc, MultibootSignature, RawArm7Error, RawDsiProgramError, RawMultibootSignatureError,
+            RawOverlayError,
+        },
     },
+    writer::{ByteWriter, ByteWriterError, align_up},
 };
-
-/// The DS and DSi ROM region ends in the header are counted in these units.
-const DSI_REGION_UNIT: u32 = 0x80000;
 
 /// A plain ROM.
 pub struct Rom<'a> {
@@ -135,25 +138,6 @@ pub enum RomExtractError {
         /// Source error.
         source: Arm9Error,
     },
-    /// Occurs when the DSi area described by the header does not fit in the ROM.
-    #[snafu(display("the DSi area ends at {end:#x} but the ROM is only {rom_size:#x} bytes:\n{backtrace}"))]
-    DsiAreaOutOfBounds {
-        /// End of the DSi area.
-        end: usize,
-        /// Size of the ROM.
-        rom_size: usize,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
-    /// Occurs when a DSi header offset that should point into the ROM is zero, so the padding byte in front of it cannot be
-    /// read.
-    #[snafu(display("DSi header offset {field} is zero but must point into the ROM:\n{backtrace}"))]
-    DsiAreaOffsetZero {
-        /// Name of the offending offset.
-        field: &'static str,
-        /// Backtrace to the source of the error.
-        backtrace: Backtrace,
-    },
     /// Occurs when a DSi ROM has no ARM9 SHA1-HMAC key, which is needed to decrypt and verify its DSi area.
     #[snafu(display("a DSi ROM needs an ARM9 SHA1-HMAC key but none was found:\n{backtrace}"))]
     NoDsiHmacSha1Key {
@@ -207,6 +191,24 @@ pub enum RomExtractError {
     RawDsiProgram {
         /// Source error.
         source: RawDsiProgramError,
+    },
+    /// See [`RawArm7Error`].
+    #[snafu(transparent)]
+    RawArm7 {
+        /// Source error.
+        source: RawArm7Error,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`FileSystemPathOrderError`].
+    #[snafu(transparent)]
+    FileSystemPathOrder {
+        /// Source error.
+        source: FileSystemPathOrderError,
     },
 }
 
@@ -270,6 +272,44 @@ pub enum RomBuildError {
     /// Occurs when a DSi ROM is built without the Blowfish key needed to encrypt its ARM9 secure area.
     #[snafu(display("a DSi ROM needs a blowfish key to hash its encrypted ARM9 secure area:\n{backtrace}"))]
     DsiBlowfishKeyNeeded {
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// Occurs when writing the ROM fails, e.g. because it grows past 4 GiB or a config alignment is not a power of two.
+    #[snafu(transparent)]
+    ByteWriter {
+        /// Source error.
+        source: ByteWriterError,
+    },
+    /// Occurs when trying to access a part of the ROM that is already written, but the access goes
+    /// out of bounds.
+    #[snafu(display("could not access {what} because it is out of bounds:\n{backtrace}"))]
+    OutOfBoundsAccess {
+        /// The value being accessed.
+        what: Cow<'static, str>,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`FileSystemTraverseError`].
+    #[snafu(transparent)]
+    FileSystemTraverse {
+        /// Source error.
+        source: FileSystemTraverseError,
+    },
+    /// Occurs when an overlay's file ID is not a valid file ID. File IDs must be less than 0xf000, where directory IDs
+    /// begin.
+    #[snafu(display("overlay {overlay_id} has file ID {file_id:#x}, but file IDs must be less than 0xf000:\n{backtrace}"))]
+    InvalidOverlayFileId {
+        /// The overlay's ID.
+        overlay_id: u16,
+        /// The overlay's file ID.
+        file_id: u32,
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
@@ -347,6 +387,12 @@ pub enum RomSaveError {
         /// Source error.
         source: Lz77DecompressError,
     },
+    /// See [`Lz77CompressError`].
+    #[snafu(transparent)]
+    Lz77Compress {
+        /// Source error.
+        source: Lz77CompressError,
+    },
     /// See [`OverlayError`].
     #[snafu(transparent)]
     Overlay {
@@ -396,6 +442,34 @@ pub enum RomSaveError {
     OverlayDsProt {
         /// Source error.
         source: OverlayDsProtError,
+    },
+    /// Occurs when the provided config file path has no parent directory.
+    #[snafu(display("{what} has no parent directory: {path}\n{backtrace}"))]
+    NoPathParent {
+        /// The kind of path causing the error.
+        what: Cow<'static, str>,
+        /// The config file path.
+        path: String,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`FileSystemLoadError`].
+    #[snafu(transparent)]
+    FileSystemLoad {
+        /// Source error.
+        source: FileSystemLoadError,
+    },
+    /// See [`FileSystemTraverseError`].
+    #[snafu(transparent)]
+    FileSystemTraverse {
+        /// Source error.
+        source: FileSystemTraverseError,
+    },
+    /// See [`AutoloadError`].
+    #[snafu(transparent)]
+    Autoload {
+        /// Source error.
+        source: AutoloadError,
     },
 }
 
@@ -459,7 +533,9 @@ impl<'a> Rom<'a> {
         log::info!("Loading ROM from {}", config_path.display());
 
         let config: RomConfig = serde_saphyr::from_reader(open_file(config_path)?)?;
-        let path = config_path.parent().unwrap();
+        let path = config_path
+            .parent()
+            .ok_or_else(|| NoPathParentSnafu { what: "config path", path: config_path.to_string_lossy() }.build())?;
 
         // --------------------- Load header ---------------------
         let (header, header_logo) = if options.load_header {
@@ -479,18 +555,18 @@ impl<'a> Rom<'a> {
 
         let itcm = read_file(path.join(&config.itcm.bin))?;
         let itcm_info = serde_saphyr::from_reader(open_file(path.join(&config.itcm.config))?)?;
-        let itcm = Autoload::new(itcm, itcm_info);
+        let itcm = Autoload::new(itcm, itcm_info)?;
         autoloads.push(itcm);
 
         let dtcm = read_file(path.join(&config.dtcm.bin))?;
         let dtcm_info = serde_saphyr::from_reader(open_file(path.join(&config.dtcm.config))?)?;
-        let dtcm = Autoload::new(dtcm, dtcm_info);
+        let dtcm = Autoload::new(dtcm, dtcm_info)?;
         autoloads.push(dtcm);
 
         for unknown_autoload in &config.unknown_autoloads {
             let autoload = read_file(path.join(&unknown_autoload.files.bin))?;
             let autoload_info = serde_saphyr::from_reader(open_file(path.join(&unknown_autoload.files.config))?)?;
-            let autoload = Autoload::new(autoload, autoload_info);
+            let autoload = Autoload::new(autoload, autoload_info)?;
             autoloads.push(autoload);
         }
 
@@ -551,7 +627,9 @@ impl<'a> Rom<'a> {
         // --------------------- Load banner ---------------------
         let banner = if options.load_banner {
             let banner_path = path.join(&config.banner);
-            let banner_dir = banner_path.parent().unwrap();
+            let banner_dir = banner_path
+                .parent()
+                .ok_or_else(|| NoPathParentSnafu { what: "banner path", path: banner_path.to_string_lossy() }.build())?;
             let mut banner: Banner = serde_saphyr::from_reader(open_file(&banner_path)?)?;
             banner.images.load(banner_dir)?;
             banner
@@ -560,6 +638,7 @@ impl<'a> Rom<'a> {
         };
 
         // --------------------- Load files ---------------------
+        #[allow(clippy::arithmetic_side_effects)] // overlay count is far from usize::MAX
         let num_overlays = arm9_overlays.overlays().len() + arm7_overlays.overlays().len();
         let (files, path_order) = if options.load_files {
             log::info!("Loading ROM assets");
@@ -617,7 +696,9 @@ impl<'a> Rom<'a> {
         hmac_sha1: Option<&HmacSha1>,
         options: &RomLoadOptions,
     ) -> Result<OverlayTable<'a>, RomSaveError> {
-        let path = config_path.parent().unwrap();
+        let path = config_path
+            .parent()
+            .ok_or_else(|| NoPathParentSnafu { what: "config path", path: config_path.to_string_lossy() }.build())?;
         let mut overlays = vec![];
         let overlay_table_config: OverlayTableConfig = serde_saphyr::from_reader(open_file(config_path)?)?;
         let num_overlays = overlay_table_config.overlays.len();
@@ -639,7 +720,7 @@ impl<'a> Rom<'a> {
 
             if options.compress {
                 if compressed {
-                    log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays - 1);
+                    log::info!("Compressing {processor} overlay {}/{}", overlay.id(), num_overlays.saturating_sub(1));
                     overlay.compress()?;
                 }
 
@@ -760,7 +841,9 @@ impl<'a> Rom<'a> {
         // --------------------- Save banner ---------------------
         {
             let banner_path = path.join(&self.config.banner);
-            let banner_dir = banner_path.parent().unwrap();
+            let banner_dir = banner_path
+                .parent()
+                .ok_or_else(|| NoPathParentSnafu { what: "bitmap path", path: banner_path.to_string_lossy() }.build())?;
             serde_saphyr::to_io_writer(&mut create_file_and_dirs(&banner_path)?, &self.banner)?;
             self.banner.images.save_bitmap_file(banner_dir)?;
         }
@@ -769,15 +852,12 @@ impl<'a> Rom<'a> {
         {
             log::info!("Saving ROM assets");
             let files_path = path.join(&self.config.files_dir);
-            self.files.traverse_files(["/"], |file, path| {
+            self.files.traverse_files(["/"], |file, path| -> Result<(), RomSaveError> {
                 let path = files_path.join(path);
-                // TODO: Rewrite traverse_files as an iterator so these errors can be returned
-                create_dir_all(&path).expect("failed to create file directory");
-                create_file(path.join(file.name()))
-                    .expect("failed to create file")
-                    .write_all(file.contents())
-                    .expect("failed to write file");
-            });
+                create_dir_all(&path)?;
+                create_file(path.join(file.name()))?.write_all(file.contents())?;
+                Ok(())
+            })?;
         }
         let mut path_order_file = create_file_and_dirs(path.join(&self.config.path_order))?;
         for path in &self.path_order {
@@ -815,7 +895,10 @@ impl<'a> Rom<'a> {
     fn save_overlays(config_path: &Path, overlay_table: &OverlayTable, processor: &str) -> Result<(), RomSaveError> {
         let overlays = overlay_table.overlays();
         if !overlays.is_empty() {
-            let overlays_path = config_path.parent().unwrap();
+            let overlays_path = config_path.parent().ok_or_else(|| {
+                NoPathParentSnafu { what: format!("{processor} overlay config path"), path: config_path.to_string_lossy() }
+                    .build()
+            })?;
             create_dir_all(overlays_path)?;
 
             let mut configs = vec![];
@@ -824,7 +907,7 @@ impl<'a> Rom<'a> {
 
                 let mut plain_overlay = overlay.clone();
                 if plain_overlay.is_compressed() {
-                    log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len() - 1);
+                    log::info!("Decompressing {processor} overlay {}/{}", overlay.id(), overlays.len().saturating_sub(1));
                     plain_overlay.decompress()?;
                 }
                 if plain_overlay.dsprot_state().is_encrypted() {
@@ -839,7 +922,7 @@ impl<'a> Rom<'a> {
                     dsprot: plain_overlay.dsprot_state().clone(),
                 });
 
-                create_file(overlays_path.join(format!("{name}.bin")))?.write_all(plain_overlay.code())?;
+                create_file(overlays_path.join(format!("{name}.bin")))?.write_all(plain_overlay.code()?)?;
             }
 
             let overlay_table_config = OverlayTableConfig {
@@ -847,7 +930,7 @@ impl<'a> Rom<'a> {
                 table_signature: overlay_table.signature(),
                 overlays: configs,
             };
-            serde_saphyr::to_io_writer(&mut create_file_and_dirs(config_path)?, &overlay_table_config)?;
+            serde_saphyr::to_io_writer(&mut create_file(config_path)?, &overlay_table_config)?;
         }
         Ok(())
     }
@@ -865,7 +948,7 @@ impl<'a> Rom<'a> {
         let fat = rom.fat()?;
         let banner = rom.banner()?;
         let file_root = FileSystem::parse(&fnt, fat, rom)?;
-        let path_order = file_root.compute_path_order();
+        let path_order = file_root.compute_path_order()?;
 
         let mut arm9 = rom.arm9()?;
         let mut decompressed_arm9 = arm9.clone();
@@ -976,32 +1059,6 @@ impl<'a> Rom<'a> {
     }
 
     fn extract_dsi_area(rom: &'a raw::Rom, header: &raw::Header) -> Result<(DsiArea<'a>, RomConfigDsi), RomExtractError> {
-        let data = rom.data();
-
-        let region_start = header.ds_rom_region_end as usize * DSI_REGION_UNIT as usize;
-        let end_of_dsi_area = (header.rom_size_dsi as usize)
-            .max(header.arm9i.offset as usize + header.arm9i.size as usize)
-            .max(header.arm7i.offset as usize + header.arm7i.size as usize)
-            .max(header.digest_sector_hashtable.offset as usize + header.digest_sector_hashtable.size as usize)
-            .max(header.digest_block_hashtable.offset as usize + header.digest_block_hashtable.size as usize)
-            .max(header.rom_size_ds as usize);
-        if end_of_dsi_area > data.len() || region_start > header.arm9i.offset as usize {
-            return DsiAreaOutOfBoundsSnafu { end: end_of_dsi_area, rom_size: data.len() }.fail();
-        }
-
-        for (field, offset) in [
-            ("digest_sector_hashtable", header.digest_sector_hashtable.offset as usize),
-            ("digest_block_hashtable", header.digest_block_hashtable.offset as usize),
-            ("rom_size_ds", header.rom_size_ds as usize),
-            ("dsi_region", region_start),
-            ("arm7i", header.arm7i.offset as usize),
-            ("rom_size_dsi", header.rom_size_dsi as usize),
-        ] {
-            if offset == 0 {
-                return DsiAreaOffsetZeroSnafu { field }.fail();
-            }
-        }
-
         let mut arm9i = rom.arm9i()?;
         let mut arm7i = rom.arm7i()?;
         if let Some(modcrypt) = header.modcrypt() {
@@ -1010,7 +1067,7 @@ impl<'a> Rom<'a> {
         }
 
         // Everything between the end of the DS region and the ARM9i program is dummy data
-        let region_padding = data[region_start..header.arm9i.offset as usize].to_vec().into_boxed_slice();
+        let region_padding = rom.region_padding()?.to_vec().into_boxed_slice();
 
         let config = RomConfigDsi {
             arm9i_bin: "dsi/arm9i.bin".into(),
@@ -1018,19 +1075,8 @@ impl<'a> Rom<'a> {
             arm7i_bin: "dsi/arm7i.bin".into(),
             arm7i_config: "dsi/arm7i.yaml".into(),
             region_padding: "dsi/region_padding.bin".into(),
-            alignment: RomConfigDsiAlignment {
-                digest_block_hashtable: detect_alignment(header.digest_block_hashtable.offset),
-                rom_size_ds: detect_alignment(header.rom_size_ds),
-                arm7i: detect_alignment(header.arm7i.offset),
-            },
-            padding: RomConfigDsiPaddingValues {
-                digest_sector_hashtable: data[header.digest_sector_hashtable.offset as usize - 1],
-                digest_block_hashtable: data[header.digest_block_hashtable.offset as usize - 1],
-                rom_size_ds: data[header.rom_size_ds as usize - 1],
-                dsi_region: data[region_start - 1],
-                arm7i: data[header.arm7i.offset as usize - 1],
-                rom_size_dsi: data[header.rom_size_dsi as usize - 1],
-            },
+            alignment: rom.dsi_alignments()?,
+            padding: rom.dsi_padding_values()?,
         };
 
         Ok((DsiArea { arm9i, arm7i, region_padding }, config))
@@ -1044,144 +1090,169 @@ impl<'a> Rom<'a> {
     pub fn build(mut self, key: Option<&BlowfishKey>) -> Result<raw::Rom<'a>, RomBuildError> {
         let mut context = BuildContext { blowfish_key: key, ..Default::default() };
 
-        let mut cursor = Cursor::new(Vec::with_capacity(128 * 1024)); // smallest possible ROM
+        let mut writer = ByteWriter::with_capacity(128 * 1024); // smallest possible ROM
 
         // --------------------- Write header placeholder ---------------------
-        context.header_offset = Some(cursor.position() as u32);
-        cursor.write_all(&[0u8; size_of::<raw::Header>()])?;
+        let header_offset = writer.position();
+        context.header_offset = Some(header_offset);
+        writer.fill(0, size_of::<raw::Header>())?;
 
         // --------------------- Write ARM9 program ---------------------
-        self.align(&mut cursor, self.config.alignment.arm9, self.config.padding.arm9)?;
-        context.arm9_offset = Some(cursor.position() as u32);
+        writer.align(self.config.padding.arm9, self.config.alignment.arm9)?;
+        let arm9_offset = writer.position();
+        context.arm9_offset = Some(arm9_offset);
         context.arm9_autoload_callback = Some(self.arm9.autoload_callback());
         context.arm9_build_info_offset = Some(self.arm9.build_info_offset());
-        cursor.write_all(self.arm9.full_data())?;
+        writer.copy(self.arm9.full_data())?;
         if self.arm9.has_footer() {
             let footer = Arm9Footer::new(self.arm9.build_info_offset(), self.arm9.overlay_signatures_offset());
-            cursor.write_all(bytemuck::bytes_of(&footer))?;
+            writer.copy(bytemuck::bytes_of(&footer))?;
         }
 
-        let max_file_id = self.files.max_file_id();
-        let mut file_allocs = vec![FileAlloc::default(); max_file_id as usize + 1];
+        let overlay_file_ids = self
+            .arm9_overlay_table
+            .overlays()
+            .iter()
+            .chain(self.arm7_overlay_table.overlays())
+            .map(|overlay| (overlay.id(), overlay.file_id()));
+        let fat_entry_count = fat_entry_count(self.files.max_file_id(), overlay_file_ids)?;
+        let mut file_allocs = vec![FileAlloc::default(); fat_entry_count];
 
         if !self.arm9_overlay_table.is_empty() {
             // --------------------- Write ARM9 overlay table ---------------------
-            self.align(&mut cursor, self.config.alignment.arm9_overlay_table, self.config.padding.arm9_overlay_table)?;
+            writer.align(self.config.padding.arm9_overlay_table, self.config.alignment.arm9_overlay_table)?;
             context.arm9_ovt_offset = Some(TableOffset {
-                offset: cursor.position() as u32,
-                size: (self.arm9_overlay_table.len() * size_of::<raw::Overlay>()) as u32,
+                offset: writer.position(),
+                size: (self.arm9_overlay_table.len() as u32)
+                    .checked_mul(size_of::<raw::Overlay>() as u32)
+                    .ok_or_else(|| OverflowError::new("ARM9 overlay table size"))?,
             });
             let raw_table = self.arm9_overlay_table.build();
-            cursor.write_all(raw_table.as_bytes())?;
+            writer.copy(raw_table.as_bytes())?;
 
             // --------------------- Write ARM9 overlays ---------------------
+            #[allow(clippy::indexing_slicing)] // file_allocs covers every overlay's file ID
             for overlay in self.arm9_overlay_table.overlays() {
-                self.align(&mut cursor, self.config.alignment.arm9_overlay, self.config.padding.arm9_overlays)?;
-                let start = cursor.position() as u32;
-                let end = start + overlay.full_data().len() as u32;
+                writer.align(self.config.padding.arm9_overlays, self.config.alignment.arm9_overlay)?;
+                let start = writer.position();
+                let end = start
+                    .checked_add(overlay.full_data().len() as u32)
+                    .ok_or_else(|| OverflowError::new(format!("end of ARM9 overlay {}", overlay.id())))?;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
 
-                cursor.write_all(overlay.full_data())?;
+                writer.copy(overlay.full_data())?;
             }
         }
 
         // --------------------- Write ARM7 program ---------------------
-        self.align(&mut cursor, self.config.alignment.arm7, self.config.padding.arm7)?;
-        context.arm7_offset = Some(cursor.position() as u32);
+        writer.align(self.config.padding.arm7, self.config.alignment.arm7)?;
+        context.arm7_offset = Some(writer.position());
         context.arm7_autoload_callback = Some(self.arm7.autoload_callback());
         context.arm7_build_info_offset = Some(self.arm7.build_info_offset());
-        cursor.write_all(self.arm7.full_data())?;
+        writer.copy(self.arm7.full_data())?;
 
         if !self.arm7_overlay_table.is_empty() {
             // --------------------- Write ARM7 overlay table ---------------------
-            self.align(&mut cursor, self.config.alignment.arm7_overlay_table, self.config.padding.arm7_overlay_table)?;
+            writer.align(self.config.padding.arm7_overlay_table, self.config.alignment.arm7_overlay_table)?;
             context.arm7_ovt_offset = Some(TableOffset {
-                offset: cursor.position() as u32,
-                size: (self.arm7_overlay_table.len() * size_of::<raw::Overlay>()) as u32,
+                offset: writer.position(),
+                size: (self.arm7_overlay_table.len() as u32)
+                    .checked_mul(size_of::<raw::Overlay>() as u32)
+                    .ok_or_else(|| OverflowError::new("ARM7 overlay table size"))?,
             });
             let raw_table = self.arm7_overlay_table.build();
-            cursor.write_all(raw_table.as_bytes())?;
+            writer.copy(raw_table.as_bytes())?;
 
             // --------------------- Write ARM7 overlays ---------------------
+            #[allow(clippy::indexing_slicing)] // file_allocs covers every overlay's file ID
             for overlay in self.arm7_overlay_table.overlays() {
-                self.align(&mut cursor, self.config.alignment.arm7_overlay, self.config.padding.arm7_overlays)?;
-                let start = cursor.position() as u32;
-                let end = start + overlay.full_data().len() as u32;
+                writer.align(self.config.padding.arm7_overlays, self.config.alignment.arm7_overlay)?;
+                let start = writer.position();
+                let end = start
+                    .checked_add(overlay.full_data().len() as u32)
+                    .ok_or_else(|| OverflowError::new(format!("end of ARM7 overlay {}", overlay.id())))?;
                 file_allocs[overlay.file_id() as usize] = FileAlloc { start, end };
 
-                cursor.write_all(overlay.full_data())?;
+                writer.copy(overlay.full_data())?;
             }
         }
 
         // --------------------- Write file name table (FNT) ---------------------
-        self.align(&mut cursor, self.config.alignment.file_name_table, self.config.padding.fnt)?;
-        self.files.sort_for_fnt();
+        writer.align(self.config.padding.fnt, self.config.alignment.file_name_table)?;
+        self.files.sort_for_fnt()?;
         let fnt = self.files.build_fnt()?.build()?;
-        context.fnt_offset = Some(TableOffset { offset: cursor.position() as u32, size: fnt.len() as u32 });
-        cursor.write_all(&fnt)?;
+        context.fnt_offset = Some(TableOffset { offset: writer.position(), size: fnt.len() as u32 });
+        writer.copy(&fnt)?;
 
         // --------------------- Write file allocation table (FAT) placeholder ---------------------
-        self.align(&mut cursor, self.config.alignment.file_allocation_table, self.config.padding.fat)?;
-        context.fat_offset =
-            Some(TableOffset { offset: cursor.position() as u32, size: (file_allocs.len() * size_of::<FileAlloc>()) as u32 });
-        cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
+        writer.align(self.config.padding.fat, self.config.alignment.file_allocation_table)?;
+        let fat_offset = writer.position();
+        context.fat_offset = Some(TableOffset {
+            offset: fat_offset,
+            size: (file_allocs.len() as u32)
+                .checked_mul(size_of::<FileAlloc>() as u32)
+                .ok_or_else(|| OverflowError::new("FAT size"))?,
+        });
+        writer.copy(bytemuck::cast_slice(&file_allocs))?;
 
         // --------------------- Write banner ---------------------
-        self.align(&mut cursor, self.config.alignment.banner, self.config.padding.banner)?;
+        writer.align(self.config.padding.banner, self.config.alignment.banner)?;
         let banner = self.banner.build()?;
-        context.banner_offset = Some(TableOffset { offset: cursor.position() as u32, size: banner.full_data().len() as u32 });
-        cursor.write_all(banner.full_data())?;
+        context.banner_offset = Some(TableOffset { offset: writer.position(), size: banner.full_data().len() as u32 });
+        writer.copy(banner.full_data())?;
 
         // --------------------- Write files ---------------------
-        self.align(&mut cursor, self.config.alignment.file_image_block, self.config.padding.file_image)?;
-        self.files.sort_for_rom();
-        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| {
-            // TODO: Rewrite traverse_files as an iterator so these errors can be returned
-            self.align(&mut cursor, self.config.alignment.file, self.config.padding.file_image)
-                .expect("failed to align after file");
+        writer.align(self.config.padding.file_image, self.config.alignment.file_image_block)?;
+        self.files.sort_for_rom()?;
+        #[allow(clippy::indexing_slicing)] // file_allocs covers every file ID in the file system
+        self.files.traverse_files(self.path_order.iter().map(|s| s.as_str()), |file, _| -> Result<(), RomBuildError> {
+            writer.align(self.config.padding.file_image, self.config.alignment.file)?;
 
             let contents = file.contents();
-            let start = cursor.position() as u32;
-            let end = start + contents.len() as u32;
+            let length = u32::try_from(contents.len()).map_err(|_| OverflowError::new(format!("size of {}", file.name())))?;
+            let start = writer.position();
+            let end = start.checked_add(length).ok_or_else(|| OverflowError::new(format!("end offset of {}", file.name())))?;
             file_allocs[file.id() as usize] = FileAlloc { start, end };
 
-            cursor.write_all(contents).expect("failed to write file contents");
-        });
+            writer.copy(contents)?;
+            Ok(())
+        })?;
 
         // --------------------- Write multiboot signature ---------------------
         // Multiboot signature is placed "after" the ROM ends
-        context.rom_size = Some(cursor.position() as u32);
+        context.rom_size = Some(writer.position());
         if let Some(multiboot_signature) = &self.multiboot_signature {
-            cursor.write_all(bytemuck::bytes_of(multiboot_signature))?;
+            writer.copy(bytemuck::bytes_of(multiboot_signature))?;
         }
 
         // --------------------- Update FAT ---------------------
         // The FAT must be final before the digest tables are computed below
-        let ntr_region_end = cursor.position();
-        cursor.set_position(context.fat_offset.unwrap().offset as u64);
-        cursor.write_all(bytemuck::cast_slice(&file_allocs))?;
+        let ntr_region_end = writer.position();
+        writer.set_position(fat_offset)?;
+        writer.copy(bytemuck::cast_slice(&file_allocs))?;
 
         // --------------------- Write DSi area ---------------------
-        cursor.set_position(ntr_region_end);
-        context.dsi = self.build_dsi_area(&mut cursor, &mut context, key)?;
+        writer.set_position(ntr_region_end)?;
+        context.dsi = self.build_dsi_area(&mut writer, &mut context, key, &banner, arm9_offset)?;
 
         // --------------------- Write padding ---------------------
-        let padded_rom_size = cursor.position().next_power_of_two().max(128 * 1024) as u32;
-        self.align(&mut cursor, padded_rom_size, self.config.padding.rom)?;
+        writer.align(self.config.padding.rom, padded_rom_size(writer.position())?)?;
 
         // --------------------- Update header ---------------------
-        cursor.set_position(context.header_offset.unwrap() as u64);
+        writer.set_position(header_offset)?;
         let header = self.header.build(&context, &self)?;
-        cursor.write_all(bytemuck::bytes_of(&header))?;
+        writer.copy(bytemuck::bytes_of(&header))?;
 
-        Ok(raw::Rom::new(cursor.into_inner()))
+        Ok(raw::Rom::new(writer.into_vec()))
     }
 
     fn build_dsi_area(
         &self,
-        cursor: &mut Cursor<Vec<u8>>,
+        writer: &mut ByteWriter,
         context: &mut BuildContext,
         key: Option<&BlowfishKey>,
+        banner: &raw::Banner<'_>,
+        arm9_offset: u32,
     ) -> Result<Option<DsiBuildContext>, RomBuildError> {
         let (dsi, config, header_ds_post_dsi, header_dsi) =
             match (&self.dsi, &self.config.dsi, &self.header.ds_post_dsi, &self.header.dsi) {
@@ -1199,12 +1270,15 @@ impl<'a> Rom<'a> {
         };
 
         let params = header_dsi.digest;
+        Digest::check_params(&params)?;
         const HASH_SIZE: u32 = size_of::<HmacSha1Signature>() as u32;
 
         // --------------------- Align NTR region size ---------------------
-        self.align(cursor, params.sector_size, config.padding.digest_sector_hashtable)?;
-        let sector_hashtable_offset = cursor.position() as u32;
+        writer.align(config.padding.digest_sector_hashtable, params.sector_size)?;
+        let sector_hashtable_offset = writer.position();
         let ntr_region_start = size_of::<raw::Header>() as u32;
+        // sector hashtable is always after NTR region, and sector_size is not zero
+        #[allow(clippy::arithmetic_side_effects)]
         let ntr_sectors = (sector_hashtable_offset - ntr_region_start) / params.sector_size;
 
         // Where the DSi area starts decides how many sectors it contributes, which decides how big the digest tables are,
@@ -1214,18 +1288,37 @@ impl<'a> Rom<'a> {
         let arm7i_len = dsi.arm7i.full_data().len() as u32;
         let mut ds_rom_region_end = header_dsi.ds_rom_region_end;
         let layout: DsiLayout = loop {
-            let region_start = ds_rom_region_end as u32 * DSI_REGION_UNIT;
-            let arm9i_offset = region_start + dsi.region_padding.len() as u32;
-            let arm7i_offset = align_up(arm9i_offset + arm9i_len, config.alignment.arm7i);
-            let rom_size_dsi = align_up(arm7i_offset + arm7i_len, params.sector_size);
+            #[allow(clippy::arithmetic_side_effects)] // 16x20-bit multiplication fits in 64 bits
+            let region_start: u32 = (ds_rom_region_end as u64 * DSI_REGION_UNIT as u64)
+                .try_into()
+                .map_err(|_| OverflowError::new("DSi region start"))?;
+            let arm9i_offset =
+                region_start.checked_add(dsi.region_padding.len() as u32).ok_or_else(|| OverflowError::new("ARM9i offset"))?;
+            let arm9i_end = arm9i_offset.checked_add(arm9i_len).ok_or_else(|| OverflowError::new("ARM9i end"))?;
+            let arm7i_offset = align_up(arm9i_end, config.alignment.arm7i, "ARM7i offset")?;
+            let arm7i_end = arm7i_offset.checked_add(arm7i_len).ok_or_else(|| OverflowError::new("ARM7i end"))?;
+            let rom_size_dsi = align_up(arm7i_end, params.sector_size, "DSi ROM size")?;
+            // rom_size_dsi is always greater than arm9i_offset, and sector_size is not zero
+            #[allow(clippy::arithmetic_side_effects)]
             let twl_sectors = (rom_size_dsi - arm9i_offset) / params.sector_size;
 
-            let num_blocks = (ntr_sectors + twl_sectors).div_ceil(params.block_sector_count);
-            let sector_hashtable_size = num_blocks * params.block_sector_count * HASH_SIZE;
+            let num_sectors = ntr_sectors.checked_add(twl_sectors).ok_or_else(|| OverflowError::new("hash sector count"))?;
+            let num_blocks = num_sectors.div_ceil(params.block_sector_count);
+            let block_hash_size =
+                params.block_sector_count.checked_mul(HASH_SIZE).ok_or_else(|| OverflowError::new("digest block size"))?;
+            let sector_hashtable_size =
+                num_blocks.checked_mul(block_hash_size).ok_or_else(|| OverflowError::new("sector hashtable size"))?;
+            let sector_hashtable_end = sector_hashtable_offset
+                .checked_add(sector_hashtable_size)
+                .ok_or_else(|| OverflowError::new("sector hashtable end"))?;
             let block_hashtable_offset =
-                align_up(sector_hashtable_offset + sector_hashtable_size, config.alignment.digest_block_hashtable);
-            let block_hashtable_size = num_blocks * HASH_SIZE;
-            let rom_size_ds = align_up(block_hashtable_offset + block_hashtable_size, config.alignment.rom_size_ds);
+                align_up(sector_hashtable_end, config.alignment.digest_block_hashtable, "block hashtable offset")?;
+            let block_hashtable_size =
+                num_blocks.checked_mul(HASH_SIZE).ok_or_else(|| OverflowError::new("block hashtable size"))?;
+            let block_hashtable_end = block_hashtable_offset
+                .checked_add(block_hashtable_size)
+                .ok_or_else(|| OverflowError::new("block hashtable end"))?;
+            let rom_size_ds = align_up(block_hashtable_end, config.alignment.rom_size_ds, "DS ROM size")?;
 
             if rom_size_ds <= region_start {
                 break DsiLayout {
@@ -1248,61 +1341,60 @@ impl<'a> Rom<'a> {
 
         // --------------------- Reserve the digest tables ---------------------
         // Their contents cover the DSi area written below, so they get filled in afterwards.
-        write_padding(cursor, 0, layout.sector_hashtable_size as usize)?;
-        self.align(cursor, config.alignment.digest_block_hashtable, config.padding.digest_block_hashtable)?;
-        assert_eq!(cursor.position() as u32, layout.block_hashtable_offset, "digest block hashtable landed off-layout");
-        write_padding(cursor, 0, layout.block_hashtable_size as usize)?;
-        self.align(cursor, config.alignment.rom_size_ds, config.padding.rom_size_ds)?;
-        assert_eq!(cursor.position() as u32, layout.rom_size_ds, "DS area ended off-layout");
+        writer.fill(0, layout.sector_hashtable_size as usize)?;
+        writer.align(config.padding.digest_block_hashtable, config.alignment.digest_block_hashtable)?;
+        debug_assert_eq!(writer.position(), layout.block_hashtable_offset, "digest block hashtable landed off-layout");
+        writer.fill(0, layout.block_hashtable_size as usize)?;
+        writer.align(config.padding.rom_size_ds, config.alignment.rom_size_ds)?;
+        debug_assert_eq!(writer.position(), layout.rom_size_ds, "DS area ended off-layout");
         context.rom_size = Some(layout.rom_size_ds);
 
         // --------------------- Write the DSi area ---------------------
         // The DSi-exclusive programs go in decrypted, so that the digest below sees them the way the DSi does. Modcrypt is
         // applied afterwards.
-        let region_gap = layout.region_start - cursor.position() as u32;
-        write_padding(cursor, config.padding.dsi_region, region_gap as usize)?;
-        cursor.write_all(&dsi.region_padding)?;
-        assert_eq!(cursor.position() as u32, layout.arm9i_offset, "ARM9i landed off-layout");
-        cursor.write_all(dsi.arm9i.full_data())?;
-        self.align(cursor, config.alignment.arm7i, config.padding.arm7i)?;
-        assert_eq!(cursor.position() as u32, layout.arm7i_offset, "ARM7i landed off-layout");
-        cursor.write_all(dsi.arm7i.full_data())?;
-        let dsi_gap = layout.rom_size_dsi - cursor.position() as u32;
-        write_padding(cursor, config.padding.rom_size_dsi, dsi_gap as usize)?;
+        #[allow(clippy::arithmetic_side_effects)] // region_start not reached yet
+        let region_gap = layout.region_start - writer.position();
+        writer.fill(config.padding.dsi_region, region_gap as usize)?;
+        writer.copy(&dsi.region_padding)?;
+        debug_assert_eq!(writer.position(), layout.arm9i_offset, "ARM9i landed off-layout");
+        writer.copy(dsi.arm9i.full_data())?;
+        writer.align(config.padding.arm7i, config.alignment.arm7i)?;
+        debug_assert_eq!(writer.position(), layout.arm7i_offset, "ARM7i landed off-layout");
+        writer.copy(dsi.arm7i.full_data())?;
+        #[allow(clippy::arithmetic_side_effects)] // rom_size_dsi not reached yet
+        let dsi_gap = layout.rom_size_dsi - writer.position();
+        writer.fill(config.padding.rom_size_dsi, dsi_gap as usize)?;
 
         // --------------------- Content SHA1-HMACs ---------------------
         // The ARM9 hashes cover the secure area encrypted, which is not how every dump stores it.
         let gamecode = self.header.original.gamecode;
-        let encrypted_secure_area = self.arm9.encrypted_secure_area(key, gamecode.to_le_u32());
+        let encrypted_secure_area = self.arm9.encrypted_secure_area(key, gamecode.to_le_u32())?;
         let secure_area_size = encrypted_secure_area.len();
         let mut arm9_with_secure_area = encrypted_secure_area.to_vec();
+        #[allow(clippy::indexing_slicing)] // ARM9 always has a secure area
         arm9_with_secure_area.extend_from_slice(&self.arm9.full_data()[secure_area_size..]);
 
-        let banner = context.banner_offset.expect("banner offset must be known");
-        let banner_data = &cursor.get_ref()[banner.offset as usize..(banner.offset + banner.size) as usize];
-
         let sha1_hmac_arm9_with_secure_area = hmac_sha1.compute(&arm9_with_secure_area);
+        #[allow(clippy::indexing_slicing)] // ARM9 always has a secure area
         let sha1_hmac_arm9 = hmac_sha1.compute(&arm9_with_secure_area[secure_area_size..]);
         let sha1_hmac_arm7 = hmac_sha1.compute(self.arm7.full_data());
-        let sha1_hmac_banner = hmac_sha1.compute(banner_data);
+        let sha1_hmac_banner = hmac_sha1.compute(banner.full_data());
         let sha1_hmac_arm9i = hmac_sha1.compute(dsi.arm9i.full_data());
         let sha1_hmac_arm7i = hmac_sha1.compute(dsi.arm7i.full_data());
 
         // --------------------- Digest tables ---------------------
         // Swap the encrypted secure area in, hash the ROM as the DSi expects to see it, then put the ROM back.
-        let arm9_offset = context.arm9_offset.expect("ARM9 offset must be known") as usize;
-        let secure_area = arm9_offset..arm9_offset + secure_area_size;
-        let buffer = cursor.get_mut();
-        let original_secure_area = buffer[secure_area.clone()].to_vec();
-        buffer[secure_area.clone()].copy_from_slice(&encrypted_secure_area);
+        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // secure area is always written at this point
+        let original_secure_area = writer.data()[arm9_offset as usize..arm9_offset as usize + secure_area_size].to_vec();
+        writer.copy_to(&encrypted_secure_area, arm9_offset)?;
         let digest = Digest::compute(
             hmac_sha1,
             &params,
-            buffer,
+            writer.data(),
             ntr_region_start..sector_hashtable_offset,
             layout.arm9i_offset..layout.rom_size_dsi,
         )?;
-        buffer[secure_area].copy_from_slice(&original_secure_area);
+        writer.copy_to(&original_secure_area, arm9_offset)?;
 
         // --------------------- Modcrypt ---------------------
         let mut modcrypt_area_1 = TableOffset::default();
@@ -1314,28 +1406,32 @@ impl<'a> Rom<'a> {
             } else {
                 Modcrypt::retail(gamecode.0, &sha1_hmac_arm9i)
             };
-            let mut encrypt = |program: &DsiProgram, offset: u32, counter: &[u8; 0x14]| {
-                if !program.is_modcrypted() {
-                    return TableOffset::default();
-                }
-                let size = program.offsets().modcrypt_size;
-                let start = offset as usize;
-                modcrypt.apply(Modcrypt::counter(counter), &mut buffer[start..start + size as usize]);
-                TableOffset { offset, size }
-            };
-            modcrypt_area_1 = encrypt(&dsi.arm9i, layout.arm9i_offset, &sha1_hmac_arm9_with_secure_area);
-            modcrypt_area_2 = encrypt(&dsi.arm7i, layout.arm7i_offset, &sha1_hmac_arm7);
+            modcrypt_area_1 = encrypt_dsi_program(
+                writer,
+                &modcrypt,
+                &dsi.arm9i,
+                layout.arm9i_offset,
+                &sha1_hmac_arm9_with_secure_area,
+                "ARM9i",
+            )?;
+            modcrypt_area_2 =
+                encrypt_dsi_program(writer, &modcrypt, &dsi.arm7i, layout.arm7i_offset, &sha1_hmac_arm7, "ARM7i")?;
         }
 
         // --------------------- Fill in the digest tables ---------------------
-        let rom_end = cursor.position();
-        cursor.set_position(sector_hashtable_offset as u64);
-        cursor.write_all(digest.sector_hashtable())?;
-        cursor.set_position(layout.block_hashtable_offset as u64);
-        cursor.write_all(digest.block_hashtable())?;
-        cursor.set_position(rom_end);
+        let rom_end = writer.position();
+        writer.set_position(sector_hashtable_offset)?;
+        writer.copy(digest.sector_hashtable())?;
+        writer.set_position(layout.block_hashtable_offset)?;
+        writer.copy(digest.block_hashtable())?;
+        writer.set_position(rom_end)?;
 
+        #[allow(clippy::arithmetic_side_effects)] // always a non-negative result
         let region_end_delta = ds_rom_region_end - header_dsi.ds_rom_region_end;
+        let dsi_rom_region_end = header_dsi
+            .dsi_rom_region_end
+            .checked_add(region_end_delta)
+            .ok_or_else(|| OverflowError::new("DSi ROM region end"))?;
         Ok(Some(DsiBuildContext {
             arm9i: ProgramOffset {
                 offset: layout.arm9i_offset,
@@ -1353,14 +1449,16 @@ impl<'a> Rom<'a> {
             arm7i_build_info_offset: dsi.arm7i.offsets().build_info_offset,
             modcrypt_area_1,
             modcrypt_area_2,
+            #[allow(clippy::arithmetic_side_effects)] // always a non-negative result
             digest_ds_area: TableOffset { offset: ntr_region_start, size: sector_hashtable_offset - ntr_region_start },
+            #[allow(clippy::arithmetic_side_effects)] // always a non-negative result
             digest_dsi_area: TableOffset { offset: layout.arm9i_offset, size: layout.rom_size_dsi - layout.arm9i_offset },
             digest_sector_hashtable: TableOffset { offset: sector_hashtable_offset, size: layout.sector_hashtable_size },
             digest_block_hashtable: TableOffset { offset: layout.block_hashtable_offset, size: layout.block_hashtable_size },
             rom_size_dsi: layout.rom_size_dsi,
-            banner_size: banner.size,
+            banner_size: banner.full_data().len() as u32,
             ds_rom_region_end,
-            dsi_rom_region_end: header_dsi.dsi_rom_region_end + region_end_delta,
+            dsi_rom_region_end,
             sha1_hmac_arm9_with_secure_area,
             sha1_hmac_arm9,
             sha1_hmac_arm7,
@@ -1369,16 +1467,6 @@ impl<'a> Rom<'a> {
             sha1_hmac_arm9i,
             sha1_hmac_arm7i,
         }))
-    }
-
-    fn align(&self, cursor: &mut Cursor<Vec<u8>>, alignment: u32, padding_value: u8) -> Result<(), RomBuildError> {
-        assert!(alignment.is_power_of_two(), "alignment must be a power of two");
-        let mask = alignment - 1;
-        let padding = (!cursor.position() as u32 + 1) & mask;
-        for _ in 0..padding {
-            cursor.write_all(&[padding_value])?;
-        }
-        Ok(())
     }
 
     /// Returns a reference to the header logo of this [`Rom`].
@@ -1609,33 +1697,87 @@ struct DsiLayout {
     block_hashtable_size: u32,
 }
 
-/// Guesses the alignment a section was built to from the trailing zeros of its offset, clamped to a 4-byte..4KB range.
-/// Used for the DSi area, whose sections are laid out more coarsely than the DS area.
-fn detect_alignment(offset: u32) -> u32 {
-    if offset == 0 {
-        4
-    } else {
-        1 << offset.trailing_zeros().clamp(2, 12)
+fn encrypt_dsi_program(
+    writer: &mut ByteWriter,
+    modcrypt: &Modcrypt,
+    program: &DsiProgram,
+    offset: u32,
+    counter: &[u8; 0x14],
+    name: &str,
+) -> Result<TableOffset, RomBuildError> {
+    if !program.is_modcrypted() {
+        return Ok(TableOffset::default());
     }
+    let size = program.offsets().modcrypt_size;
+    let start = offset as usize;
+    let end = start.checked_add(size as usize).ok_or_else(|| OverflowError::new(format!("{name} modcrypt area end")))?;
+    let modcrypt_area = writer
+        .data_mut()
+        .get_mut(start..end)
+        .ok_or_else(|| OutOfBoundsAccessSnafu { what: format!("{name} modcrypt area") }.build())?;
+    modcrypt.apply(Modcrypt::counter(counter), modcrypt_area);
+    Ok(TableOffset { offset, size })
 }
 
-fn write_padding(cursor: &mut Cursor<Vec<u8>>, byte: u8, count: usize) -> io::Result<()> {
-    const CHUNK: usize = 8 * 1024;
-    let chunk = [byte; CHUNK];
-    let mut remaining = count;
-    while remaining > 0 {
-        let n = remaining.min(CHUNK);
-        cursor.write_all(&chunk[..n])?;
-        remaining -= n;
+/// Returns the number of FAT entries needed to cover every file ID in the file system and every overlay's file ID, given
+/// the max file ID of the file system and the `(overlay ID, file ID)` pair of each overlay.
+fn fat_entry_count(max_file_id: u16, overlay_file_ids: impl IntoIterator<Item = (u16, u32)>) -> Result<usize, RomBuildError> {
+    let mut max_file_id = max_file_id;
+    for (overlay_id, file_id) in overlay_file_ids {
+        let file_id = u16::try_from(file_id)
+            .ok()
+            .filter(|&id| FileSystem::is_file(id))
+            .ok_or_else(|| InvalidOverlayFileIdSnafu { overlay_id, file_id }.build())?;
+        max_file_id = max_file_id.max(file_id);
     }
-    Ok(())
+    Ok(usize::from(max_file_id) + 1)
 }
 
-fn align_up(value: u32, alignment: u32) -> u32 {
-    assert!(alignment.is_power_of_two(), "alignment must be a power of two");
-    (value + alignment - 1) & !(alignment - 1)
+/// Returns the size of a ROM after padding it to a power of two, which is at least 128 kB.
+fn padded_rom_size(rom_size: u32) -> Result<u32, OverflowError> {
+    let padded_size = rom_size.checked_next_power_of_two().ok_or_else(|| OverflowError::new("padded ROM size"))?;
+    Ok(padded_size.max(128 * 1024))
 }
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fat_entry_count_values() {
+        assert_eq!(fat_entry_count(0, []).unwrap(), 1);
+        assert_eq!(fat_entry_count(5, []).unwrap(), 6);
+        assert_eq!(fat_entry_count(5, [(0, 0), (1, 1)]).unwrap(), 6);
+        // Overlays without regular files
+        assert_eq!(fat_entry_count(0, [(0, 0), (1, 1), (2, 2)]).unwrap(), 3);
+        // Overlay file ID above the file system's max file ID
+        assert_eq!(fat_entry_count(5, [(0, 9)]).unwrap(), 10);
+        assert_eq!(fat_entry_count(0, [(0, 0xefff)]).unwrap(), 0xf000);
+    }
+
+    #[test]
+    fn fat_entry_count_invalid_file_id_is_error() {
+        let result = fat_entry_count(0, [(0, 0), (1, 0xf000)]);
+        assert!(matches!(result, Err(RomBuildError::InvalidOverlayFileId { overlay_id: 1, file_id: 0xf000, .. })));
+        let result = fat_entry_count(0, [(3, 0x10000)]);
+        assert!(matches!(result, Err(RomBuildError::InvalidOverlayFileId { overlay_id: 3, file_id: 0x10000, .. })));
+        let result = fat_entry_count(0, [(4, u32::MAX)]);
+        assert!(matches!(result, Err(RomBuildError::InvalidOverlayFileId { overlay_id: 4, file_id: u32::MAX, .. })));
+    }
+
+    #[test]
+    fn padded_rom_size_values() {
+        assert_eq!(padded_rom_size(0).unwrap(), 0x20000);
+        assert_eq!(padded_rom_size(0x1234).unwrap(), 0x20000);
+        assert_eq!(padded_rom_size(0x20001).unwrap(), 0x40000);
+        assert_eq!(padded_rom_size(0x01000000).unwrap(), 0x01000000);
+        assert_eq!(padded_rom_size(0x80000000).unwrap(), 0x80000000);
+        assert!(padded_rom_size(0x80000001).is_err());
+        assert!(padded_rom_size(u32::MAX).is_err());
+    }
 }

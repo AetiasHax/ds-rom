@@ -1,4 +1,5 @@
 use std::{
+    backtrace::Backtrace,
     mem::{offset_of, size_of},
     str::FromStr,
 };
@@ -15,6 +16,8 @@ use super::{
 };
 use crate::{
     crc::CRC_16_MODBUS,
+    error::OverflowError,
+    rom::{Arm9Error, LogoError},
     str::{AsciiArray, AsciiArrayError},
 };
 /// ROM header.
@@ -145,11 +148,13 @@ pub struct HeaderDsi {
 
 /// Returns the build info offset to put in the ROM header, which is either absolute or relative to the start of the program
 /// depending on how the game stores it.
-fn build_info_offset(present: bool, relative: bool, offset: Option<u32>, program_offset: u32) -> u32 {
+fn build_info_offset(present: bool, relative: bool, offset: Option<u32>, program_offset: u32) -> Result<u32, OverflowError> {
     match offset {
-        Some(offset) if present && relative => offset,
-        Some(offset) if present => offset + program_offset,
-        _ => 0,
+        Some(offset) if present && relative => Ok(offset),
+        Some(offset) if present => {
+            offset.checked_add(program_offset).ok_or_else(|| OverflowError::new("absolute build info offset"))
+        }
+        _ => Ok(0),
     }
 }
 
@@ -161,6 +166,33 @@ pub enum HeaderBuildError {
     AsciiArray {
         /// Source error.
         source: AsciiArrayError,
+    },
+    /// See [`Arm9Error`].
+    #[snafu(transparent)]
+    Arm9 {
+        /// Source error.
+        source: Arm9Error,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// Occurs when trying to build the header while contextual information from the ROM builder is
+    /// missing.
+    #[snafu(display("{what} is missing for building the ROM header:\n{backtrace}"))]
+    MissingContext {
+        /// The value that is missing.
+        what: &'static str,
+        /// Backtrace to the source of the error.
+        backtrace: Backtrace,
+    },
+    /// See [`LogoError`].
+    #[snafu(transparent)]
+    Logo {
+        /// Source error.
+        source: LogoError,
     },
 }
 
@@ -238,18 +270,19 @@ impl Header {
     ///
     /// This function will return an error if the title contains a non-ASCII character.
     pub fn build(&self, context: &BuildContext, rom: &Rom) -> Result<raw::Header, HeaderBuildError> {
-        let logo = rom.header_logo().compress();
+        let logo = rom.header_logo().compress()?;
         let arm9 = rom.arm9();
         let arm7 = rom.arm7();
-        let arm9_offset = context.arm9_offset.expect("ARM9 offset must be known");
-        let arm7_offset = context.arm7_offset.expect("ARM7 offset must be known");
+        let arm9_offset = context.arm9_offset.ok_or_else(|| MissingContextSnafu { what: "ARM9 offset" }.build())?;
+        let arm7_offset = context.arm7_offset.ok_or_else(|| MissingContextSnafu { what: "ARM7 offset" }.build())?;
+        let rom_size = context.rom_size.ok_or_else(|| MissingContextSnafu { what: "ROM size" }.build())?;
         let mut header = raw::Header {
             title: AsciiArray::from_str(&self.original.title)?,
             gamecode: self.original.gamecode,
             makercode: self.original.makercode,
             unitcode: self.original.unitcode,
             seed_select: self.original.seed_select,
-            capacity: Capacity::from_size(context.rom_size.expect("ROM size must be known")),
+            capacity: Capacity::from_size(rom_size),
             reserved0: [0; 7],
             dsi_flags: DsiFlags::new(),
             ds_flags: self.original.ds_flags,
@@ -267,36 +300,43 @@ impl Header {
                 base_addr: arm7.base_address(),
                 size: arm7.full_data().len() as u32,
             },
-            file_names: context.fnt_offset.expect("FNT offset must be known"),
-            file_allocs: context.fat_offset.expect("FAT offset must be known"),
+            file_names: context.fnt_offset.ok_or_else(|| MissingContextSnafu { what: "FNT offset" }.build())?,
+            file_allocs: context.fat_offset.ok_or_else(|| MissingContextSnafu { what: "FAT offset" }.build())?,
             arm9_overlays: context.arm9_ovt_offset.unwrap_or_default(),
             arm7_overlays: context.arm7_ovt_offset.unwrap_or_default(),
             normal_cmd_setting: self.original.normal_cmd_setting,
             key1_cmd_setting: self.original.key1_cmd_setting,
-            banner_offset: context.banner_offset.map(|b| b.offset).expect("Banner offset must be known"),
+            banner_offset: context
+                .banner_offset
+                .map(|b| b.offset)
+                .ok_or_else(|| MissingContextSnafu { what: "Banner offset" }.build())?,
             secure_area_crc: if let Some(key) = context.blowfish_key {
-                arm9.secure_area_crc(key, self.original.gamecode.to_le_u32())
+                arm9.secure_area_crc(key, self.original.gamecode.to_le_u32())?
             } else {
                 0
             },
             secure_area_delay: self.original.secure_area_delay,
-            arm9_autoload_callback: context.arm9_autoload_callback.expect("ARM9 autoload callback must be known"),
-            arm7_autoload_callback: context.arm7_autoload_callback.expect("ARM7 autoload callback must be known"),
+            arm9_autoload_callback: context
+                .arm9_autoload_callback
+                .ok_or_else(|| MissingContextSnafu { what: "ARM9 autoload callback" }.build())?,
+            arm7_autoload_callback: context
+                .arm7_autoload_callback
+                .ok_or_else(|| MissingContextSnafu { what: "ARM7 autoload callback" }.build())?,
             secure_area_disable: 0,
-            rom_size_ds: context.rom_size.expect("ROM size must be known"),
+            rom_size_ds: rom_size,
             header_size: size_of::<raw::Header>() as u32,
             arm9_build_info_offset: build_info_offset(
                 self.original.has_arm9_build_info_offset,
                 self.original.arm9_build_info_offset_is_relative,
                 context.arm9_build_info_offset,
                 arm9_offset,
-            ),
+            )?,
             arm7_build_info_offset: build_info_offset(
                 self.original.has_arm7_build_info_offset,
                 self.original.arm7_build_info_offset_is_relative,
                 context.arm7_build_info_offset,
                 arm7_offset,
-            ),
+            )?,
             ds_rom_region_end: 0,
             dsi_rom_region_end: 0,
             rom_nand_end: self.original.rom_nand_end,
@@ -423,7 +463,10 @@ impl Header {
             header.sha1_hmac_arm7i = context.sha1_hmac_arm7i;
         }
 
-        header.header_crc = CRC_16_MODBUS.checksum(&bytemuck::bytes_of(&header)[0..offset_of!(raw::Header, header_crc)]);
+        #[allow(clippy::indexing_slicing)] // upper bound is inside the header
+        {
+            header.header_crc = CRC_16_MODBUS.checksum(&bytemuck::bytes_of(&header)[..offset_of!(raw::Header, header_crc)]);
+        }
         Ok(header)
     }
 

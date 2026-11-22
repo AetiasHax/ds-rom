@@ -7,7 +7,8 @@ pub struct Rc4 {
 }
 
 impl Rc4 {
-    /// Initializes the RC4 permutation using a variable-length key.
+    /// Initializes the RC4 permutation using a variable-length key. An empty key is treated as a single zero byte.
+    #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // i is at most 255
     pub fn new(key: &[u8], x: Option<u8>) -> Self {
         // Identity permutation
         let mut s = [0; 256];
@@ -15,10 +16,12 @@ impl Rc4 {
             s[i] = i as u8;
         }
 
+        let mut key_bytes = key.iter().copied().cycle();
         let mut j = 0usize;
         for i in 0..256 {
+            let key_byte = key_bytes.next().unwrap_or(0);
             // Accessing S in reverse is a deviation from standard RC4
-            j = (j + s[255 - i] as usize + key[i % key.len()] as usize) & 0xff;
+            j = (j + s[255 - i] as usize + key_byte as usize) & 0xff;
             s.swap(j, 255 - i);
         }
 
@@ -26,6 +29,7 @@ impl Rc4 {
     }
 
     fn s(&self, index: u8) -> u8 {
+        #[allow(clippy::indexing_slicing)] // always in range
         self.s[index as usize]
     }
 
@@ -100,4 +104,15 @@ fn test_rc4_x() {
         0xb6, 0x03, 0x59, 0x09, 0x01, 0x73, 0x29, 0xbd, 0x19, 0x4a, 0x69, 0xbf, 0xfc, 0x00, 0xe4, 0xfc, 0x89, 0x1b, 0x61,
         0x88, 0x70, 0xe1, 0x66, 0x5e, 0x0e, 0x15, 0xfb, 0xed, 0x36, 0x77, 0x22, 0xab
     ])
+}
+
+#[test]
+fn test_rc4_empty_key() {
+    let mut empty = Rc4::new(&[], None);
+    let mut zero = Rc4::new(&[0], None);
+    let mut empty_keystream = [0; 32];
+    let mut zero_keystream = [0; 32];
+    empty.bytes(&mut empty_keystream);
+    zero.bytes(&mut zero_keystream);
+    assert_eq!(empty_keystream, zero_keystream);
 }

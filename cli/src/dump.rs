@@ -48,12 +48,15 @@ impl Dump {
         let rom = raw::Rom::from_file(self.rom.clone())?;
         let header = rom.header()?;
         let mut arm9 = rom.arm9()?;
-        if arm9.is_encrypted() && key.is_some() {
-            let Some(key) = &key else { unreachable!() };
+        if arm9.is_encrypted()
+            && let Some(key) = &key
+        {
             arm9.decrypt(key, header.gamecode.to_le_u32())?;
         }
-        if self.encrypt && !arm9.is_encrypted() && key.is_some() {
-            let Some(key) = &key else { unreachable!() };
+        if self.encrypt
+            && !arm9.is_encrypted()
+            && let Some(key) = &key
+        {
             arm9.encrypt(key, header.gamecode.to_le_u32())?;
         }
         if self.decompress && arm9.build_info()?.is_compressed() {
@@ -137,10 +140,10 @@ impl DumpHeader {
 
         if let Some(header_logo) = &self.header_logo {
             let logo = Logo::from_png(header_logo)?;
-            header.logo.copy_from_slice(&logo.compress());
+            header.logo.copy_from_slice(&logo.compress()?);
         }
 
-        println!("ROM header:\n{}", header.display(2));
+        rprintln!("ROM header:\n{}", header.display(2))?;
 
         Ok(())
     }
@@ -169,12 +172,12 @@ impl DumpArm9 {
             recompressed.decompress()?;
             recompressed.compress()?;
 
-            compare_lz77(arm9.full_data(), recompressed.full_data(), 0x4000, arm9.base_address() as usize);
+            compare_lz77(arm9.full_data(), recompressed.full_data(), 0x4000, arm9.base_address() as usize)?;
         }
 
         if self.show_lz77_tokens {
-            let tokens = Lz77 {}.parse_tokens(arm9.full_data())?;
-            println!("{tokens}");
+            let tokens = Lz77 {}.decompress(arm9.full_data())?.tokens;
+            rprintln!("{tokens}")?;
         }
 
         if !self.compare_lz77 && !self.show_lz77_tokens {
@@ -192,7 +195,7 @@ struct DumpBuildInfo {}
 impl DumpBuildInfo {
     pub fn run(&self, arm9: &Arm9) -> Result<()> {
         let build_info = arm9.build_info()?;
-        println!("ARM9 build info:\n{}", build_info.display(2));
+        rprintln!("ARM9 build info:\n{}", build_info.display(2))?;
 
         Ok(())
     }
@@ -246,17 +249,17 @@ impl DumpArm9OverlayTable {
                 let hmac_sha1 = HmacSha1::new(hmac_sha1_key);
 
                 if arm9_ovt.verify_signature(&hmac_sha1) {
-                    println!("ARM9 overlay table signature is valid");
+                    rprintln!("ARM9 overlay table signature is valid")?;
                 } else {
-                    println!("ARM9 overlay table signature is invalid");
+                    rprintln!("ARM9 overlay table signature is invalid")?;
                 }
             } else {
-                println!("ARM9 overlay table has no signature");
+                rprintln!("ARM9 overlay table has no signature")?;
             }
             return Ok(());
         }
 
-        println!("ARM9 overlay table:\n{}", arm9_ovt.display(2));
+        rprintln!("ARM9 overlay table:\n{}", arm9_ovt.display(2))?;
 
         Ok(())
     }
@@ -269,7 +272,7 @@ struct DumpArm7OverlayTable {}
 impl DumpArm7OverlayTable {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let arm7_ovt = rom.arm7_overlay_table()?;
-        println!("ARM7 overlay table:\n{}", arm7_ovt.display(2));
+        rprintln!("ARM7 overlay table:\n{}", arm7_ovt.display(2))?;
 
         Ok(())
     }
@@ -284,7 +287,7 @@ impl DumpAutoloadInfo {
         arm9.decompress()?;
         let autoload_infos = arm9.autoload_infos()?;
         for autoload_info in autoload_infos {
-            println!("Autoload info:\n{}", autoload_info.display(2));
+            rprintln!("Autoload info:\n{}", autoload_info.display(2))?;
         }
 
         Ok(())
@@ -306,9 +309,14 @@ impl DumpAutoload {
     pub fn run(&self, arm9: &mut Arm9) -> Result<()> {
         arm9.decompress()?;
         let autoloads = arm9.autoloads()?;
+        if autoloads.is_empty() {
+            bail!("There are no autoloads");
+        }
+        #[allow(clippy::arithmetic_side_effects)] // autoloads is not empty
         if self.index >= autoloads.len() {
             bail!("Cannot print autoload at index {}, max index is {}", self.index, autoloads.len() - 1);
         }
+        #[allow(clippy::indexing_slicing)] // index is manually checked
         let autoload = &autoloads[self.index];
         print_hex(autoload.full_data(), self.raw, autoload.base_address())?;
 
@@ -325,7 +333,7 @@ impl DumpFnt {
         let fnt = rom.fnt()?;
         let fat = rom.fat()?;
         let root = rom::FileSystem::parse(&fnt, fat, rom)?;
-        println!("Files:\n{}", root.display(2));
+        rprintln!("Files:\n{}", root.display(2))?;
 
         Ok(())
     }
@@ -338,7 +346,7 @@ struct DumpBanner {}
 impl DumpBanner {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let banner = rom.banner()?;
-        println!("ROM banner:\n{}", banner.display(2));
+        rprintln!("ROM banner:\n{}", banner.display(2))?;
 
         Ok(())
     }
@@ -366,8 +374,18 @@ struct DumpArm9Overlay {
 impl DumpArm9Overlay {
     pub fn run(&self, rom: &raw::Rom, decompress: bool, compress: bool) -> Result<()> {
         let arm9_ovt = rom.arm9_overlays()?;
+        if arm9_ovt.is_empty() {
+            bail!("There are no overlays");
+        }
+        #[allow(clippy::arithmetic_side_effects)] // arm9_ovt is not empty
+        if self.index >= arm9_ovt.len() {
+            bail!("Cannot print overlay with ID {}, max ID is {}", self.index, arm9_ovt.len() - 1);
+        }
+
         let mut arm9 = rom.arm9()?;
         arm9.decompress()?;
+
+        #[allow(clippy::indexing_slicing)] // index is manually checked
         let mut overlay = Overlay::parse_arm9(&arm9_ovt[self.index], rom, &arm9)?;
 
         if decompress && overlay.is_compressed() {
@@ -382,12 +400,12 @@ impl DumpArm9Overlay {
             recompressed.decompress()?;
             recompressed.compress()?;
 
-            compare_lz77(overlay.full_data(), recompressed.full_data(), 0, overlay.base_address() as usize);
+            compare_lz77(overlay.full_data(), recompressed.full_data(), 0, overlay.base_address() as usize)?;
         }
 
         if self.show_lz77_tokens {
-            let tokens = Lz77 {}.parse_tokens(overlay.full_data())?;
-            println!("{tokens}");
+            let tokens = Lz77 {}.decompress(overlay.full_data())?.tokens;
+            rprintln!("{tokens}")?;
         }
 
         if !self.compare_lz77 && !self.show_lz77_tokens {
@@ -412,6 +430,15 @@ struct DumpArm7Overlay {
 impl DumpArm7Overlay {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         let arm7_ovt = rom.arm7_overlays()?;
+        if arm7_ovt.is_empty() {
+            bail!("There are no overlays");
+        }
+        #[allow(clippy::arithmetic_side_effects)] // arm9_ovt is not empty
+        if self.index >= arm7_ovt.len() {
+            bail!("Cannot print overlay with ID {}, max ID is {}", self.index, arm7_ovt.len() - 1);
+        }
+
+        #[allow(clippy::indexing_slicing)] // index is manually checked
         let overlay = Overlay::parse_arm7(&arm7_ovt[self.index], rom)?;
         print_hex(overlay.full_data(), self.raw, overlay.base_address())?;
 
@@ -419,31 +446,33 @@ impl DumpArm7Overlay {
     }
 }
 
-fn compare_lz77(data_before: &[u8], data_after: &[u8], start: usize, base_address: usize) {
+fn compare_lz77(data_before: &[u8], data_after: &[u8], start: usize, base_address: usize) -> Result<()> {
     let before = data_before.len();
     let after = data_after.len();
 
     let mut equal = true;
     if before != after {
-        println!("Wrong size: before = {before:#x}, after = {after:#x}");
+        rprintln!("Wrong size: before = {before:#x}, after = {after:#x}")?;
         equal = false;
     }
 
     let before = data_before.iter().enumerate().skip(start).rev();
     let after = data_after.iter().enumerate().skip(start).rev();
 
+    #[allow(clippy::arithmetic_side_effects)] // numbers are small enough in practice
     for ((addr_before, value_before), (addr_after, value_after)) in before.zip(after) {
         let addr_before = addr_before + base_address;
         let addr_after = addr_after + base_address;
         if value_before != value_after {
-            println!("{addr_before:08x}: {value_before:02x}  =>  {addr_after:08x}: {value_after:02x}");
+            rprintln!("{addr_before:08x}: {value_before:02x}  =>  {addr_after:08x}: {value_after:02x}")?;
             equal = false;
         }
     }
 
     if equal {
-        println!("Compression matched");
+        rprintln!("Compression matched")?;
     }
+    Ok(())
 }
 
 /// Prints the contents of the ARM9 footer.
@@ -453,9 +482,9 @@ struct DumpArm9Footer {}
 impl DumpArm9Footer {
     pub fn run(&self, rom: &raw::Rom) -> Result<()> {
         if let Some(arm9_footer) = rom.arm9_footer()? {
-            println!("ARM9 footer:\n{}", arm9_footer.display(2));
+            rprintln!("ARM9 footer:\n{}", arm9_footer.display(2))?;
         } else {
-            println!("No ARM9 footer");
+            rprintln!("No ARM9 footer")?;
         }
 
         Ok(())
@@ -483,12 +512,12 @@ impl DumpArm9OverlaySignatures {
             for overlay in rom.arm9_overlays() {
                 if overlay.is_signed() {
                     if overlay.verify_signature(&hmac_sha1)? {
-                        println!("ARM9 overlay {} signature is valid", overlay.id());
+                        rprintln!("ARM9 overlay {} signature is valid", overlay.id())?;
                     } else {
-                        println!("ARM9 overlay {} signature is invalid", overlay.id());
+                        rprintln!("ARM9 overlay {} signature is invalid", overlay.id())?;
                     }
                 } else {
-                    println!("ARM9 overlay {} has no signature", overlay.id());
+                    rprintln!("ARM9 overlay {} has no signature", overlay.id())?;
                 }
             }
             return Ok(());
@@ -501,14 +530,14 @@ impl DumpArm9OverlaySignatures {
             let hmac_sha1 = HmacSha1::new(hmac_sha1_key);
             for overlay in rom.arm9_overlays() {
                 let signature = overlay.compute_signature(&hmac_sha1)?;
-                println!("ARM9 overlay {} signature: {}", overlay.id(), signature);
+                rprintln!("ARM9 overlay {} signature: {}", overlay.id(), signature)?;
             }
         } else {
             for overlay in rom.arm9_overlays() {
                 if let Some(signature) = overlay.signature() {
-                    println!("ARM9 overlay {} signature: {}", overlay.id(), signature);
+                    rprintln!("ARM9 overlay {} signature: {}", overlay.id(), signature)?;
                 } else {
-                    println!("ARM9 overlay {} has no signature", overlay.id());
+                    rprintln!("ARM9 overlay {} has no signature", overlay.id())?;
                 }
             }
         }
@@ -526,9 +555,9 @@ impl DumpMultibootSignature {
         let rom = Rom::extract(raw_rom)?;
 
         if let Some(multiboot_signature) = rom.multiboot_signature() {
-            println!("{}", multiboot_signature.display(2));
+            rprintln!("{}", multiboot_signature.display(2))?;
         } else {
-            println!("No multiboot signature found");
+            rprintln!("No multiboot signature found")?;
         }
 
         Ok(())
@@ -545,10 +574,10 @@ impl DumpLibraries {
         let libraries = arm9.libraries()?;
 
         if libraries.is_empty() {
-            println!("No libraries found");
+            rprintln!("No libraries found")?;
         }
         for library in libraries {
-            println!("{}", library.display(2));
+            rprintln!("{}", library.display(2))?;
         }
 
         Ok(())
@@ -577,12 +606,12 @@ impl DumpDsProt {
         let arm9 = rom.arm9_mut();
         if !self.yaml {
             if let Some(dsprot_result) = arm9.dsprot_state().as_option() {
-                println!("DS Protect found in ARM9 main:\n{}", dsprot_result.display(2));
+                rprintln!("DS Protect found in ARM9 main:\n{}", dsprot_result.display(2))?;
             }
 
             for overlay in rom.arm9_overlays_mut() {
                 if let Some(dsprot_result) = overlay.dsprot_state().as_option() {
-                    println!("DS Protect found in ARM9 overlay {}:\n{}", overlay.id(), dsprot_result.display(2));
+                    rprintln!("DS Protect found in ARM9 overlay {}:\n{}", overlay.id(), dsprot_result.display(2))?;
                 }
             }
         } else {

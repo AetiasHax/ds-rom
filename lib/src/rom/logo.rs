@@ -3,7 +3,7 @@ use std::{fmt::Display, io, path::Path};
 use image::{GenericImageView, GrayImage, ImageError, ImageReader, Luma};
 use snafu::{Backtrace, Snafu};
 
-use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode};
+use crate::compress::huffman::{NibbleHuffman, NibbleHuffmanCode, NibbleHuffmanError};
 
 /// Huffman codes for every combination of 4 pixels
 const HUFFMAN: NibbleHuffman = NibbleHuffman {
@@ -78,6 +78,12 @@ pub enum LogoError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`NibbleHuffmanError`].
+    #[snafu(transparent)]
+    NibbleHuffman {
+        /// Source error.
+        source: NibbleHuffmanError,
+    },
 }
 
 /// Errors when loading a [`Logo`].
@@ -144,10 +150,8 @@ impl Display for ImageSize {
 }
 
 fn reverse32(data: &mut [u8]) {
-    for i in (0..data.len() & !3).step_by(4) {
-        let value = u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-        let swapped = value.swap_bytes().to_le_bytes();
-        data[i..i + 4].copy_from_slice(&swapped);
+    for chunk in data.as_chunks_mut::<4>().0 {
+        chunk.reverse();
     }
 }
 
@@ -208,25 +212,19 @@ impl Logo {
         };
 
         let mut bytes = [0u8; SIZE + 8];
-        HUFFMAN.decompress_to_slice(&data, &mut bytes);
+        HUFFMAN.decompress_to_slice(&data, &mut bytes)?;
 
         let header = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         if header != LOGO_HEADER {
             InvalidHeaderSnafu { expected: LOGO_HEADER, actual: header }.fail()?;
         }
 
-        let footer = u32::from_le_bytes([
-            bytes[bytes.len() - 4],
-            bytes[bytes.len() - 3],
-            bytes[bytes.len() - 2],
-            bytes[bytes.len() - 1],
-        ]);
+        let footer = u32::from_le_bytes([bytes[SIZE + 4], bytes[SIZE + 5], bytes[SIZE + 6], bytes[SIZE + 7]]);
         if footer != LOGO_FOOTER {
             InvalidFooterSnafu { expected: LOGO_FOOTER, actual: footer }.fail()?;
         }
 
-        let len = bytes.len();
-        let diff = &mut bytes[4..len - 4];
+        let diff = &mut bytes[4..SIZE + 4];
         if diff.len() != SIZE {
             WrongSizeSnafu { expected: SIZE, actual: diff.len() }.fail()?;
         }
@@ -238,7 +236,7 @@ impl Logo {
     }
 
     /// Compresses this [`Logo`] to put into a ROM header.
-    pub fn compress(&self) -> [u8; 0x9c] {
+    pub fn compress(&self) -> Result<[u8; 0x9c], LogoError> {
         let mut diff = [0u8; SIZE + 8];
         self.store_tiles(&mut diff[4..SIZE + 4]);
         HUFFMAN.data_to_diff16(&mut diff[4..SIZE + 4]);
@@ -247,20 +245,21 @@ impl Logo {
         diff[SIZE + 4..SIZE + 8].copy_from_slice(&LOGO_FOOTER.to_le_bytes());
 
         let mut bytes = [0u8; 0x9c];
-        HUFFMAN.compress_to_slice(&diff, &mut bytes);
+        HUFFMAN.compress_to_slice(&diff, &mut bytes)?;
         reverse32(&mut bytes);
-        bytes
+        Ok(bytes)
     }
 
     fn load_tiles(&mut self, data: &[u8]) {
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                let index = (y / 8) * WIDTH + (x / 8) * 8 + y % 8;
-                let value = if index >= data.len() {
-                    false
-                } else {
+                let index = tile_index(x, y);
+                #[allow(clippy::indexing_slicing)] // index is manually checked
+                let value = if index < data.len() {
                     let offset = x & 7;
                     (data[index] & (1 << offset)) != 0
+                } else {
+                    false
                 };
                 self.set_pixel(x, y, value);
             }
@@ -272,28 +271,37 @@ impl Logo {
             for x in 0..WIDTH {
                 let bit = 1 << (x & 7);
                 let value = self.get_pixel_value(x, y, bit);
-                let index = (y / 8) * WIDTH + (x / 8) * 8 + y % 8;
+                let index = tile_index(x, y);
+                #[allow(clippy::indexing_slicing)] // index is manually checked
                 if index < data.len() {
-                    data[index] = (data[index] & !bit) | value
-                };
+                    data[index] = (data[index] & !bit) | value;
+                }
             }
         }
     }
 
     /// Returns the pixel value at the given coordinates.
     pub fn get_pixel(&self, x: usize, y: usize) -> bool {
-        let index = (y * WIDTH + x) / 8;
-        if index >= self.pixels.len() {
-            false
-        } else {
+        if x >= WIDTH || y >= HEIGHT {
+            return false;
+        }
+        let index = pixel_index(x, y);
+        #[allow(clippy::indexing_slicing)] // index is manually checked
+        if index < self.pixels.len() {
             let offset = !x & 7;
             (self.pixels[index] & (1 << offset)) != 0
+        } else {
+            false
         }
     }
 
     /// Sets the pixel value at the given coordinates.
     pub fn set_pixel(&mut self, x: usize, y: usize, value: bool) {
-        let index = (y * WIDTH + x) / 8;
+        if x >= WIDTH || y >= HEIGHT {
+            return;
+        }
+        let index = pixel_index(x, y);
+        #[allow(clippy::indexing_slicing)] // index is manually checked
         if index < self.pixels.len() {
             let bit = 1 << (!x & 7);
             let value = if value { bit } else { 0 };
@@ -306,6 +314,9 @@ impl Logo {
     }
 
     fn get_braille_index(&self, x: usize, y: usize) -> u8 {
+        debug_assert!(x < WIDTH);
+        debug_assert!(y < HEIGHT);
+        #[allow(clippy::arithmetic_side_effects)] // always small numbers
         let value = self.get_pixel_value(x, y, 0x80)
             | self.get_pixel_value(x + 1, y, 0x40)
             | self.get_pixel_value(x, y + 1, 0x20)
@@ -316,6 +327,22 @@ impl Logo {
             | self.get_pixel_value(x + 1, y + 3, 0x1);
         !value
     }
+}
+
+#[allow(clippy::arithmetic_side_effects)] // always a small number
+#[inline(always)]
+fn tile_index(x: usize, y: usize) -> usize {
+    debug_assert!(x < WIDTH);
+    debug_assert!(y < HEIGHT);
+    (y / 8) * WIDTH + (x / 8) * 8 + y % 8
+}
+
+#[allow(clippy::arithmetic_side_effects)] // always a small number
+#[inline(always)]
+fn pixel_index(x: usize, y: usize) -> usize {
+    debug_assert!(x < WIDTH);
+    debug_assert!(y < HEIGHT);
+    (y * WIDTH + x) / 8
 }
 
 /// Braille patterns indexed as binary representations of 0-255. Bit positions:  

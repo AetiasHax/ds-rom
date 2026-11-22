@@ -38,6 +38,7 @@ impl<'a> DsiProgram<'a> {
         if size == 0 {
             return;
         }
+        #[allow(clippy::indexing_slicing)] // size is never higher than self.data.len()
         modcrypt.apply(counter, &mut self.data.to_mut()[..size]);
     }
 

@@ -30,6 +30,7 @@ pub enum BlowfishError {
 }
 
 impl Blowfish {
+    #[allow(clippy::indexing_slicing)] // bitmask clamps to S-box range
     fn f(&self, x: u32) -> u32 {
         let x = x as usize;
         let mut f;
@@ -44,6 +45,7 @@ impl Blowfish {
         let mut x = *right;
         let mut y = *left;
         for i in 0..16 {
+            #[allow(clippy::indexing_slicing)] // always in range
             let tmp = x ^ self.subkeys[i];
             x = y ^ self.f(tmp);
             y = tmp;
@@ -61,6 +63,11 @@ impl Blowfish {
         if !data.len().is_multiple_of(8) {
             OddBlockCountSnafu {}.fail()?;
         }
+        self.encrypt_unchecked(data);
+        Ok(())
+    }
+
+    pub(crate) fn encrypt_unchecked(&self, data: &mut [u8]) {
         for chunk in data.as_chunks_mut::<8>().0 {
             let mut left = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let mut right = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
@@ -68,13 +75,13 @@ impl Blowfish {
             chunk[0..4].copy_from_slice(&left.to_le_bytes());
             chunk[4..8].copy_from_slice(&right.to_le_bytes());
         }
-        Ok(())
     }
 
     fn decrypt_block(&self, left: &mut u32, right: &mut u32) {
         let mut x = *right;
         let mut y = *left;
         for i in (2..18).rev() {
+            #[allow(clippy::indexing_slicing)] // always in range
             let tmp = x ^ self.subkeys[i];
             x = self.f(tmp) ^ y;
             y = tmp;
@@ -92,7 +99,7 @@ impl Blowfish {
         if !data.len().is_multiple_of(8) {
             OddBlockCountSnafu {}.fail()?;
         }
-        for chunk in data.chunks_mut(8) {
+        for chunk in data.as_chunks_mut::<8>().0 {
             let mut left = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let mut right = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
             self.decrypt_block(&mut left, &mut right);
@@ -102,6 +109,7 @@ impl Blowfish {
         Ok(())
     }
 
+    #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)] // always in range
     fn apply_code(&mut self, code0: &mut u32, code1: &mut u32, code2: &mut u32) {
         self.encrypt_block(code1, code2);
         self.encrypt_block(code0, code1);
@@ -202,8 +210,9 @@ impl BlowfishKey {
     pub fn from_arm7_bios_path<P: AsRef<Path>>(path: P) -> Result<Self, BlowfishKeyError> {
         let mut file = open_file(path)?;
         let size = file.metadata()?.len() as usize;
-        if size < 0x30 + size_of::<Self>() {
-            return TooSmallSnafu { expected: 0x30 + size_of::<Self>(), actual: size }.fail();
+        const KEY_END: usize = 0x30 + size_of::<BlowfishKey>();
+        if size < KEY_END {
+            return TooSmallSnafu { expected: KEY_END, actual: size }.fail();
         }
 
         let mut key = [0; size_of::<Self>()];

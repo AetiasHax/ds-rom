@@ -1,3 +1,5 @@
+#![allow(clippy::panic_in_result_fn)]
+
 use std::{ffi::OsStr, path::PathBuf};
 
 use anyhow::{Result, anyhow};

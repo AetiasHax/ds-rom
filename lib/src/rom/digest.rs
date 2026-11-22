@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
 use super::raw::HmacSha1Signature;
-use crate::crypto::hmac_sha1::HmacSha1;
+use crate::{crypto::hmac_sha1::HmacSha1, error::OverflowError};
 
 /// Shape of the digest tables. The sector and block sizes come from the ROM header.
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -56,6 +56,12 @@ pub enum DigestError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
 }
 
 /// The digest tables of a DSi title. Every sector of the NTR and TWL regions gets a SHA1-HMAC in the sector hashtable, each
@@ -68,6 +74,14 @@ pub struct Digest {
 }
 
 impl Digest {
+    /// Checks that the sector size and block sector count are nonzero.
+    pub(crate) fn check_params(params: &DigestParams) -> Result<(), DigestError> {
+        if params.sector_size == 0 || params.block_sector_count == 0 {
+            return ZeroSizedSnafu.fail();
+        }
+        Ok(())
+    }
+
     /// Computes the digest tables over the NTR and TWL regions of `rom`.
     ///
     /// `rom` must be in *digest form*, which is not the same as the ROM that gets written: the ARM9 secure area must be
@@ -83,27 +97,31 @@ impl Digest {
         ntr_region: Range<u32>,
         twl_region: Range<u32>,
     ) -> Result<Self, DigestError> {
-        if params.sector_size == 0 || params.block_sector_count == 0 {
-            return ZeroSizedSnafu.fail();
-        }
+        Self::check_params(params)?;
         const HASH_SIZE: usize = size_of::<HmacSha1Signature>();
 
-        let num_sectors = ntr_region.len() / params.sector_size as usize + twl_region.len() / params.sector_size as usize;
+        #[allow(clippy::arithmetic_side_effects)] // sector_size is not zero
+        let num_sectors = (ntr_region.len() / params.sector_size as usize)
+            .checked_add(twl_region.len() / params.sector_size as usize)
+            .ok_or_else(|| OverflowError::new("number of digest sectors"))?;
         let num_blocks = num_sectors.div_ceil(params.block_sector_count as usize);
-        let sector_hashtable_size = num_blocks * params.block_sector_count as usize * HASH_SIZE;
+        let sector_hashtable_size = num_blocks
+            .checked_mul(params.block_sector_count as usize * HASH_SIZE)
+            .ok_or_else(|| OverflowError::new("sector hashtable size"))?;
         let mut sector_hashtable = Vec::with_capacity(sector_hashtable_size);
 
         for region in [&ntr_region, &twl_region] {
             if region.is_empty() {
                 continue;
             }
-            if region.end as usize > rom.len() {
-                return RegionOutOfBoundsSnafu { start: region.start, end: region.end, rom_size: rom.len() }.fail();
-            }
+            let hash_region = rom
+                .get(region.start as usize..region.end as usize)
+                .ok_or_else(|| RegionOutOfBoundsSnafu { start: region.start, end: region.end, rom_size: rom.len() }.build())?;
+            #[allow(clippy::arithmetic_side_effects)] // always positive
             if !(region.end - region.start).is_multiple_of(params.sector_size) {
                 return UnalignedRegionSnafu { start: region.start, end: region.end, sector_size: params.sector_size }.fail();
             }
-            for sector in rom[region.start as usize..region.end as usize].chunks(params.sector_size as usize) {
+            for sector in hash_region.chunks(params.sector_size as usize) {
                 sector_hashtable.extend_from_slice(&hmac_sha1.compute(sector));
             }
         }
@@ -113,6 +131,7 @@ impl Digest {
         sector_hashtable.resize(sector_hashtable_size, 0);
 
         let block_size = params.block_sector_count as usize * HASH_SIZE;
+        #[allow(clippy::arithmetic_side_effects)] // small number
         let mut block_hashtable = Vec::with_capacity(num_blocks * HASH_SIZE);
         for block in sector_hashtable.chunks(block_size) {
             block_hashtable.extend_from_slice(&hmac_sha1.compute(block));

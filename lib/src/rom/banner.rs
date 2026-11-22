@@ -11,7 +11,11 @@ use super::{
     ImageSize,
     raw::{self, BannerAnimation, BannerBitmap, BannerPalette, BannerVersion, Language},
 };
-use crate::{crc::CRC_16_MODBUS, str::Unicode16Array};
+use crate::{
+    crc::CRC_16_MODBUS,
+    error::{DataOutOfBoundsError, OverflowError, slice_data},
+    str::Unicode16Array,
+};
 
 /// ROM banner.
 #[derive(Serialize, Deserialize, Default)]
@@ -45,9 +49,22 @@ pub enum BannerError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
 impl Banner {
+    #[inline(always)]
     fn load_title(banner: &raw::Banner, version: BannerVersion, language: Language) -> Option<String> {
         if version.supports_language(language) {
             banner.title(language).map(|title| title.to_string())
@@ -68,6 +85,8 @@ impl Banner {
         let keyframes = if let Some(animation) = animation {
             // A keyframe with no duration ends the animation
             let used = animation.keyframes.iter().rposition(|keyframe| keyframe.frame_duration() > 0);
+            #[allow(clippy::indexing_slicing)] // always in bounds
+            #[allow(clippy::arithmetic_side_effects)] // small number
             let keyframes = animation.keyframes[..used.map_or(0, |i| i + 1)].iter().map(BannerKeyframe::load_raw).collect();
             Some(keyframes)
         } else {
@@ -75,6 +94,7 @@ impl Banner {
         };
         Self {
             version,
+            #[allow(clippy::unwrap_used)] // these 6 languages are in all banner versions
             title: BannerTitle {
                 japanese: Self::load_title(banner, version, Language::Japanese).unwrap(),
                 english: Self::load_title(banner, version, Language::English).unwrap(),
@@ -90,10 +110,13 @@ impl Banner {
         }
     }
 
-    fn crc(&self, banner: &mut raw::Banner, version: BannerVersion) {
+    fn crc(&self, banner: &mut raw::Banner, version: BannerVersion) -> Result<(), DataOutOfBoundsError> {
         if self.version >= version {
-            *banner.crc_mut(version.crc_index()) = CRC_16_MODBUS.checksum(&banner.full_data()[version.crc_range()]);
+            let crc_slice = slice_data(banner.full_data(), version.crc_range(), || "banner CRC slice")?;
+            let checksum = CRC_16_MODBUS.checksum(crc_slice);
+            banner.set_crc(version.crc_index(), checksum);
         }
+        Ok(())
     }
 
     /// Builds a raw banner to place in a ROM.
@@ -128,17 +151,17 @@ impl Banner {
             }
             let keyframes = self.keyframes.as_deref().unwrap_or_default();
             for (slot, keyframe) in animation.keyframes.iter_mut().zip(keyframes.iter()) {
-                *slot = keyframe.build();
+                *slot = keyframe.build()?;
             }
             for slot in animation.keyframes.iter_mut().skip(keyframes.len()) {
                 *slot = raw::BannerKeyframe::new();
             }
         }
 
-        self.crc(&mut banner, BannerVersion::Original);
-        self.crc(&mut banner, BannerVersion::China);
-        self.crc(&mut banner, BannerVersion::Korea);
-        self.crc(&mut banner, BannerVersion::Animated);
+        self.crc(&mut banner, BannerVersion::Original)?;
+        self.crc(&mut banner, BannerVersion::China)?;
+        self.crc(&mut banner, BannerVersion::Korea)?;
+        self.crc(&mut banner, BannerVersion::Animated)?;
 
         Ok(banner)
     }
@@ -480,12 +503,15 @@ impl BannerKeyframe {
     /// # Panics
     ///
     /// Panics if the frame duration, bitmap index or palette do not fit in the raw keyframe.
-    pub fn build(&self) -> raw::BannerKeyframe {
-        raw::BannerKeyframe::new()
-            .with_frame_duration(self.frame_duration.try_into().unwrap())
-            .with_bitmap_index(self.bitmap.try_into().unwrap())
-            .with_palette_index(self.palette.try_into().unwrap())
+    pub fn build(&self) -> Result<raw::BannerKeyframe, OverflowError> {
+        let frame_duration = self.frame_duration.try_into().map_err(|_| OverflowError::new("banner keyframe duration"))?;
+        let bitmap_index = self.bitmap.try_into().map_err(|_| OverflowError::new("banner keyframe bitmap index"))?;
+        let palette_index = self.palette.try_into().map_err(|_| OverflowError::new("banner keyframe palette index"))?;
+        Ok(raw::BannerKeyframe::new()
+            .with_frame_duration(frame_duration)
+            .with_bitmap_index(bitmap_index)
+            .with_palette_index(palette_index)
             .with_flip_horizontally(self.flip_horizontally)
-            .with_flip_vertically(self.flip_vertically)
+            .with_flip_vertically(self.flip_vertically))
     }
 }

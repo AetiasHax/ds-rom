@@ -11,13 +11,14 @@ use super::{
     },
 };
 use crate::{
-    compress::lz77::{Lz77, Lz77DecompressError},
+    compress::lz77::{Lz77, Lz77CompressError, Lz77DecompressError},
     crc::CRC_16_MODBUS,
     crypto::{
         blowfish::{Blowfish, BlowfishError, BlowfishKey, BlowfishLevel},
         dsprot::{DsProtDecryptOptions, DsProtDecryptResult, DsProtEncryptOptions, DsProtError, DsProtInfo, DsProtState},
     },
-    rom::LibraryEntry,
+    error::{DataOutOfBoundsError, OverflowError, slice_data, slice_data_mut},
+    rom::{AutoloadError, LibraryEntry},
 };
 
 /// ARM9 program.
@@ -95,6 +96,24 @@ pub enum Arm9Error {
         /// Source error.
         source: io::Error,
     },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
+    /// See [`Lz77CompressError`]
+    #[snafu(transparent)]
+    Lz77Compress {
+        /// Source error.
+        source: Lz77CompressError,
+    },
 }
 
 /// Errors related to ARM9 autoloads.
@@ -126,6 +145,30 @@ pub enum Arm9AutoloadError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`AutoloadError`].
+    #[snafu(transparent)]
+    Autoload {
+        /// Source error.
+        source: AutoloadError,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`Arm9Error`].
+    #[snafu(transparent)]
+    Arm9 {
+        /// Source error.
+        source: Arm9Error,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
 /// Errors related to [`Arm9::overlay_signatures`] and [`Arm9::overlay_signatures_mut`].
@@ -137,11 +180,11 @@ pub enum Arm9OverlaySignaturesError {
         /// Source error.
         source: HmacSha1SignatureError,
     },
-    /// See [`RawBuildInfoError`].
+    /// See [`Arm9Error`].
     #[snafu(transparent)]
-    RawBuildInfo {
+    Arm9 {
         /// Source error.
-        source: RawBuildInfoError,
+        source: Arm9Error,
     },
     /// Occurs when trying to access overlay signatures while the ARM9 program is compressed.
     #[snafu(display("ARM9 program must be decompressed before accessing overlay signatures:\n{backtrace}"))]
@@ -149,16 +192,28 @@ pub enum Arm9OverlaySignaturesError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
 /// Errors related to [`Arm9::hmac_sha1_key`].
 #[derive(Debug, Snafu)]
 pub enum Arm9HmacSha1KeyError {
-    /// See [`RawBuildInfoError`].
+    /// See [`Arm9Error`].
     #[snafu(transparent)]
-    RawBuildInfo {
+    Arm9 {
         /// Source error.
-        source: RawBuildInfoError,
+        source: Arm9Error,
     },
     /// Occurs when trying to access the HMAC-SHA1 key while the ARM9 program is compressed.
     #[snafu(display("ARM9 program must be decompressed before accessing HMAC-SHA1 key:\n{backtrace}"))]
@@ -166,17 +221,23 @@ pub enum Arm9HmacSha1KeyError {
         /// Backtrace to the source of the error.
         backtrace: Backtrace,
     },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
 }
 
-/// Errors related to [`Arm9::dsprot_info`].
+/// Errors related to [`Arm9::decrypt_dsprot`] and [`Arm9::encrypt_dsprot`].
 #[derive(Debug, Snafu)]
 #[snafu(module)]
 pub enum Arm9DsProtInfoError {
-    /// See [`RawBuildInfoError`].
+    /// See [`Arm9Error`].
     #[snafu(transparent)]
-    RawBuildInfo {
+    Arm9 {
         /// Source error.
-        source: RawBuildInfoError,
+        source: Arm9Error,
     },
     /// Occurs when trying to detect DS Protect while the ARM9 program is compressed.
     #[snafu(display("ARM9 program must be decompressed before detecting DS Protect:\n{backtrace}"))]
@@ -192,13 +253,37 @@ pub enum Arm9DsProtInfoError {
     },
 }
 
+/// Errors related to [`Arm9::libraries`].
+#[derive(Debug, Snafu)]
+#[snafu(module)]
+pub enum Arm9LibrariesError {
+    /// See [`Utf8Error`].
+    #[snafu(transparent)]
+    Utf8 {
+        /// Source error.
+        source: Utf8Error,
+    },
+    /// See [`OverflowError`].
+    #[snafu(transparent)]
+    Overflow {
+        /// Source error.
+        source: OverflowError,
+    },
+    /// See [`DataOutOfBoundsError`]
+    #[snafu(transparent)]
+    DataOutOfBounds {
+        /// Source error.
+        source: DataOutOfBoundsError,
+    },
+}
+
 /// Options for [`Arm9::new`].
 pub struct Arm9Options {
     /// Whether the program has an [`Arm9Footer`](super::raw::Arm9Footer).
     pub has_footer: bool,
 }
 
-/// Options for [`Arm9::with_two_tcms`].
+/// Options for [`Arm9::with_autoloads`].
 pub struct Arm9WithTcmsOptions {
     /// Whether the program was compressed originally.
     pub originally_compressed: bool,
@@ -216,7 +301,7 @@ impl<'a> Arm9<'a> {
         data: T,
         offsets: Arm9Offsets,
         options: Arm9Options,
-    ) -> Result<Self, RawBuildInfoError> {
+    ) -> Result<Self, Arm9AutoloadError> {
         let Arm9Options { has_footer } = options;
         let mut arm9 = Arm9 {
             data: data.into(),
@@ -231,44 +316,6 @@ impl<'a> Arm9<'a> {
         Ok(arm9)
     }
 
-    /// Deprecated, use [`Arm9::with_autoloads`] instead.
-    ///
-    /// Creates a new ARM9 program with raw data and two autoloads (ITCM and DTCM).
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::build_info_mut`].
-    #[deprecated(note = "use Arm9::with_autoloads instead")]
-    pub fn with_two_tcms(
-        mut data: Vec<u8>,
-        itcm: Autoload,
-        dtcm: Autoload,
-        offsets: Arm9Offsets,
-        options: Arm9WithTcmsOptions,
-    ) -> Result<Self, RawBuildInfoError> {
-        let autoload_infos = [*itcm.info().entry(), *dtcm.info().entry()];
-
-        let autoload_blocks = data.len() as u32 + offsets.base_address;
-        data.extend(itcm.into_data().iter());
-        data.extend(dtcm.into_data().iter());
-        let autoload_infos_start = data.len() as u32 + offsets.base_address;
-        for entry in autoload_infos {
-            data.extend(entry.to_bytes());
-        }
-        let autoload_infos_end = data.len() as u32 + offsets.base_address;
-
-        let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state, has_footer } = options;
-        let mut arm9 =
-            Self { data: data.into(), offsets, originally_compressed, originally_encrypted, dsprot_state, has_footer };
-
-        let build_info = arm9.build_info_mut()?;
-        build_info.autoload_blocks = autoload_blocks;
-        build_info.autoload_infos_start = autoload_infos_start;
-        build_info.autoload_infos_end = autoload_infos_end;
-
-        Ok(arm9)
-    }
-
     /// Creates a new ARM9 program with raw data and a list of autoloads.
     ///
     /// # Errors
@@ -279,18 +326,24 @@ impl<'a> Arm9<'a> {
         autoloads: &[Autoload],
         offsets: Arm9Offsets,
         options: Arm9WithTcmsOptions,
-    ) -> Result<Self, RawBuildInfoError> {
-        let autoload_blocks = data.len() as u32 + offsets.base_address;
+    ) -> Result<Self, Arm9AutoloadError> {
+        let autoload_blocks = (data.len() as u32)
+            .checked_add(offsets.base_address)
+            .ok_or_else(|| OverflowError::new("autoload blocks offset"))?;
 
         for autoload in autoloads {
             data.extend(autoload.full_data());
         }
 
-        let autoload_infos_start = data.len() as u32 + offsets.base_address;
+        let autoload_infos_start = (data.len() as u32)
+            .checked_add(offsets.base_address)
+            .ok_or_else(|| OverflowError::new("autoload infos start offset"))?;
         for autoload in autoloads {
             data.extend(autoload.info().entry().to_bytes());
         }
-        let autoload_infos_end = data.len() as u32 + offsets.base_address;
+        let autoload_infos_end = (data.len() as u32)
+            .checked_add(offsets.base_address)
+            .ok_or_else(|| OverflowError::new("autoload infos end offset"))?;
 
         let Arm9WithTcmsOptions { originally_compressed, originally_encrypted, dsprot_state, has_footer } = options;
         let mut arm9 =
@@ -313,6 +366,7 @@ impl<'a> Arm9<'a> {
     /// Returns whether the secure area is encrypted. See [`Self::originally_encrypted`] for whether the secure area was
     /// encrypted originally.
     pub fn is_encrypted(&self) -> bool {
+        #[allow(clippy::indexing_slicing)] // data.len() is checked
         if self.data.len() >= 8 && self.data[0..8] == SECURE_AREA_ID {
             false
         } else if self.data.len() >= 0x800 {
@@ -339,6 +393,7 @@ impl<'a> Arm9<'a> {
         }
 
         let mut secure_area = [0u8; 0x4000];
+        #[allow(clippy::indexing_slicing)] // data.len() is checked
         secure_area.clone_from_slice(&self.data[0..0x4000]);
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2);
@@ -352,6 +407,7 @@ impl<'a> Arm9<'a> {
         }
 
         secure_area[0..8].copy_from_slice(&SECURE_AREA_ID);
+        #[allow(clippy::indexing_slicing)] // data.len() is checked
         self.data.to_mut()[0..0x4000].copy_from_slice(&secure_area);
         Ok(())
     }
@@ -371,34 +427,41 @@ impl<'a> Arm9<'a> {
             DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len() }.fail()?;
         }
 
-        let secure_area = self.encrypted_secure_area(key, gamecode);
+        let secure_area = self.encrypted_secure_area(key, gamecode)?;
+        #[allow(clippy::indexing_slicing)] // data.len() is checked
         self.data.to_mut()[0..0x4000].copy_from_slice(&secure_area);
         Ok(())
     }
 
     /// Returns an encrypted copy of the secure area.
-    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> [u8; 0x4000] {
+    pub fn encrypted_secure_area(&self, key: &BlowfishKey, gamecode: u32) -> Result<[u8; 0x4000], Arm9Error> {
+        if self.data.len() < 0x4000 {
+            DataTooSmallSnafu { expected: 0x4000usize, actual: self.data.len() }.fail()?;
+        }
+
         let mut secure_area = [0u8; 0x4000];
+        #[allow(clippy::indexing_slicing)] // data.len() is checked
         secure_area.copy_from_slice(&self.data[0..0x4000]);
+        #[allow(clippy::indexing_slicing)] // data.len() is checked
         if self.data[0..8] != SECURE_AREA_ID {
-            return secure_area;
+            return Ok(secure_area);
         }
 
         secure_area[0..8].copy_from_slice(SECURE_AREA_ENCRY_OBJ);
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level3);
-        blowfish.encrypt(&mut secure_area[0..0x800]).unwrap();
+        blowfish.encrypt_unchecked(&mut secure_area[0..0x800]);
 
         let blowfish = Blowfish::new(key, gamecode, BlowfishLevel::Level2);
-        blowfish.encrypt(&mut secure_area[0..8]).unwrap();
+        blowfish.encrypt_unchecked(&mut secure_area[0..8]);
 
-        secure_area
+        Ok(secure_area)
     }
 
     /// Returns a CRC checksum of the encrypted secure area.
-    pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> u16 {
-        let secure_area = self.encrypted_secure_area(key, gamecode);
-        CRC_16_MODBUS.checksum(&secure_area)
+    pub fn secure_area_crc(&self, key: &BlowfishKey, gamecode: u32) -> Result<u16, Arm9Error> {
+        let secure_area = self.encrypted_secure_area(key, gamecode)?;
+        Ok(CRC_16_MODBUS.checksum(&secure_area))
     }
 
     /// Returns a reference to the build info.
@@ -406,8 +469,8 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// See [`BuildInfo::borrow_from_slice`].
-    pub fn build_info(&self) -> Result<&BuildInfo, RawBuildInfoError> {
-        BuildInfo::borrow_from_slice(&self.data[self.offsets.build_info as usize..])
+    pub fn build_info(&self) -> Result<&BuildInfo, Arm9Error> {
+        Ok(BuildInfo::borrow_from_slice(slice_data(&self.data, self.offsets.build_info.., || "build info")?)?)
     }
 
     /// Returns a mutable reference to the build info.
@@ -415,8 +478,8 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// See [`BuildInfo::borrow_from_slice_mut`].
-    pub fn build_info_mut(&mut self) -> Result<&mut BuildInfo, RawBuildInfoError> {
-        BuildInfo::borrow_from_slice_mut(&mut self.data.to_mut()[self.offsets.build_info as usize..])
+    pub fn build_info_mut(&mut self) -> Result<&mut BuildInfo, Arm9Error> {
+        Ok(BuildInfo::borrow_from_slice_mut(slice_data_mut(self.data.to_mut(), self.offsets.build_info.., || "build info")?)?)
     }
 
     /// Returns the library version strings in this [`Arm9`].
@@ -424,30 +487,51 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// This function will return an error if a library string is not valid UTF-8.
-    pub fn libraries(&self) -> Result<Box<[LibraryEntry<'_>]>, Utf8Error> {
-        let libraries_start = self.offsets.build_info as usize + size_of::<BuildInfo>();
-        let mut address = self.base_address() + libraries_start as u32;
-        let mut data = &self.data[libraries_start..];
+    pub fn libraries(&self) -> Result<Box<[LibraryEntry<'_>]>, Arm9LibrariesError> {
+        let libraries_start = (self.offsets.build_info)
+            .checked_add(size_of::<BuildInfo>() as u32)
+            .ok_or_else(|| OverflowError::new("libraries start offset"))?;
+        let mut address = self
+            .base_address()
+            .checked_add(libraries_start as u32)
+            .ok_or_else(|| OverflowError::new("libraries start address"))?;
+        let mut data = slice_data(&self.data, libraries_start.., || "libraries")?;
+
+        #[allow(clippy::indexing_slicing)] // data.is_empty() was checked
+        if data.is_empty() || data[0] != b'[' {
+            return Ok(Box::new([]));
+        }
 
         let mut libraries = Vec::new();
 
-        'outer: while data[0] == b'[' {
-            let Some((end_pos, _)) = data.iter().enumerate().find(|(_, c)| **c == b']') else {
-                break;
-            };
-            let version_string = str::from_utf8(&data[..end_pos + 1])?;
+        'outer: while let Some((end_pos, _)) = data.iter().enumerate().find(|(_, c)| **c == b']') {
+            #[allow(clippy::arithmetic_side_effects)] // can't overflow
+            let end = end_pos + 1;
+
+            #[allow(clippy::indexing_slicing)] // end is always in-bounds
+            let version_string = str::from_utf8(&data[..end])?;
 
             libraries.push(LibraryEntry::new(address, version_string));
 
-            address += end_pos as u32 + 1;
-            data = &data[end_pos + 1..];
+            address = address.checked_add(end as u32).ok_or_else(|| OverflowError::new("next library address"))?;
+            #[allow(clippy::indexing_slicing)] // end is always in-bounds
+            {
+                data = &data[end..];
+            }
+
             loop {
-                match data[0] {
-                    b'\0' => {
-                        address += 1;
-                        data = &data[1..]
+                match data.first() {
+                    Some(b'\0') => {
+                        if let Some(next_address) = address.checked_add(1)
+                            && let Some(next_data) = data.get(1..)
+                        {
+                            address = next_address;
+                            data = next_data;
+                        } else {
+                            break 'outer;
+                        }
                     }
-                    b'[' => break,
+                    Some(b'[') => break,
                     _ => break 'outer,
                 }
             }
@@ -462,7 +546,7 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// See [`Self::build_info`].
-    pub fn is_compressed(&self) -> Result<bool, RawBuildInfoError> {
+    pub fn is_compressed(&self) -> Result<bool, Arm9Error> {
         Ok(self.build_info()?.is_compressed())
     }
 
@@ -476,13 +560,13 @@ impl<'a> Arm9<'a> {
             return Ok(());
         }
 
-        let data: Cow<[u8]> = LZ77.decompress(&self.data)?.into_vec().into();
+        let data: Cow<[u8]> = LZ77.decompress(&self.data)?.decompressed.into();
         let old_data = replace(&mut self.data, data);
         let build_info = match self.build_info_mut() {
             Ok(build_info) => build_info,
             Err(e) => {
                 self.data = old_data;
-                return Err(e.into());
+                return Err(e);
             }
         };
         build_info.compressed_code_end = 0;
@@ -501,25 +585,36 @@ impl<'a> Arm9<'a> {
 
         let data: Cow<[u8]> = LZ77.compress(&self.data, COMPRESSION_START)?.into_vec().into();
         let length = data.len();
+        let compressed_code_end =
+            self.base_address().checked_add(length as u32).ok_or_else(|| OverflowError::new("compressed code end address"))?;
         let old_data = replace(&mut self.data, data);
-        let base_address = self.base_address();
         let build_info = match self.build_info_mut() {
             Ok(build_info) => build_info,
             Err(e) => {
                 self.data = old_data;
-                return Err(e.into());
+                return Err(e);
             }
         };
-        build_info.compressed_code_end = base_address + length as u32;
+        build_info.compressed_code_end = compressed_code_end;
         Ok(())
     }
 
     fn get_autoload_info_entries(&self, build_info: &BuildInfo) -> Result<Vec<AutoloadInfoEntry>, Arm9AutoloadError> {
-        let start = (build_info.autoload_infos_start - self.base_address()) as usize;
-        let end = (build_info.autoload_infos_end - self.base_address()) as usize;
+        let start = build_info
+            .autoload_infos_start
+            .checked_sub(self.base_address())
+            .ok_or_else(|| OverflowError::new("autoload infos start offset"))?;
+        let end = build_info
+            .autoload_infos_end
+            .checked_sub(self.base_address())
+            .ok_or_else(|| OverflowError::new("autoload infos end offset"))?;
         // The autoload blocks are located right before the autoload list
-        let blocks_size = build_info.autoload_infos_start - build_info.autoload_blocks;
-        let autoload_info = AutoloadInfoEntry::parse_list(&self.data[start..end], blocks_size)?;
+        let blocks_size = build_info
+            .autoload_infos_start
+            .checked_sub(build_info.autoload_blocks)
+            .ok_or_else(|| OverflowError::new("autoload blocks size"))?;
+        let data = slice_data(&self.data, start..end, || "autoload info entries")?;
+        let autoload_info = AutoloadInfoEntry::parse_list(data, blocks_size)?;
         Ok(autoload_info)
     }
 
@@ -556,13 +651,19 @@ impl<'a> Arm9<'a> {
         let autoload_infos = self.autoload_infos()?;
 
         let mut autoloads = vec![];
-        let mut load_offset = build_info.autoload_blocks - self.base_address();
+        let mut load_offset = build_info
+            .autoload_blocks
+            .checked_sub(self.base_address())
+            .ok_or_else(|| OverflowError::new("first autoload block offset"))?;
         for autoload_info in autoload_infos {
-            let start = load_offset as usize;
-            let end = start + autoload_info.code_size() as usize;
-            let data = &self.data[start..end];
-            autoloads.push(Autoload::new(data, autoload_info));
-            load_offset += autoload_info.code_size();
+            let start = load_offset;
+            let end =
+                start.checked_add(autoload_info.code_size()).ok_or_else(|| OverflowError::new("autoload block end offset"))?;
+            let data = slice_data(&self.data, start..end, || "autoload block")?;
+            autoloads.push(Autoload::new(data, autoload_info)?);
+            load_offset = load_offset
+                .checked_add(autoload_info.code_size())
+                .ok_or_else(|| OverflowError::new("next autoload block offset"))?;
         }
 
         Ok(autoloads.into_boxed_slice())
@@ -587,18 +688,20 @@ impl<'a> Arm9<'a> {
         let Some((i, _)) = self.data.chunks(4).enumerate().filter(|(_, chunk)| *chunk == NITROCODE_BYTES).nth(1) else {
             return Ok(None);
         };
-        let start = i * 4;
+        #[allow(clippy::arithmetic_side_effects)] // small number
+        let start = i as u32 * 4;
+        #[allow(clippy::arithmetic_side_effects)] // small number
         let end = start + 64;
-        if end > self.data.len() {
+        if end as usize > self.data.len() {
             return Ok(None);
         }
         let mut key = [0u8; 64];
-        key.copy_from_slice(&self.data[start..end]);
+        key.copy_from_slice(slice_data(&self.data, start..end, || "HMAC-SHA1 key")?);
         Ok(Some(key))
     }
 
-    fn overlay_table_signature_range(&self) -> Result<Option<Range<usize>>, Arm9OverlaySignaturesError> {
-        let overlay_signatures_offset = self.overlay_signatures_offset() as usize;
+    fn overlay_table_signature_range(&self) -> Result<Option<Range<u32>>, Arm9OverlaySignaturesError> {
+        let overlay_signatures_offset = self.overlay_signatures_offset();
         if overlay_signatures_offset == 0 {
             return Ok(None);
         }
@@ -608,9 +711,11 @@ impl<'a> Arm9<'a> {
         }
 
         // The overlay table signature is located right before the overlay signatures
-        let start = overlay_signatures_offset - size_of::<HmacSha1Signature>();
+        let start = overlay_signatures_offset
+            .checked_sub(size_of::<HmacSha1Signature>() as u32)
+            .ok_or_else(|| OverflowError::new("overlay table signature offset"))?;
         let end = overlay_signatures_offset;
-        if end > self.data.len() {
+        if end as usize > self.data.len() {
             return Ok(None);
         }
         Ok(Some(start..end))
@@ -625,9 +730,11 @@ impl<'a> Arm9<'a> {
         let Some(range) = self.overlay_table_signature_range()? else {
             return Ok(None);
         };
-        let data = &self.data[range];
+        let data = slice_data(&self.data, range, || "overlay table signature")?;
+        debug_assert_eq!(data.len(), size_of::<HmacSha1Signature>());
 
         let signature = HmacSha1Signature::borrow_from_slice(data)?;
+        #[allow(clippy::unwrap_used)] // range is always size_of::<HmacSha1Signature>() bytes long
         Ok(Some(signature.first().unwrap()))
     }
 
@@ -641,14 +748,16 @@ impl<'a> Arm9<'a> {
         let Some(range) = self.overlay_table_signature_range()? else {
             return Ok(None);
         };
-        let data = &mut self.data.to_mut()[range];
+        let data = slice_data_mut(self.data.to_mut(), range, || "overlay table signature")?;
+        debug_assert_eq!(data.len(), size_of::<HmacSha1Signature>());
 
         let signature = HmacSha1Signature::borrow_from_slice_mut(data)?;
+        #[allow(clippy::unwrap_used)] // range is always size_of::<HmacSha1Signature>() bytes long
         Ok(Some(signature.first_mut().unwrap()))
     }
 
-    fn overlay_signatures_range(&self, num_overlays: usize) -> Result<Option<Range<usize>>, Arm9OverlaySignaturesError> {
-        let start = self.overlay_signatures_offset() as usize;
+    fn overlay_signatures_range(&self, num_overlays: usize) -> Result<Option<Range<u32>>, Arm9OverlaySignaturesError> {
+        let start = self.overlay_signatures_offset();
         if start == 0 {
             return Ok(None);
         }
@@ -657,8 +766,12 @@ impl<'a> Arm9<'a> {
             OverlaySignaturesCompressedSnafu {}.fail()?;
         }
 
-        let end = start + size_of::<HmacSha1Signature>() * num_overlays;
-        if end > self.data.len() {
+        let num_overlays = u32::try_from(num_overlays).map_err(|_| OverflowError::new("number of overlays"))?;
+        let signatures_size = (size_of::<HmacSha1Signature>() as u32)
+            .checked_mul(num_overlays)
+            .ok_or_else(|| OverflowError::new("overlay signatures size"))?;
+        let end = start.checked_add(signatures_size).ok_or_else(|| OverflowError::new("overlay signatures end offset"))?;
+        if end as usize > self.data.len() {
             return Ok(None);
         }
         Ok(Some(start..end))
@@ -674,7 +787,7 @@ impl<'a> Arm9<'a> {
         let Some(range) = self.overlay_signatures_range(num_overlays)? else {
             return Ok(None);
         };
-        let data = &self.data[range];
+        let data = slice_data(&self.data, range, || "overlay signatures")?;
         Ok(Some(HmacSha1Signature::borrow_from_slice(data)?))
     }
 
@@ -691,7 +804,7 @@ impl<'a> Arm9<'a> {
         let Some(range) = self.overlay_signatures_range(num_overlays)? else {
             return Ok(None);
         };
-        let data = &mut self.data.to_mut()[range];
+        let data = slice_data_mut(self.data.to_mut(), range, || "overlay signatures")?;
         Ok(Some(HmacSha1Signature::borrow_from_slice_mut(data)?))
     }
 
@@ -700,9 +813,11 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// See [`Self::build_info`].
-    pub fn code(&self) -> Result<&[u8], RawBuildInfoError> {
+    pub fn code(&self) -> Result<&[u8], Arm9Error> {
         let build_info = self.build_info()?;
-        Ok(&self.data[..(build_info.bss_start - self.base_address()) as usize])
+        let end =
+            build_info.bss_start.checked_sub(self.base_address()).ok_or_else(|| OverflowError::new("ARM9 code end offset"))?;
+        Ok(slice_data(&self.data, ..end, || "ARM9 code")?)
     }
 
     /// Returns a reference to the full data.
@@ -716,7 +831,7 @@ impl<'a> Arm9<'a> {
     }
 
     /// Returns the end address.
-    pub fn end_address(&self) -> Result<u32, RawBuildInfoError> {
+    pub fn end_address(&self) -> Result<u32, Arm9Error> {
         let build_info = self.build_info()?;
         Ok(build_info.bss_end)
     }
@@ -746,7 +861,7 @@ impl<'a> Arm9<'a> {
     /// # Errors
     ///
     /// See [`Self::build_info`].
-    pub fn bss(&self) -> Result<Range<u32>, RawBuildInfoError> {
+    pub fn bss(&self) -> Result<Range<u32>, Arm9Error> {
         let build_info = self.build_info()?;
         Ok(build_info.bss_start..build_info.bss_end)
     }
@@ -775,8 +890,10 @@ impl<'a> Arm9<'a> {
             return Ok(());
         };
         for overlay in arm9_overlays {
-            if let Some(signature) = overlay.signature() {
-                signatures[overlay.id() as usize] = signature;
+            if let Some(signature) = overlay.signature()
+                && let Some(dest_signature) = signatures.get_mut(overlay.id() as usize)
+            {
+                *dest_signature = signature;
             }
         }
 
@@ -802,6 +919,7 @@ impl<'a> Arm9<'a> {
     ) -> Result<Option<&DsProtDecryptResult>, Arm9DsProtInfoError> {
         if self.dsprot_state.is_unencrypted() {
             // Can't flatten this code due to conditional reference return (known borrow checker limitation)
+            #[allow(clippy::unreachable)]
             if let DsProtState::Unencrypted(result) = &self.dsprot_state {
                 Ok(Some(result))
             } else {
@@ -820,6 +938,7 @@ impl<'a> Arm9<'a> {
             let base_address = self.base_address();
             let result = dsprot_info.decrypt(self.data.to_mut(), base_address, options)?;
             self.dsprot_state = DsProtState::Unencrypted(result);
+            #[allow(clippy::unreachable)]
             let DsProtState::Unencrypted(result) = &self.dsprot_state else { unreachable!() };
             Ok(Some(result))
         }
