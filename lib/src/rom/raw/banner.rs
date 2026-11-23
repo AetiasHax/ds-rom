@@ -403,10 +403,13 @@ impl Display for Language {
     }
 }
 
+/// The number of colors in a banner palette.
+pub const PALETTE_SIZE: usize = 16;
+
 /// Contains a palette for a banner bitmap, where each color is 15-bit BGR.
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod, Default)]
-pub struct BannerPalette(pub [u16; 16]);
+pub struct BannerPalette(pub [u16; PALETTE_SIZE]);
 
 impl BannerPalette {
     /// Returns the color from 32-bit `[r, g, b, a]` at the given index.
@@ -432,6 +435,31 @@ impl BannerPalette {
             *dest = color;
         }
     }
+
+    /// Returns the palette index of the given color, if present in the palette.
+    pub fn index_of(&self, r: u8, g: u8, b: u8) -> Option<usize> {
+        for i in 0..PALETTE_SIZE {
+            let [pr, pg, pb, _] = self.get_color(i);
+            if pr == r && pg == g && pb == b {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Returns a PNG PLTE chunk for this palette.
+    pub(crate) fn as_plte_chunk(&self) -> [u8; PALETTE_SIZE * 3] {
+        let mut plte = [0; PALETTE_SIZE * 3];
+        #[allow(clippy::indexing_slicing)] // always in bounds
+        #[allow(clippy::arithmetic_side_effects)] // small numbers
+        for i in 0..PALETTE_SIZE {
+            let [r, g, b, _] = self.get_color(i);
+            plte[i * 3] = r;
+            plte[i * 3 + 1] = g;
+            plte[i * 3 + 2] = b;
+        }
+        plte
+    }
 }
 
 impl Display for BannerPalette {
@@ -448,10 +476,13 @@ impl Display for BannerPalette {
     }
 }
 
+/// The width and height of a banner image.
+pub const BANNER_SIZE: usize = 32;
+
 /// A bitmap in the banner.
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
-pub struct BannerBitmap(pub [u8; 0x200]);
+pub struct BannerBitmap(pub [u8; BANNER_SIZE * BANNER_SIZE * 4 / 8]); // 32x32, 4 bits per pixel
 
 impl BannerBitmap {
     /// Creates a [`DisplayBannerBitmap`] which implements [`Display`].
@@ -470,7 +501,7 @@ impl BannerBitmap {
 
     /// Gets a palette index at the given coordinates.
     pub fn get_pixel(&self, x: usize, y: usize) -> usize {
-        if x >= 32 || y >= 32 {
+        if x >= BANNER_SIZE || y >= BANNER_SIZE {
             return 0;
         }
         let (index, offset) = Self::get_index(x, y);
@@ -483,13 +514,43 @@ impl BannerBitmap {
 
     /// Sets a palette index at the given coordinates.
     pub fn set_pixel(&mut self, x: usize, y: usize, value: u8) {
-        if x >= 32 || y >= 32 {
+        if x >= BANNER_SIZE || y >= BANNER_SIZE {
             return;
         }
         let (index, offset) = Self::get_index(x, y);
         if let Some(palette) = self.0.get_mut(index) {
             *palette = (*palette & !(0xf << offset)) | (value << offset);
         }
+    }
+
+    pub(crate) fn as_idat_chunk(&self) -> [u8; BANNER_SIZE * BANNER_SIZE * 4 / 8] {
+        let mut idat = [0; BANNER_SIZE * BANNER_SIZE * 4 / 8];
+        #[allow(clippy::indexing_slicing)] // always in bounds
+        #[allow(clippy::arithmetic_side_effects)] // small numbers
+        for y in 0..BANNER_SIZE {
+            for x in (0..BANNER_SIZE).step_by(2) {
+                let index1 = self.get_pixel(x, y) as u8;
+                let index2 = self.get_pixel(x + 1, y) as u8;
+                idat[(y * BANNER_SIZE + x) / 2] = (index1 << 4) | index2;
+            }
+        }
+        idat
+    }
+
+    pub(crate) fn from_idat_chunk(idat: &[u8; BANNER_SIZE * BANNER_SIZE * 4 / 8]) -> Self {
+        let mut bitmap = Self([0; _]);
+        #[allow(clippy::indexing_slicing)] // always in bounds
+        #[allow(clippy::arithmetic_side_effects)] // small numbers
+        for y in 0..BANNER_SIZE {
+            for x in (0..BANNER_SIZE).step_by(2) {
+                let b = idat[(y * BANNER_SIZE + x) / 2];
+                let index1 = b >> 4;
+                let index2 = b & 0xf;
+                bitmap.set_pixel(x, y, index1);
+                bitmap.set_pixel(x + 1, y, index2);
+            }
+        }
+        bitmap
     }
 }
 
