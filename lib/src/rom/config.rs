@@ -9,6 +9,8 @@ pub struct RomConfig {
     pub header: PathBuf,
     /// Path to header logo PNG, loaded by [`Logo::from_png`](crate::rom::Logo::from_png).
     pub header_logo: PathBuf,
+    /// Path to [`HeaderPadding`](crate::rom::header::HeaderPadding).
+    pub header_padding: Option<PathBuf>,
 
     /// Path to ARM9 binary
     pub arm9_bin: PathBuf,

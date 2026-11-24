@@ -202,8 +202,9 @@ pub struct Header {
     pub debug_args: [u8; 0x180],
     /// RSA-SHA1 signature up to [`Self::debug_args`].
     pub rsa_sha1: [u8; 0x80],
-    /// Reserved, zero.
-    pub reserved7: [u8; 0x3000],
+    /// Unreadable section of physical cartridges. Non-zero for dumps from Wii U Virtual Console
+    /// titles.
+    pub padding: [u8; 0x3000],
 }
 
 unsafe impl Zeroable for Header {}
