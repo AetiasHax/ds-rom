@@ -31,7 +31,7 @@ use crate::{
     io::{FileError, create_dir_all, create_file, create_file_and_dirs, open_file, read_file, read_to_string},
     rom::{
         Arm9DsProtInfoError, Arm9WithTcmsOptions, AutoloadError, FileSystemLoadError, FileSystemPathOrderError,
-        FileSystemTraverseError, OverlayDsProtError, RomConfig,
+        FileSystemTraverseError, HeaderPadding, OverlayDsProtError, RomConfig,
         raw::{
             DSI_REGION_UNIT, FileAlloc, MultibootSignature, RawArm7Error, RawDsiProgramError, RawMultibootSignatureError,
             RawOverlayError,
@@ -44,6 +44,7 @@ use crate::{
 pub struct Rom<'a> {
     header: Header,
     header_logo: Logo,
+    header_padding: Option<HeaderPadding>,
     arm9: Arm9<'a>,
     arm9_overlay_table: OverlayTable<'a>,
     arm7: Arm7<'a>,
@@ -538,10 +539,15 @@ impl<'a> Rom<'a> {
             .ok_or_else(|| NoPathParentSnafu { what: "config path", path: config_path.to_string_lossy() }.build())?;
 
         // --------------------- Load header ---------------------
-        let (header, header_logo) = if options.load_header {
+        let (header, header_logo, header_padding) = if options.load_header {
             let header: Header = serde_saphyr::from_reader(open_file(path.join(&config.header))?)?;
             let header_logo = Logo::from_png(path.join(&config.header_logo))?;
-            (header, header_logo)
+            let header_padding = if let Some(header_padding_path) = &config.header_padding {
+                Some(HeaderPadding::from_file(path.join(header_padding_path))?)
+            } else {
+                None
+            };
+            (header, header_logo, header_padding)
         } else {
             Default::default()
         };
@@ -676,6 +682,7 @@ impl<'a> Rom<'a> {
         Ok(Self {
             header,
             header_logo,
+            header_padding,
             arm9,
             arm9_overlay_table: arm9_overlays,
             arm7,
@@ -767,6 +774,14 @@ impl<'a> Rom<'a> {
         // --------------------- Save header ---------------------
         serde_saphyr::to_io_writer(&mut create_file_and_dirs(path.join(&self.config.header))?, &self.header)?;
         self.header_logo.save_png(path.join(&self.config.header_logo))?;
+        match (self.header_padding.as_ref(), self.config.header_padding.as_ref()) {
+            (Some(header_padding), Some(header_padding_path)) => {
+                header_padding.save(path.join(header_padding_path))?;
+            }
+            (None, Some(_)) => log::warn!("Header padding not found, but config requested it to be saved"),
+            (Some(_), None) => log::warn!("Header padding found, but config has no place to save it"),
+            (None, None) => {}
+        }
 
         // --------------------- Save ARM9 program ---------------------
         let mut plain_arm9 = self.arm9.clone();
@@ -1007,9 +1022,16 @@ impl<'a> Rom<'a> {
             }
         }
 
+        let header_padding = if header.padding.iter().any(|&x| x != 0) {
+            Some(HeaderPadding(header.padding))
+        } else {
+            None
+        };
+
         let config = RomConfig {
             header: "header.yaml".into(),
             header_logo: "header_logo.png".into(),
+            header_padding: header_padding.is_some().then_some("header_padding.bin".into()),
             arm9_bin: "arm9/arm9.bin".into(),
             arm9_config: "arm9/arm9.yaml".into(),
             arm7_bin: "arm7/arm7.bin".into(),
@@ -1044,6 +1066,7 @@ impl<'a> Rom<'a> {
         Ok(Self {
             header: Header::load_raw(header),
             header_logo: Logo::decompress(&header.logo)?,
+            header_padding,
             arm9,
             arm9_overlay_table: arm9_overlays,
             arm7: rom.arm7()?,
@@ -1567,6 +1590,11 @@ impl<'a> Rom<'a> {
     /// Returns the ARM9i program of this [`Rom`].
     pub fn arm7i(&'a self) -> Option<&'a DsiProgram<'a>> {
         self.dsi.as_ref().map(|dsi| &dsi.arm7i)
+    }
+
+    /// Returns the [`HeaderPadding`] of this [`Rom`].
+    pub fn header_padding(&self) -> Option<&HeaderPadding> {
+        self.header_padding.as_ref()
     }
 }
 

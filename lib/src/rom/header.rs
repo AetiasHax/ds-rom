@@ -1,6 +1,8 @@
 use std::{
     backtrace::Backtrace,
+    io::{Read, Write},
     mem::{offset_of, size_of},
+    path::Path,
     str::FromStr,
 };
 
@@ -17,6 +19,7 @@ use super::{
 use crate::{
     crc::CRC_16_MODBUS,
     error::OverflowError,
+    io::{FileError, create_file_and_dirs, open_file},
     rom::{Arm9Error, LogoError},
     str::{AsciiArray, AsciiArrayError},
 };
@@ -400,7 +403,7 @@ impl Header {
             reserved6: [0; 0xa4c],
             debug_args: [0; 0x180],
             rsa_sha1: [0; 0x80],
-            reserved7: [0; 0x3000],
+            padding: rom.header_padding().map(|p| p.0).unwrap_or_else(|| [0; 0x3000]),
         };
 
         if let Some(ds_post_dsi) = &self.ds_post_dsi {
@@ -488,5 +491,23 @@ impl Header {
         } else {
             HeaderVersion::Original
         }
+    }
+}
+
+/// Unreadable section of physical cartridges. Non-zero for dumps from Wii U Virtual Console titles.
+pub struct HeaderPadding(pub [u8; 0x3000]);
+
+impl HeaderPadding {
+    /// Saves this [`HeaderPadding`] to a file.
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), FileError> {
+        create_file_and_dirs(path)?.write_all(&self.0)?;
+        Ok(())
+    }
+
+    /// Loads a [`HeaderPadding`] from a file.
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, FileError> {
+        let mut data = [0; 0x3000];
+        open_file(path)?.read_exact(&mut data)?;
+        Ok(Self(data))
     }
 }
