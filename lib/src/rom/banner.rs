@@ -1,9 +1,9 @@
 use std::{
-    io,
+    io::{self, BufReader, BufWriter},
     path::{Path, PathBuf},
 };
 
-use image::{DynamicImage, GenericImageView, ImageError, ImageReader, Rgba, RgbaImage};
+use image::{GenericImageView, ImageError, ImageReader, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, Snafu};
 
@@ -14,6 +14,8 @@ use super::{
 use crate::{
     crc::CRC_16_MODBUS,
     error::{DataOutOfBoundsError, OverflowError, slice_data},
+    io::{FileError, create_file, open_file},
+    rom::raw::BANNER_SIZE,
     str::Unicode16Array,
 };
 
@@ -217,8 +219,26 @@ pub enum BannerImageError {
     /// See [`io::Error`].
     #[snafu(transparent)]
     Io {
-        /// Error source.
+        /// Source error.
         source: io::Error,
+    },
+    /// See [`FileError`].
+    #[snafu(transparent)]
+    File {
+        /// Source error.
+        source: FileError,
+    },
+    /// See [`png::EncodingError`].
+    #[snafu(transparent)]
+    PngEncoding {
+        /// Source error.
+        source: png::EncodingError,
+    },
+    /// See [`png::DecodingError`].
+    #[snafu(transparent)]
+    PngDecoding {
+        /// Source error.
+        source: png::DecodingError,
     },
     /// See [`ImageError`].
     #[snafu(transparent)]
@@ -298,7 +318,7 @@ impl BannerImages {
         Self::new(BannerImagesOptions { bitmap, palette, animation: None })
     }
 
-    fn load_palette(path: &Path) -> Result<(BannerPalette, DynamicImage), BannerImageError> {
+    fn load_palette(path: &Path) -> Result<BannerPalette, BannerImageError> {
         let palette_image = ImageReader::open(path)?.decode()?;
         if palette_image.width() != 16 || palette_image.height() != 1 {
             return WrongSizeSnafu {
@@ -313,14 +333,51 @@ impl BannerImages {
             let [r, g, b, _] = color.0;
             palette.set_color(i as usize, r, g, b);
         }
-        Ok((palette, palette_image))
+        Ok(palette)
     }
 
-    fn load_bitmap(path: &Path, palette_image: &DynamicImage) -> Result<BannerBitmap, BannerImageError> {
-        let bitmap_image = ImageReader::open(path)?.decode()?;
-        if bitmap_image.width() != 32 || bitmap_image.height() != 32 {
+    fn try_load_indexed_png_bitmap(path: &Path, palette: &BannerPalette) -> Result<Option<BannerBitmap>, BannerImageError> {
+        let file = open_file(path)?;
+        let r = BufReader::new(file);
+        let decoder = png::Decoder::new(r);
+        let mut reader = match decoder.read_info() {
+            Ok(reader) => reader,
+            Err(png::DecodingError::Format(_)) => return Ok(None), // not a PNG
+            Err(err) => return Err(err)?,
+        };
+        if reader.output_color_type() != (png::ColorType::Indexed, png::BitDepth::Four) {
+            return Ok(None); // not 4bpp indexed
+        }
+        let info = reader.info();
+        if info.width != BANNER_SIZE as u32 || info.height != BANNER_SIZE as u32 {
             return WrongSizeSnafu {
-                expected: ImageSize { width: 32, height: 32 },
+                expected: ImageSize { width: BANNER_SIZE as u32, height: BANNER_SIZE as u32 },
+                actual: ImageSize { width: info.width, height: info.height },
+            }
+            .fail();
+        }
+        let Some(png_palette) = &info.palette else {
+            return Ok(None); // no palette
+        };
+        if png_palette[..] != palette.as_plte_chunk() {
+            return Ok(None); // different palette
+        };
+        let mut buf = [0; BANNER_SIZE * BANNER_SIZE * 4 / 8];
+        reader.next_frame(&mut buf)?;
+        Ok(Some(BannerBitmap::from_idat_chunk(&buf)))
+    }
+
+    fn load_bitmap(path: &Path, palette: &BannerPalette) -> Result<BannerBitmap, BannerImageError> {
+        // Try to parse the bitmap as an indexed PNG to preserve palette indices when the palette
+        // contains duplicate colors.
+        if let Some(bitmap) = Self::try_load_indexed_png_bitmap(path, palette)? {
+            return Ok(bitmap);
+        }
+
+        let bitmap_image = ImageReader::open(path)?.decode()?;
+        if bitmap_image.width() != BANNER_SIZE as u32 || bitmap_image.height() != BANNER_SIZE as u32 {
+            return WrongSizeSnafu {
+                expected: ImageSize { width: BANNER_SIZE as u32, height: BANNER_SIZE as u32 },
                 actual: ImageSize { width: bitmap_image.width(), height: bitmap_image.height() },
             }
             .fail();
@@ -328,11 +385,11 @@ impl BannerImages {
 
         let mut bitmap = BannerBitmap([0u8; 0x200]);
         for (x, y, color) in bitmap_image.pixels() {
-            let alpha = color.0[3];
+            let [r, g, b, alpha] = color.0;
             let index = if alpha == 0 {
                 0
             } else {
-                let Some(index) = palette_image.pixels().find_map(|(i, _, c)| (color == c).then_some(i)) else {
+                let Some(index) = palette.index_of(r, g, b) else {
                     return InvalidPixelSnafu { bitmap: path.to_path_buf(), x, y }.fail();
                 };
                 index
@@ -349,23 +406,21 @@ impl BannerImages {
     /// This function will return an error if [`Reader::open`] or [`Reader::decode`] fails, or if the images are the wrong
     /// size, or a bitmap has a color not present in its palette.
     pub fn load(&mut self, path: &Path) -> Result<(), BannerImageError> {
-        let (palette, palette_image) = Self::load_palette(&path.join(&self.palette_path))?;
-        self.bitmap = Self::load_bitmap(&path.join(&self.bitmap_path), &palette_image)?;
+        let palette = Self::load_palette(&path.join(&self.palette_path))?;
+        self.bitmap = Self::load_bitmap(&path.join(&self.bitmap_path), &palette)?;
         self.palette = palette;
 
         if let Some(animation_paths) = &self.animation_paths {
             let mut palettes = Vec::with_capacity(animation_paths.palettes.len());
-            let mut palette_images = Vec::with_capacity(animation_paths.palettes.len());
             for palette_path in &animation_paths.palettes {
-                let (palette, palette_image) = Self::load_palette(&path.join(palette_path))?;
+                let palette = Self::load_palette(&path.join(palette_path))?;
                 palettes.push(palette);
-                palette_images.push(palette_image);
             }
 
             let mut bitmaps = Vec::with_capacity(animation_paths.bitmaps.len());
             for bitmap in &animation_paths.bitmaps {
-                let palette_image = palette_images.get(bitmap.palette).unwrap_or(&palette_image);
-                bitmaps.push(Self::load_bitmap(&path.join(&bitmap.path), palette_image)?);
+                let palette = palettes.get(bitmap.palette).unwrap_or(&palette);
+                bitmaps.push(Self::load_bitmap(&path.join(&bitmap.path), palette)?);
             }
 
             self.animation_bitmaps = Some(bitmaps.into());
@@ -376,15 +431,15 @@ impl BannerImages {
     }
 
     fn save_bitmap(bitmap: &BannerBitmap, palette: &BannerPalette, path: &Path) -> Result<(), BannerImageError> {
-        let mut bitmap_image = RgbaImage::new(32, 32);
-        for y in 0..32 {
-            for x in 0..32 {
-                let index = bitmap.get_pixel(x, y);
-                let color = palette.get_color(index);
-                bitmap_image.put_pixel(x as u32, y as u32, Rgba(color));
-            }
-        }
-        bitmap_image.save(path)?;
+        let w = BufWriter::new(create_file(path)?);
+        let mut encoder = png::Encoder::new(w, 32, 32);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::Four); // 16 colors in the palette
+        let plte = palette.as_plte_chunk();
+        encoder.set_palette(&plte);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(&bitmap.as_idat_chunk())?;
+        writer.finish()?;
         Ok(())
     }
 
